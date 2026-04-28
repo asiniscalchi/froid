@@ -3,7 +3,7 @@ use teloxide::{prelude::*, types::Message};
 use tracing::{error, info};
 
 use crate::{
-    journal::service::JournalService,
+    handler::MessageHandler,
     messages::{IncomingMessage, MessageSource},
 };
 
@@ -12,38 +12,35 @@ use super::Adapter;
 const DEFAULT_RECENT_LIMIT: u32 = 10;
 const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Unsupported message type";
 
-pub struct TelegramAdapter {
+pub struct TelegramAdapter<H: MessageHandler> {
     bot_token: String,
-    journal_service: JournalService,
+    handler: H,
 }
 
-impl TelegramAdapter {
-    pub fn new(bot_token: String, journal_service: JournalService) -> Self {
-        Self {
-            bot_token,
-            journal_service,
-        }
+impl<H: MessageHandler> TelegramAdapter<H> {
+    pub fn new(bot_token: String, handler: H) -> Self {
+        Self { bot_token, handler }
     }
 }
 
-impl Adapter for TelegramAdapter {
+impl<H: MessageHandler> Adapter for TelegramAdapter<H> {
     async fn run(self) {
         let bot = Bot::new(self.bot_token);
-        let journal_service = self.journal_service;
+        let handler = self.handler;
 
         teloxide::repl(bot, move |bot: Bot, message: Message| {
-            let journal_service = journal_service.clone();
+            let handler = handler.clone();
 
-            async move { handle_message(bot, message, journal_service).await }
+            async move { handle_message(bot, message, handler).await }
         })
         .await;
     }
 }
 
-async fn handle_message(
+async fn handle_message<H: MessageHandler>(
     bot: Bot,
     message: Message,
-    journal_service: JournalService,
+    handler: H,
 ) -> ResponseResult<()> {
     let Some(text) = message.text() else {
         bot.send_message(message.chat.id, UNSUPPORTED_MESSAGE_RESPONSE)
@@ -60,7 +57,7 @@ async fn handle_message(
     if let Some(limit) = parse_recent_command(text) {
         info!(user_id = %user_id, limit, "received /recent command");
 
-        match journal_service.recent(&user_id, limit).await {
+        match handler.recent(&user_id, limit).await {
             Ok(Some(outgoing)) => {
                 bot.send_message(message.chat.id, outgoing.text).await?;
             }
@@ -82,7 +79,7 @@ async fn handle_message(
         "received Telegram text message"
     );
 
-    let response_text = match journal_service.process(&incoming).await {
+    let response_text = match handler.process(&incoming).await {
         Ok(outgoing) => outgoing.text,
         Err(err) => {
             error!(%err, "failed to store journal entry");

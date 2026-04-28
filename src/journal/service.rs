@@ -1,4 +1,7 @@
-use crate::messages::{IncomingMessage, OutgoingMessage};
+use crate::{
+    handler::MessageHandler,
+    messages::{IncomingMessage, OutgoingMessage},
+};
 
 use super::repository::JournalRepository;
 
@@ -39,6 +42,27 @@ impl JournalService {
             .join("\n");
 
         Ok(Some(OutgoingMessage { text }))
+    }
+}
+
+impl MessageHandler for JournalService {
+    async fn process(
+        &self,
+        message: &IncomingMessage,
+    ) -> Result<OutgoingMessage, Box<dyn std::error::Error + Send + Sync>> {
+        JournalService::process(self, message)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn recent(
+        &self,
+        user_id: &str,
+        limit: u32,
+    ) -> Result<Option<OutgoingMessage>, Box<dyn std::error::Error + Send + Sync>> {
+        JournalService::recent(self, user_id, limit)
+            .await
+            .map_err(Into::into)
     }
 }
 
