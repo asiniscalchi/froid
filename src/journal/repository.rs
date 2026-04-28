@@ -1,6 +1,8 @@
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 use crate::messages::IncomingMessage;
+
+use super::entry::JournalEntry;
 
 #[derive(Debug, Clone)]
 pub struct JournalRepository {
@@ -35,14 +37,42 @@ impl JournalRepository {
 
         Ok(())
     }
+
+    pub async fn fetch_recent(
+        &self,
+        user_id: &str,
+        limit: u32,
+    ) -> Result<Vec<JournalEntry>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT raw_text, received_at
+            FROM journal_entries
+            WHERE user_id = ?
+            ORDER BY received_at DESC, id DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(user_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let entries = rows
+            .into_iter()
+            .map(|row| JournalEntry {
+                text: row.get("raw_text"),
+                received_at: row.get("received_at"),
+            })
+            .collect();
+
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use sqlx::SqlitePool;
-
-    use sqlx::Row;
 
     use super::*;
     use crate::messages::MessageSource;
@@ -53,21 +83,25 @@ mod tests {
         JournalRepository::new(pool)
     }
 
-    fn incoming(source_message_id: &str) -> IncomingMessage {
+    fn incoming(source_message_id: &str, text: &str, received_at: chrono::DateTime<Utc>) -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: source_message_id.to_string(),
             user_id: "7".to_string(),
-            text: "hello froid".to_string(),
-            received_at: Utc::now(),
+            text: text.to_string(),
+            received_at,
         }
+    }
+
+    fn at(h: u32, m: u32) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 4, 28, h, m, 0).unwrap()
     }
 
     #[tokio::test]
     async fn stores_incoming_message() {
         let repo = setup().await;
-        let message = incoming("100");
+        let message = incoming("100", "hello froid", Utc::now());
 
         repo.store(&message).await.unwrap();
 
@@ -88,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn ignores_duplicate_source_message() {
         let repo = setup().await;
-        let message = incoming("100");
+        let message = incoming("100", "hello froid", Utc::now());
 
         repo.store(&message).await.unwrap();
         repo.store(&message).await.unwrap();
@@ -105,8 +139,8 @@ mod tests {
     async fn stores_different_messages_independently() {
         let repo = setup().await;
 
-        repo.store(&incoming("100")).await.unwrap();
-        repo.store(&incoming("101")).await.unwrap();
+        repo.store(&incoming("100", "hello froid", Utc::now())).await.unwrap();
+        repo.store(&incoming("101", "hello froid", Utc::now())).await.unwrap();
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
             .fetch_one(&repo.pool)
@@ -114,5 +148,45 @@ mod tests {
             .unwrap();
 
         assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn fetch_recent_returns_entries_newest_first() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "first",  at(10, 0))).await.unwrap();
+        repo.store(&incoming("2", "second", at(11, 0))).await.unwrap();
+        repo.store(&incoming("3", "third",  at(12, 0))).await.unwrap();
+
+        let entries = repo.fetch_recent("7", 10).await.unwrap();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].text, "third");
+        assert_eq!(entries[1].text, "second");
+        assert_eq!(entries[2].text, "first");
+    }
+
+    #[tokio::test]
+    async fn fetch_recent_respects_limit() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "first",  at(10, 0))).await.unwrap();
+        repo.store(&incoming("2", "second", at(11, 0))).await.unwrap();
+        repo.store(&incoming("3", "third",  at(12, 0))).await.unwrap();
+
+        let entries = repo.fetch_recent("7", 2).await.unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].text, "third");
+        assert_eq!(entries[1].text, "second");
+    }
+
+    #[tokio::test]
+    async fn fetch_recent_returns_empty_for_unknown_user() {
+        let repo = setup().await;
+
+        let entries = repo.fetch_recent("unknown", 10).await.unwrap();
+
+        assert!(entries.is_empty());
     }
 }
