@@ -13,12 +13,11 @@ pub struct Cli {
 
     #[arg(
         long,
-        env = "DATABASE_URL",
+        env = "DATABASE_PATH",
         global = true,
-        hide_env_values = true,
-        default_value = "sqlite:froid.db"
+        default_value = "froid.db"
     )]
-    database_url: String,
+    database_path: String,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -58,7 +57,7 @@ impl Cli {
 
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
-            database_url: self.database_url.clone(),
+            database_url: format!("sqlite:{}", self.database_path),
         })
     }
 }
@@ -75,19 +74,19 @@ mod tests {
             "froid",
             "--telegram-bot-token",
             "token",
-            "--database-url",
-            "sqlite:froid.db",
+            "--database-path",
+            "custom.db",
             "serve",
         ]);
 
         let config = cli.serve_config().unwrap();
 
         assert_eq!(config.telegram_bot_token, "token");
-        assert_eq!(config.database_url, "sqlite:froid.db");
+        assert_eq!(config.database_url, "sqlite:custom.db");
     }
 
     #[test]
-    fn uses_default_database_url() {
+    fn uses_default_database_path() {
         let cli = Cli::parse_from(["froid", "--telegram-bot-token", "token"]);
 
         let config = cli.serve_config().unwrap();
@@ -99,7 +98,7 @@ mod tests {
     fn defaults_to_serve_command() {
         let cli = Cli {
             telegram_bot_token: None,
-            database_url: "sqlite:froid.db".to_string(),
+            database_path: "froid.db".to_string(),
             command: None,
         };
 
@@ -110,7 +109,7 @@ mod tests {
     fn rejects_missing_telegram_bot_token() {
         let cli = Cli {
             telegram_bot_token: None,
-            database_url: "sqlite:froid.db".to_string(),
+            database_path: "froid.db".to_string(),
             command: None,
         };
 
@@ -128,7 +127,7 @@ mod tests {
     fn rejects_empty_telegram_bot_token() {
         let cli = Cli {
             telegram_bot_token: Some("  ".to_string()),
-            database_url: "sqlite:froid.db".to_string(),
+            database_path: "froid.db".to_string(),
             command: None,
         };
 
