@@ -16,7 +16,7 @@ pub struct Cli {
         env = "DATABASE_URL",
         global = true,
         hide_env_values = true,
-        default_value = "sqlite:froid.sqlite"
+        default_value = "sqlite:froid.db"
     )]
     database_url: String,
 
@@ -76,14 +76,14 @@ mod tests {
             "--telegram-bot-token",
             "token",
             "--database-url",
-            "sqlite:froid.sqlite",
+            "sqlite:froid.db",
             "serve",
         ]);
 
         let config = cli.serve_config().unwrap();
 
         assert_eq!(config.telegram_bot_token, "token");
-        assert_eq!(config.database_url, "sqlite:froid.sqlite");
+        assert_eq!(config.database_url, "sqlite:froid.db");
     }
 
     #[test]
@@ -92,14 +92,14 @@ mod tests {
 
         let config = cli.serve_config().unwrap();
 
-        assert_eq!(config.database_url, "sqlite:froid.sqlite");
+        assert_eq!(config.database_url, "sqlite:froid.db");
     }
 
     #[test]
     fn defaults_to_serve_command() {
         let cli = Cli {
             telegram_bot_token: None,
-            database_url: "sqlite:froid.sqlite".to_string(),
+            database_url: "sqlite:froid.db".to_string(),
             command: None,
         };
 
@@ -110,7 +110,7 @@ mod tests {
     fn rejects_missing_telegram_bot_token() {
         let cli = Cli {
             telegram_bot_token: None,
-            database_url: "sqlite:froid.sqlite".to_string(),
+            database_url: "sqlite:froid.db".to_string(),
             command: None,
         };
 
@@ -128,7 +128,7 @@ mod tests {
     fn rejects_empty_telegram_bot_token() {
         let cli = Cli {
             telegram_bot_token: Some("  ".to_string()),
-            database_url: "sqlite:froid.sqlite".to_string(),
+            database_url: "sqlite:froid.db".to_string(),
             command: None,
         };
 
