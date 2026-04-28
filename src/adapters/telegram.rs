@@ -213,7 +213,10 @@ mod tests {
 
     #[test]
     fn parse_recent_command_strips_bot_name_suffix() {
-        assert_eq!(parse_recent_command("/recent@mybot"), Some(DEFAULT_RECENT_LIMIT));
+        assert_eq!(
+            parse_recent_command("/recent@mybot"),
+            Some(DEFAULT_RECENT_LIMIT)
+        );
         assert_eq!(parse_recent_command("/recent@mybot 3"), Some(3));
     }
 

@@ -62,7 +62,11 @@ mod tests {
         JournalService::new(JournalRepository::new(pool))
     }
 
-    fn incoming(source_message_id: &str, text: &str, received_at: chrono::DateTime<Utc>) -> IncomingMessage {
+    fn incoming(
+        source_message_id: &str,
+        text: &str,
+        received_at: chrono::DateTime<Utc>,
+    ) -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
@@ -111,8 +115,14 @@ mod tests {
     async fn recent_formats_entries_newest_first() {
         let service = setup().await;
 
-        service.process(&incoming("1", "first",  at(10, 0))).await.unwrap();
-        service.process(&incoming("2", "second", at(11, 0))).await.unwrap();
+        service
+            .process(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        service
+            .process(&incoming("2", "second", at(11, 0)))
+            .await
+            .unwrap();
 
         let outgoing = service.recent("7", 10).await.unwrap().unwrap();
 
@@ -126,9 +136,18 @@ mod tests {
     async fn recent_respects_limit() {
         let service = setup().await;
 
-        service.process(&incoming("1", "first",  at(10, 0))).await.unwrap();
-        service.process(&incoming("2", "second", at(11, 0))).await.unwrap();
-        service.process(&incoming("3", "third",  at(12, 0))).await.unwrap();
+        service
+            .process(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        service
+            .process(&incoming("2", "second", at(11, 0)))
+            .await
+            .unwrap();
+        service
+            .process(&incoming("3", "third", at(12, 0)))
+            .await
+            .unwrap();
 
         let outgoing = service.recent("7", 2).await.unwrap().unwrap();
 

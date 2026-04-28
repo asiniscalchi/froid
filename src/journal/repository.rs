@@ -83,7 +83,11 @@ mod tests {
         JournalRepository::new(pool)
     }
 
-    fn incoming(source_message_id: &str, text: &str, received_at: chrono::DateTime<Utc>) -> IncomingMessage {
+    fn incoming(
+        source_message_id: &str,
+        text: &str,
+        received_at: chrono::DateTime<Utc>,
+    ) -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
@@ -139,8 +143,12 @@ mod tests {
     async fn stores_different_messages_independently() {
         let repo = setup().await;
 
-        repo.store(&incoming("100", "hello froid", Utc::now())).await.unwrap();
-        repo.store(&incoming("101", "hello froid", Utc::now())).await.unwrap();
+        repo.store(&incoming("100", "hello froid", Utc::now()))
+            .await
+            .unwrap();
+        repo.store(&incoming("101", "hello froid", Utc::now()))
+            .await
+            .unwrap();
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
             .fetch_one(&repo.pool)
@@ -154,9 +162,15 @@ mod tests {
     async fn fetch_recent_returns_entries_newest_first() {
         let repo = setup().await;
 
-        repo.store(&incoming("1", "first",  at(10, 0))).await.unwrap();
-        repo.store(&incoming("2", "second", at(11, 0))).await.unwrap();
-        repo.store(&incoming("3", "third",  at(12, 0))).await.unwrap();
+        repo.store(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second", at(11, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "third", at(12, 0)))
+            .await
+            .unwrap();
 
         let entries = repo.fetch_recent("7", 10).await.unwrap();
 
@@ -170,9 +184,15 @@ mod tests {
     async fn fetch_recent_respects_limit() {
         let repo = setup().await;
 
-        repo.store(&incoming("1", "first",  at(10, 0))).await.unwrap();
-        repo.store(&incoming("2", "second", at(11, 0))).await.unwrap();
-        repo.store(&incoming("3", "third",  at(12, 0))).await.unwrap();
+        repo.store(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second", at(11, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "third", at(12, 0)))
+            .await
+            .unwrap();
 
         let entries = repo.fetch_recent("7", 2).await.unwrap();
 
