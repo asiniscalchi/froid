@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 use teloxide::{prelude::*, types::Message};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::{
-    echo::EchoService,
+    journal::service::JournalService,
     messages::{IncomingMessage, MessageSource},
 };
 
@@ -13,14 +13,14 @@ const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Unsupported message type";
 
 pub struct TelegramAdapter {
     bot_token: String,
-    echo_service: EchoService,
+    journal_service: JournalService,
 }
 
 impl TelegramAdapter {
-    pub fn new(bot_token: String, echo_service: EchoService) -> Self {
+    pub fn new(bot_token: String, journal_service: JournalService) -> Self {
         Self {
             bot_token,
-            echo_service,
+            journal_service,
         }
     }
 }
@@ -28,12 +28,12 @@ impl TelegramAdapter {
 impl Adapter for TelegramAdapter {
     async fn run(self) {
         let bot = Bot::new(self.bot_token);
-        let echo_service = self.echo_service;
+        let journal_service = self.journal_service;
 
         teloxide::repl(bot, move |bot: Bot, message: Message| {
-            let echo_service = echo_service;
+            let journal_service = journal_service.clone();
 
-            async move { handle_message(bot, message, echo_service).await }
+            async move { handle_message(bot, message, journal_service).await }
         })
         .await;
     }
@@ -42,7 +42,7 @@ impl Adapter for TelegramAdapter {
 async fn handle_message(
     bot: Bot,
     message: Message,
-    echo_service: EchoService,
+    journal_service: JournalService,
 ) -> ResponseResult<()> {
     let response_text = match incoming_from_text_message(&message, Utc::now()) {
         Some(incoming) => {
@@ -53,7 +53,13 @@ async fn handle_message(
                 "received Telegram text message"
             );
 
-            echo_service.echo(&incoming).text
+            match journal_service.process(&incoming).await {
+                Ok(outgoing) => outgoing.text,
+                Err(err) => {
+                    error!(%err, "failed to store journal entry");
+                    "Something went wrong. Please try again.".to_string()
+                }
+            }
         }
         None => UNSUPPORTED_MESSAGE_RESPONSE.to_string(),
     };
