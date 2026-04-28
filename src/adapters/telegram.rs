@@ -7,17 +7,36 @@ use crate::{
     messages::{IncomingMessage, MessageSource},
 };
 
+use super::Adapter;
+
 const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Unsupported message type";
 
-pub async fn run(bot_token: String, echo_service: EchoService) {
-    let bot = Bot::new(bot_token);
+pub struct TelegramAdapter {
+    bot_token: String,
+    echo_service: EchoService,
+}
 
-    teloxide::repl(bot, move |bot: Bot, message: Message| {
-        let echo_service = echo_service;
+impl TelegramAdapter {
+    pub fn new(bot_token: String, echo_service: EchoService) -> Self {
+        Self {
+            bot_token,
+            echo_service,
+        }
+    }
+}
 
-        async move { handle_message(bot, message, echo_service).await }
-    })
-    .await;
+impl Adapter for TelegramAdapter {
+    async fn run(self) {
+        let bot = Bot::new(self.bot_token);
+        let echo_service = self.echo_service;
+
+        teloxide::repl(bot, move |bot: Bot, message: Message| {
+            let echo_service = echo_service;
+
+            async move { handle_message(bot, message, echo_service).await }
+        })
+        .await;
+    }
 }
 
 async fn handle_message(

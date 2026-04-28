@@ -5,6 +5,7 @@ mod messages;
 
 use std::error::Error;
 
+use adapters::{Adapter, telegram::TelegramAdapter};
 use clap::Parser;
 use cli::{Cli, Command};
 use echo::EchoService;
@@ -27,7 +28,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
     match cli.selected_command() {
         Command::Serve => {
             let config = cli.serve_config()?;
-            adapters::telegram::run(config.telegram_bot_token, EchoService::new()).await;
+            TelegramAdapter::new(config.telegram_bot_token, EchoService::new())
+                .run()
+                .await;
         }
     }
 
