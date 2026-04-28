@@ -38,6 +38,8 @@ mod tests {
     use chrono::Utc;
     use sqlx::SqlitePool;
 
+    use sqlx::Row;
+
     use super::*;
     use crate::messages::MessageSource;
 
@@ -72,7 +74,6 @@ mod tests {
         .await
         .unwrap();
 
-        use sqlx::Row;
         assert_eq!(row.get::<String, _>("user_id"), "7");
         assert_eq!(row.get::<String, _>("source"), "telegram");
         assert_eq!(row.get::<String, _>("source_chat_id"), "42");

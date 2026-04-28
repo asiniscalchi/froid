@@ -69,7 +69,7 @@ async fn handle_message(
     Ok(())
 }
 
-pub fn incoming_from_text_message(
+fn incoming_from_text_message(
     message: &Message,
     received_at: DateTime<Utc>,
 ) -> Option<IncomingMessage> {
