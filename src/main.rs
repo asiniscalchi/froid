@@ -1,5 +1,6 @@
 mod adapters;
 mod cli;
+mod handler;
 mod journal;
 mod messages;
 
