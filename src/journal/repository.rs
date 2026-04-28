@@ -13,6 +13,8 @@ impl JournalRepository {
     }
 
     pub async fn store(&self, message: &IncomingMessage) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query(
             r#"
             INSERT OR IGNORE INTO journal_entries
@@ -26,8 +28,10 @@ impl JournalRepository {
         .bind(&message.source_message_id)
         .bind(&message.text)
         .bind(message.received_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
