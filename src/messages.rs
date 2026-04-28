@@ -5,6 +5,14 @@ pub enum MessageSource {
     Telegram,
 }
 
+impl std::fmt::Display for MessageSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MessageSource::Telegram => write!(f, "telegram"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncomingMessage {
     pub source: MessageSource,

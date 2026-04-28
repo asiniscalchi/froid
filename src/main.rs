@@ -1,6 +1,7 @@
 mod adapters;
 mod cli;
 mod echo;
+mod journal;
 mod messages;
 
 use std::error::Error;
