@@ -26,10 +26,7 @@ mod tests {
     use sqlx::SqlitePool;
 
     use super::*;
-    use crate::{
-        journal::repository::JournalRepository,
-        messages::MessageSource,
-    };
+    use crate::{journal::repository::JournalRepository, messages::MessageSource};
 
     async fn setup() -> JournalService {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();

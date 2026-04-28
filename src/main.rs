@@ -36,8 +36,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
             sqlx::migrate!().run(&pool).await?;
 
-            let journal_service =
-                JournalService::new(JournalRepository::new(pool));
+            let journal_service = JournalService::new(JournalRepository::new(pool));
 
             TelegramAdapter::new(config.telegram_bot_token, journal_service)
                 .run()

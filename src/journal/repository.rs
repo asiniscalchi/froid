@@ -88,11 +88,10 @@ mod tests {
         repo.store(&message).await.unwrap();
         repo.store(&message).await.unwrap();
 
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
-                .fetch_one(&repo.pool)
-                .await
-                .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
+            .fetch_one(&repo.pool)
+            .await
+            .unwrap();
 
         assert_eq!(count, 1);
     }
@@ -104,11 +103,10 @@ mod tests {
         repo.store(&incoming("100")).await.unwrap();
         repo.store(&incoming("101")).await.unwrap();
 
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
-                .fetch_one(&repo.pool)
-                .await
-                .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
+            .fetch_one(&repo.pool)
+            .await
+            .unwrap();
 
         assert_eq!(count, 2);
     }
