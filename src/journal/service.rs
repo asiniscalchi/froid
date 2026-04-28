@@ -35,9 +35,7 @@ impl JournalService {
 
         let text = entries
             .iter()
-            .map(|e| {
-                format!("{} — {}", e.received_at.format("%Y-%m-%d %H:%M"), e.text)
-            })
+            .map(|e| format!("{} — {}", e.received_at.format("%Y-%m-%d %H:%M"), e.text))
             .collect::<Vec<_>>()
             .join("\n");
 
