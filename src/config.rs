@@ -5,7 +5,7 @@ pub struct AppConfig {
     pub telegram_bot_token: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ConfigError {
     MissingTelegramBotToken,
     EmptyTelegramBotToken,
@@ -46,6 +46,12 @@ impl fmt::Display for ConfigError {
                 )
             }
         }
+    }
+}
+
+impl fmt::Debug for ConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, formatter)
     }
 }
 
