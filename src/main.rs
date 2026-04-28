@@ -1,6 +1,6 @@
 mod adapters;
 mod cli;
-mod echo;
+mod journal;
 mod messages;
 
 use std::error::Error;
@@ -8,7 +8,8 @@ use std::error::Error;
 use adapters::{Adapter, telegram::TelegramAdapter};
 use clap::Parser;
 use cli::{Cli, Command};
-use echo::EchoService;
+use journal::{repository::JournalRepository, service::JournalService};
+use sqlx::sqlite::SqlitePoolOptions;
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
@@ -28,7 +29,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
     match cli.selected_command() {
         Command::Serve => {
             let config = cli.serve_config()?;
-            TelegramAdapter::new(config.telegram_bot_token, EchoService::new())
+
+            let pool = SqlitePoolOptions::new()
+                .connect(&config.database_url)
+                .await?;
+
+            sqlx::migrate!().run(&pool).await?;
+
+            let journal_service = JournalService::new(JournalRepository::new(pool));
+
+            TelegramAdapter::new(config.telegram_bot_token, journal_service)
                 .run()
                 .await;
         }

@@ -11,6 +11,14 @@ pub struct Cli {
     )]
     telegram_bot_token: Option<String>,
 
+    #[arg(
+        long,
+        env = "DATABASE_PATH",
+        global = true,
+        default_value = "froid.sqlite3"
+    )]
+    database_path: String,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -24,6 +32,7 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeConfig {
     pub telegram_bot_token: String,
+    pub database_url: String,
 }
 
 impl Cli {
@@ -48,6 +57,7 @@ impl Cli {
 
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
+            database_url: format!("sqlite:{}", self.database_path),
         })
     }
 }
@@ -59,18 +69,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_telegram_bot_token_from_cli_flag() {
-        let cli = Cli::parse_from(["froid", "--telegram-bot-token", "token", "serve"]);
+    fn parses_serve_config_from_cli_flags() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--database-path",
+            "custom.db",
+            "serve",
+        ]);
 
         let config = cli.serve_config().unwrap();
 
         assert_eq!(config.telegram_bot_token, "token");
+        assert_eq!(config.database_url, "sqlite:custom.db");
+    }
+
+    #[test]
+    fn uses_default_database_path() {
+        let cli = Cli::parse_from(["froid", "--telegram-bot-token", "token"]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.database_url, "sqlite:froid.sqlite3");
     }
 
     #[test]
     fn defaults_to_serve_command() {
         let cli = Cli {
             telegram_bot_token: None,
+            database_path: "froid.sqlite3".to_string(),
             command: None,
         };
 
@@ -78,9 +106,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_serve_token_after_default_command() {
+    fn rejects_missing_telegram_bot_token() {
         let cli = Cli {
             telegram_bot_token: None,
+            database_path: "froid.sqlite3".to_string(),
             command: None,
         };
 
@@ -95,9 +124,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_serve_token() {
+    fn rejects_empty_telegram_bot_token() {
         let cli = Cli {
             telegram_bot_token: Some("  ".to_string()),
+            database_path: "froid.sqlite3".to_string(),
             command: None,
         };
 
