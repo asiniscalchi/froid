@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use teloxide::{prelude::*, types::Message};
 use tracing::{error, info};
 
@@ -117,34 +117,34 @@ fn parse_recent_command(text: &str) -> Option<u32> {
     Some(limit)
 }
 
-fn incoming_from_text_message(
-    message: &Message,
-    received_at: DateTime<Utc>,
-) -> Option<IncomingMessage> {
-    let text = message.text()?;
-    let user_id = message
-        .from
-        .as_ref()
-        .map(|user| user.id.to_string())
-        .unwrap_or_else(|| message.chat.id.to_string());
-
-    Some(IncomingMessage {
-        source: MessageSource::Telegram,
-        source_conversation_id: message.chat.id.to_string(),
-        source_message_id: message.id.to_string(),
-        user_id,
-        text: text.to_string(),
-        received_at,
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
+    use chrono::{DateTime, TimeZone, Utc};
     use serde_json::json;
 
     use super::*;
     use crate::messages::MessageSource;
+
+    fn incoming_from_text_message(
+        message: &Message,
+        received_at: DateTime<Utc>,
+    ) -> Option<IncomingMessage> {
+        let text = message.text()?;
+        let user_id = message
+            .from
+            .as_ref()
+            .map(|user| user.id.to_string())
+            .unwrap_or_else(|| message.chat.id.to_string());
+
+        Some(IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: message.chat.id.to_string(),
+            source_message_id: message.id.to_string(),
+            user_id,
+            text: text.to_string(),
+            received_at,
+        })
+    }
 
     #[test]
     fn maps_telegram_text_message_to_internal_message() {
