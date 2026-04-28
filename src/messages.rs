@@ -16,7 +16,7 @@ impl std::fmt::Display for MessageSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncomingMessage {
     pub source: MessageSource,
-    pub source_chat_id: String,
+    pub source_conversation_id: String,
     pub source_message_id: String,
     pub user_id: String,
     pub text: String,

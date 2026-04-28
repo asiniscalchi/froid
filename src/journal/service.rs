@@ -37,7 +37,7 @@ mod tests {
     fn incoming() -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
-            source_chat_id: "42".to_string(),
+            source_conversation_id: "42".to_string(),
             source_message_id: "100".to_string(),
             user_id: "7".to_string(),
             text: "hello froid".to_string(),

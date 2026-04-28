@@ -47,7 +47,7 @@ async fn handle_message(
     let response_text = match incoming_from_text_message(&message, Utc::now()) {
         Some(incoming) => {
             info!(
-                source_chat_id = %incoming.source_chat_id,
+                source_conversation_id = %incoming.source_conversation_id,
                 source_message_id = %incoming.source_message_id,
                 user_id = %incoming.user_id,
                 "received Telegram text message"
@@ -82,7 +82,7 @@ fn incoming_from_text_message(
 
     Some(IncomingMessage {
         source: MessageSource::Telegram,
-        source_chat_id: message.chat.id.to_string(),
+        source_conversation_id: message.chat.id.to_string(),
         source_message_id: message.id.to_string(),
         user_id,
         text: text.to_string(),
@@ -120,7 +120,7 @@ mod tests {
         let incoming = incoming_from_text_message(&telegram_message, received_at).unwrap();
 
         assert_eq!(incoming.source, MessageSource::Telegram);
-        assert_eq!(incoming.source_chat_id, "42");
+        assert_eq!(incoming.source_conversation_id, "42");
         assert_eq!(incoming.source_message_id, "100");
         assert_eq!(incoming.user_id, "7");
         assert_eq!(incoming.text, "hello froid");

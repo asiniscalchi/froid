@@ -18,13 +18,13 @@ impl JournalRepository {
         sqlx::query(
             r#"
             INSERT OR IGNORE INTO journal_entries
-                (user_id, source, source_chat_id, source_message_id, raw_text, received_at)
+                (user_id, source, source_conversation_id, source_message_id, raw_text, received_at)
             VALUES (?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&message.user_id)
         .bind(message.source.to_string())
-        .bind(&message.source_chat_id)
+        .bind(&message.source_conversation_id)
         .bind(&message.source_message_id)
         .bind(&message.text)
         .bind(message.received_at)
@@ -56,7 +56,7 @@ mod tests {
     fn incoming(source_message_id: &str) -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
-            source_chat_id: "42".to_string(),
+            source_conversation_id: "42".to_string(),
             source_message_id: source_message_id.to_string(),
             user_id: "7".to_string(),
             text: "hello froid".to_string(),
@@ -72,7 +72,7 @@ mod tests {
         repo.store(&message).await.unwrap();
 
         let row = sqlx::query(
-            "SELECT user_id, source, source_chat_id, source_message_id, raw_text FROM journal_entries",
+            "SELECT user_id, source, source_conversation_id, source_message_id, raw_text FROM journal_entries",
         )
         .fetch_one(&repo.pool)
         .await
@@ -80,7 +80,7 @@ mod tests {
 
         assert_eq!(row.get::<String, _>("user_id"), "7");
         assert_eq!(row.get::<String, _>("source"), "telegram");
-        assert_eq!(row.get::<String, _>("source_chat_id"), "42");
+        assert_eq!(row.get::<String, _>("source_conversation_id"), "42");
         assert_eq!(row.get::<String, _>("source_message_id"), "100");
         assert_eq!(row.get::<String, _>("raw_text"), "hello froid");
     }
