@@ -1,5 +1,3 @@
-use chrono::Utc;
-
 use crate::messages::{IncomingMessage, OutgoingMessage};
 
 use super::repository::JournalRepository;
@@ -35,11 +33,7 @@ impl JournalService {
         let text = entries
             .iter()
             .map(|e| {
-                format!(
-                    "{} — {}",
-                    e.received_at.with_timezone(&Utc).format("%Y-%m-%d %H:%M"),
-                    e.text
-                )
+                format!("{} — {}", e.received_at.format("%Y-%m-%d %H:%M"), e.text)
             })
             .collect::<Vec<_>>()
             .join("\n");

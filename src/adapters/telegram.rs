@@ -73,14 +73,7 @@ async fn handle_message(
         return Ok(());
     }
 
-    let incoming = IncomingMessage {
-        source: MessageSource::Telegram,
-        source_conversation_id: message.chat.id.to_string(),
-        source_message_id: message.id.to_string(),
-        user_id,
-        text: text.to_string(),
-        received_at: Utc::now(),
-    };
+    let incoming = incoming_from_text_message(&message, user_id);
 
     info!(
         source_conversation_id = %incoming.source_conversation_id,
@@ -102,6 +95,17 @@ async fn handle_message(
     Ok(())
 }
 
+fn incoming_from_text_message(message: &Message, user_id: String) -> IncomingMessage {
+    IncomingMessage {
+        source: MessageSource::Telegram,
+        source_conversation_id: message.chat.id.to_string(),
+        source_message_id: message.id.to_string(),
+        user_id,
+        text: message.text().unwrap_or_default().to_string(),
+        received_at: Utc::now(),
+    }
+}
+
 fn parse_recent_command(text: &str) -> Option<u32> {
     let mut parts = text.trim().splitn(2, char::is_whitespace);
     let command = parts.next()?;
@@ -119,36 +123,14 @@ fn parse_recent_command(text: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, TimeZone, Utc};
     use serde_json::json;
 
     use super::*;
     use crate::messages::MessageSource;
 
-    fn incoming_from_text_message(
-        message: &Message,
-        received_at: DateTime<Utc>,
-    ) -> Option<IncomingMessage> {
-        let text = message.text()?;
-        let user_id = message
-            .from
-            .as_ref()
-            .map(|user| user.id.to_string())
-            .unwrap_or_else(|| message.chat.id.to_string());
-
-        Some(IncomingMessage {
-            source: MessageSource::Telegram,
-            source_conversation_id: message.chat.id.to_string(),
-            source_message_id: message.id.to_string(),
-            user_id,
-            text: text.to_string(),
-            received_at,
-        })
-    }
-
     #[test]
     fn maps_telegram_text_message_to_internal_message() {
-        let telegram_message = telegram_message(json!({
+        let message = telegram_message(json!({
             "message_id": 100,
             "from": {
                 "id": 7,
@@ -163,42 +145,15 @@ mod tests {
             },
             "text": "hello froid"
         }));
-        let received_at = Utc.with_ymd_and_hms(2026, 4, 28, 12, 0, 0).unwrap();
+        let user_id = "7".to_string();
 
-        let incoming = incoming_from_text_message(&telegram_message, received_at).unwrap();
+        let incoming = incoming_from_text_message(&message, user_id);
 
         assert_eq!(incoming.source, MessageSource::Telegram);
         assert_eq!(incoming.source_conversation_id, "42");
         assert_eq!(incoming.source_message_id, "100");
         assert_eq!(incoming.user_id, "7");
         assert_eq!(incoming.text, "hello froid");
-        assert_eq!(incoming.received_at, received_at);
-    }
-
-    #[test]
-    fn does_not_map_non_text_message_to_internal_message() {
-        let telegram_message = telegram_message(json!({
-            "message_id": 101,
-            "from": {
-                "id": 7,
-                "is_bot": false,
-                "first_name": "Ada"
-            },
-            "date": 1_700_000_000,
-            "chat": {
-                "id": 42,
-                "type": "private",
-                "first_name": "Ada"
-            },
-            "photo": [{
-                "file_id": "file-id",
-                "file_unique_id": "file-unique-id",
-                "width": 320,
-                "height": 240
-            }]
-        }));
-
-        assert!(incoming_from_text_message(&telegram_message, Utc::now()).is_none());
     }
 
     #[test]
