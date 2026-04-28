@@ -11,8 +11,14 @@ pub struct Cli {
     )]
     telegram_bot_token: Option<String>,
 
-    #[arg(long, env = "DATABASE_URL", global = true, hide_env_values = true)]
-    database_url: Option<String>,
+    #[arg(
+        long,
+        env = "DATABASE_URL",
+        global = true,
+        hide_env_values = true,
+        default_value = "sqlite:froid.sqlite"
+    )]
+    database_url: String,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -50,23 +56,9 @@ impl Cli {
             ));
         }
 
-        let Some(database_url) = self.database_url.as_ref() else {
-            return Err(clap::Error::raw(
-                clap::error::ErrorKind::ValueValidation,
-                "DATABASE_URL environment variable or --database-url is required",
-            ));
-        };
-
-        if database_url.trim().is_empty() {
-            return Err(clap::Error::raw(
-                clap::error::ErrorKind::ValueValidation,
-                "DATABASE_URL environment variable or --database-url must not be empty",
-            ));
-        }
-
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
-            database_url: database_url.clone(),
+            database_url: self.database_url.clone(),
         })
     }
 }
@@ -84,21 +76,30 @@ mod tests {
             "--telegram-bot-token",
             "token",
             "--database-url",
-            "sqlite:froid.db",
+            "sqlite:froid.sqlite",
             "serve",
         ]);
 
         let config = cli.serve_config().unwrap();
 
         assert_eq!(config.telegram_bot_token, "token");
-        assert_eq!(config.database_url, "sqlite:froid.db");
+        assert_eq!(config.database_url, "sqlite:froid.sqlite");
+    }
+
+    #[test]
+    fn uses_default_database_url() {
+        let cli = Cli::parse_from(["froid", "--telegram-bot-token", "token"]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.database_url, "sqlite:froid.sqlite");
     }
 
     #[test]
     fn defaults_to_serve_command() {
         let cli = Cli {
             telegram_bot_token: None,
-            database_url: None,
+            database_url: "sqlite:froid.sqlite".to_string(),
             command: None,
         };
 
@@ -109,7 +110,7 @@ mod tests {
     fn rejects_missing_telegram_bot_token() {
         let cli = Cli {
             telegram_bot_token: None,
-            database_url: Some("sqlite:froid.db".to_string()),
+            database_url: "sqlite:froid.sqlite".to_string(),
             command: None,
         };
 
@@ -127,39 +128,7 @@ mod tests {
     fn rejects_empty_telegram_bot_token() {
         let cli = Cli {
             telegram_bot_token: Some("  ".to_string()),
-            database_url: Some("sqlite:froid.db".to_string()),
-            command: None,
-        };
-
-        let error = cli.serve_config().unwrap_err();
-
-        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(error.to_string().contains("must not be empty"));
-    }
-
-    #[test]
-    fn rejects_missing_database_url() {
-        let cli = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            database_url: None,
-            command: None,
-        };
-
-        let error = cli.serve_config().unwrap_err();
-
-        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(
-            error
-                .to_string()
-                .contains("DATABASE_URL environment variable or --database-url")
-        );
-    }
-
-    #[test]
-    fn rejects_empty_database_url() {
-        let cli = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            database_url: Some("  ".to_string()),
+            database_url: "sqlite:froid.sqlite".to_string(),
             command: None,
         };
 
