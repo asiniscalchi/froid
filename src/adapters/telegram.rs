@@ -9,6 +9,7 @@ use crate::{
 
 use super::Adapter;
 
+const DEFAULT_RECENT_LIMIT: u32 = 10;
 const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Unsupported message type";
 
 pub struct TelegramAdapter {
@@ -44,29 +45,76 @@ async fn handle_message(
     message: Message,
     journal_service: JournalService,
 ) -> ResponseResult<()> {
-    let response_text = match incoming_from_text_message(&message, Utc::now()) {
-        Some(incoming) => {
-            info!(
-                source_conversation_id = %incoming.source_conversation_id,
-                source_message_id = %incoming.source_message_id,
-                user_id = %incoming.user_id,
-                "received Telegram text message"
-            );
+    let Some(text) = message.text() else {
+        bot.send_message(message.chat.id, UNSUPPORTED_MESSAGE_RESPONSE)
+            .await?;
+        return Ok(());
+    };
 
-            match journal_service.process(&incoming).await {
-                Ok(outgoing) => outgoing.text,
-                Err(err) => {
-                    error!(%err, "failed to store journal entry");
-                    "Something went wrong. Please try again.".to_string()
-                }
+    let user_id = message
+        .from
+        .as_ref()
+        .map(|u| u.id.to_string())
+        .unwrap_or_else(|| message.chat.id.to_string());
+
+    if let Some(limit) = parse_recent_command(text) {
+        info!(user_id = %user_id, limit, "received /recent command");
+
+        match journal_service.recent(&user_id, limit).await {
+            Ok(Some(outgoing)) => {
+                bot.send_message(message.chat.id, outgoing.text).await?;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                error!(%err, "failed to fetch recent entries");
             }
         }
-        None => UNSUPPORTED_MESSAGE_RESPONSE.to_string(),
+
+        return Ok(());
+    }
+
+    let incoming = IncomingMessage {
+        source: MessageSource::Telegram,
+        source_conversation_id: message.chat.id.to_string(),
+        source_message_id: message.id.to_string(),
+        user_id,
+        text: text.to_string(),
+        received_at: Utc::now(),
+    };
+
+    info!(
+        source_conversation_id = %incoming.source_conversation_id,
+        source_message_id = %incoming.source_message_id,
+        user_id = %incoming.user_id,
+        "received Telegram text message"
+    );
+
+    let response_text = match journal_service.process(&incoming).await {
+        Ok(outgoing) => outgoing.text,
+        Err(err) => {
+            error!(%err, "failed to store journal entry");
+            "Something went wrong. Please try again.".to_string()
+        }
     };
 
     bot.send_message(message.chat.id, response_text).await?;
 
     Ok(())
+}
+
+fn parse_recent_command(text: &str) -> Option<u32> {
+    let mut parts = text.trim().splitn(2, char::is_whitespace);
+    let command = parts.next()?;
+    // strip optional @botname suffix
+    let command = command.split('@').next()?;
+    if command != "/recent" {
+        return None;
+    }
+    let limit = parts
+        .next()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(DEFAULT_RECENT_LIMIT);
+    Some(limit)
 }
 
 fn incoming_from_text_message(
@@ -151,6 +199,28 @@ mod tests {
         }));
 
         assert!(incoming_from_text_message(&telegram_message, Utc::now()).is_none());
+    }
+
+    #[test]
+    fn parse_recent_command_with_no_argument_uses_default_limit() {
+        assert_eq!(parse_recent_command("/recent"), Some(DEFAULT_RECENT_LIMIT));
+    }
+
+    #[test]
+    fn parse_recent_command_with_explicit_limit() {
+        assert_eq!(parse_recent_command("/recent 5"), Some(5));
+    }
+
+    #[test]
+    fn parse_recent_command_strips_bot_name_suffix() {
+        assert_eq!(parse_recent_command("/recent@mybot"), Some(DEFAULT_RECENT_LIMIT));
+        assert_eq!(parse_recent_command("/recent@mybot 3"), Some(3));
+    }
+
+    #[test]
+    fn parse_recent_command_returns_none_for_non_command() {
+        assert_eq!(parse_recent_command("hello"), None);
+        assert_eq!(parse_recent_command("/other"), None);
     }
 
     fn telegram_message(value: serde_json::Value) -> Message {
