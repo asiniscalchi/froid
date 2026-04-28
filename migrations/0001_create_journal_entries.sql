@@ -9,3 +9,6 @@ CREATE TABLE journal_entries (
     created_at       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     UNIQUE (source, source_conversation_id, source_message_id)
 );
+
+CREATE INDEX idx_journal_entries_user_received
+    ON journal_entries (user_id, received_at DESC, id DESC);
