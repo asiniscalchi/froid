@@ -17,10 +17,7 @@ use crate::{
             message_saved_response, no_entries_response, no_entries_today_response,
             recent_usage_response, start_response, stats_response, status_response,
         },
-        review::{
-            DailyReviewResult,
-            service::DailyReviewRunner,
-        },
+        review::{DailyReviewResult, service::DailyReviewRunner},
         search::{
             SearchService, SemanticSearchService, format_search_results, search_empty_response,
             search_error_response, search_unavailable_response, search_usage_response,
