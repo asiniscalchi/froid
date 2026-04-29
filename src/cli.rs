@@ -17,7 +17,7 @@ pub struct Cli {
         long,
         env = "DATABASE_PATH",
         global = true,
-        default_value = "froid.sqlite3"
+        default_value = "data/froid.sqlite3"
     )]
     database_path: String,
 
@@ -114,8 +114,8 @@ mod tests {
 
         let config = cli.serve_config().unwrap();
 
-        assert_eq!(config.database_path, "froid.sqlite3");
-        assert_eq!(config.database_url, "sqlite:froid.sqlite3");
+        assert_eq!(config.database_path, "data/froid.sqlite3");
+        assert_eq!(config.database_url, "sqlite:data/froid.sqlite3");
     }
 
     #[test]
