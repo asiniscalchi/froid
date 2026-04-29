@@ -1,6 +1,9 @@
 use std::{error::Error, future::Future};
 
-use crate::messages::{IncomingMessage, JournalCommandRequest, OutgoingMessage};
+use crate::{
+    journal::command::JournalCommandRequest,
+    messages::{IncomingMessage, OutgoingMessage},
+};
 
 pub trait MessageHandler: Clone + Send + Sync + 'static {
     fn process(

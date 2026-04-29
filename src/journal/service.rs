@@ -1,8 +1,7 @@
 use crate::{
     handler::MessageHandler,
-    messages::{
-        IncomingMessage, JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT, OutgoingMessage,
-    },
+    journal::command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
+    messages::{IncomingMessage, OutgoingMessage},
 };
 
 use super::repository::JournalRepository;
@@ -155,8 +154,9 @@ mod tests {
 
     use super::*;
     use crate::{
+        journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
         journal::repository::JournalRepository,
-        messages::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest, MessageSource},
+        messages::MessageSource,
     };
 
     async fn setup() -> JournalService {

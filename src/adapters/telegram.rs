@@ -4,9 +4,8 @@ use tracing::{error, info};
 
 use crate::{
     handler::MessageHandler,
-    messages::{
-        DEFAULT_RECENT_LIMIT, IncomingMessage, JournalCommand, JournalCommandRequest, MessageSource,
-    },
+    journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
+    messages::{IncomingMessage, MessageSource},
 };
 
 use super::Adapter;
