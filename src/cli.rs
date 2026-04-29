@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::version;
+use crate::{journal::embedding::EmbeddingWorkerConfig, version};
 
 #[derive(Debug, Parser)]
 #[command(version = version::VERSION, about)]
@@ -21,6 +21,15 @@ pub struct Cli {
     )]
     database_path: String,
 
+    #[arg(long, env = "FROID_EMBEDDING_WORKER_ENABLED", global = true)]
+    embedding_worker_enabled: Option<String>,
+
+    #[arg(long, env = "FROID_EMBEDDING_WORKER_BATCH_SIZE", global = true)]
+    embedding_worker_batch_size: Option<String>,
+
+    #[arg(long, env = "FROID_EMBEDDING_WORKER_INTERVAL_SECONDS", global = true)]
+    embedding_worker_interval_seconds: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -36,6 +45,7 @@ pub struct ServeConfig {
     pub telegram_bot_token: String,
     pub database_path: String,
     pub database_url: String,
+    pub embedding_worker: EmbeddingWorkerConfig,
 }
 
 impl Cli {
@@ -58,10 +68,18 @@ impl Cli {
             ));
         }
 
+        let embedding_worker = EmbeddingWorkerConfig::from_values(
+            self.embedding_worker_enabled.clone(),
+            self.embedding_worker_batch_size.clone(),
+            self.embedding_worker_interval_seconds.clone(),
+        )
+        .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
+
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
             database_path: self.database_path.clone(),
             database_url: format!("sqlite:{}", self.database_path),
+            embedding_worker,
         })
     }
 }
@@ -105,6 +123,9 @@ mod tests {
         let cli = Cli {
             telegram_bot_token: None,
             database_path: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
             command: None,
         };
 
@@ -116,6 +137,9 @@ mod tests {
         let cli = Cli {
             telegram_bot_token: None,
             database_path: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
             command: None,
         };
 
@@ -134,6 +158,9 @@ mod tests {
         let cli = Cli {
             telegram_bot_token: Some("  ".to_string()),
             database_path: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
             command: None,
         };
 
@@ -151,5 +178,86 @@ mod tests {
     #[test]
     fn command_version_uses_build_version() {
         assert_eq!(Cli::command().get_version(), Some(version::VERSION));
+    }
+
+    fn cli_with_token(token: &str) -> Cli {
+        Cli {
+            telegram_bot_token: Some(token.to_string()),
+            database_path: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
+            command: None,
+        }
+    }
+
+    #[test]
+    fn serve_config_worker_disabled_by_default() {
+        let config = cli_with_token("token").serve_config().unwrap();
+
+        assert!(!config.embedding_worker.enabled);
+    }
+
+    #[test]
+    fn serve_config_worker_defaults_to_batch_size_20_and_interval_300s() {
+        let config = cli_with_token("token").serve_config().unwrap();
+
+        assert_eq!(config.embedding_worker.batch_size, 20);
+        assert_eq!(
+            config.embedding_worker.interval,
+            std::time::Duration::from_secs(300)
+        );
+    }
+
+    #[test]
+    fn serve_config_worker_enabled_when_set_to_true() {
+        let config = Cli {
+            telegram_bot_token: Some("token".to_string()),
+            database_path: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: Some("true".to_string()),
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
+            command: None,
+        }
+        .serve_config()
+        .unwrap();
+
+        assert!(config.embedding_worker.enabled);
+    }
+
+    #[test]
+    fn serve_config_rejects_zero_batch_size() {
+        let error = Cli {
+            telegram_bot_token: Some("token".to_string()),
+            database_path: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: Some("0".to_string()),
+            embedding_worker_interval_seconds: None,
+            command: None,
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("FROID_EMBEDDING_WORKER_BATCH_SIZE"));
+    }
+
+    #[test]
+    fn serve_config_rejects_zero_interval() {
+        let error = Cli {
+            telegram_bot_token: Some("token".to_string()),
+            database_path: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: Some("0".to_string()),
+            command: None,
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error
+            .to_string()
+            .contains("FROID_EMBEDDING_WORKER_INTERVAL_SECONDS"));
     }
 }
