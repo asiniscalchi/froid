@@ -2,11 +2,13 @@ pub mod generator;
 pub mod prompt;
 pub mod repository;
 pub mod service;
+pub mod wiring;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
 pub use generator::{ReviewConfig, RigOpenAiReviewGenerator};
 pub use prompt::{DailyReviewPrompt, DailyReviewPromptConfig, DailyReviewPromptError};
+pub use wiring::{DailyReviewRuntimeConfig, configure_daily_review};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyReview {

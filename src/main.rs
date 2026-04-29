@@ -1,4 +1,4 @@
-use std::{env, error::Error};
+use std::error::Error;
 
 use clap::Parser;
 use froid::{
@@ -10,10 +10,7 @@ use froid::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
         },
         repository::JournalRepository,
-        review::{
-            DailyReviewPromptConfig, ReviewConfig, RigOpenAiReviewGenerator,
-            repository::DailyReviewRepository, service::DailyReviewService,
-        },
+        review::{DailyReviewRuntimeConfig, configure_daily_review},
         search::SemanticSearchService,
         service::JournalService,
     },
@@ -21,7 +18,7 @@ use froid::{
     workers::embedding::EmbeddingReconciliationWorker,
 };
 use sqlx::SqlitePool;
-use tracing::{info, warn};
+use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
@@ -96,7 +93,7 @@ fn build_journal_service(
     journal_service = configure_daily_review(
         journal_service,
         pool.clone(),
-        env::var("OPENAI_API_KEY").ok(),
+        DailyReviewRuntimeConfig::from_env(),
     )?;
 
     if let Some(cfg) = embedding_config
@@ -114,173 +111,8 @@ fn build_journal_service(
     Ok(journal_service)
 }
 
-fn configure_daily_review(
-    journal_service: JournalService,
-    pool: SqlitePool,
-    openai_api_key: Option<String>,
-) -> Result<JournalService, Box<dyn Error>> {
-    let Some(openai_api_key) = openai_api_key.filter(|value| !value.trim().is_empty()) else {
-        warn!("daily review generation is not configured");
-        return Ok(journal_service);
-    };
-
-    let review_prompt = DailyReviewPromptConfig::from_env().load()?;
-    let review_generator = RigOpenAiReviewGenerator::from_optional_api_key(
-        ReviewConfig::from_env(),
-        review_prompt,
-        Some(openai_api_key),
-    )?;
-    let daily_review_service = DailyReviewService::new(
-        DailyReviewRepository::new(pool.clone()),
-        JournalRepository::new(pool.clone()),
-        review_generator,
-    );
-
-    Ok(journal_service.with_daily_review_runner(daily_review_service))
-}
-
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     fmt().with_env_filter(filter).init();
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::{Mutex, OnceLock};
-
-    use froid::{
-        database,
-        journal::{
-            command::{JournalCommand, JournalCommandRequest},
-            review::prompt::DEFAULT_REVIEW_PROMPT_PATH,
-        },
-    };
-
-    use super::*;
-
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-    #[tokio::test]
-    async fn missing_prompt_file_does_not_break_startup_without_review_api_key() {
-        let pool = setup_pool().await;
-        let service = {
-            let _guard = env_lock();
-            let original_path = set_env_var("FROID_REVIEW_PROMPT_PATH", "missing-review-prompt.md");
-
-            let service = configure_daily_review(
-                JournalService::new(JournalRepository::new(pool.clone())),
-                pool,
-                None,
-            )
-            .unwrap();
-
-            restore_env_var("FROID_REVIEW_PROMPT_PATH", original_path);
-            service
-        };
-
-        assert_eq!(
-            service
-                .review_today_response_for_test("7", chrono::Utc::now().date_naive())
-                .await,
-            "Daily review generation is not configured yet."
-        );
-    }
-
-    #[tokio::test]
-    async fn missing_prompt_file_fails_startup_when_review_api_key_is_configured() {
-        let pool = setup_pool().await;
-        let error = {
-            let _guard = env_lock();
-            let original_path = set_env_var("FROID_REVIEW_PROMPT_PATH", "missing-review-prompt.md");
-
-            let error = configure_daily_review(
-                JournalService::new(JournalRepository::new(pool.clone())),
-                pool,
-                Some("test-api-key".to_string()),
-            )
-            .err()
-            .unwrap();
-
-            restore_env_var("FROID_REVIEW_PROMPT_PATH", original_path);
-            error
-        };
-
-        assert!(
-            error
-                .to_string()
-                .contains("failed to load daily review prompt")
-        );
-    }
-
-    #[tokio::test]
-    async fn default_prompt_file_allows_startup_when_review_api_key_is_configured() {
-        let pool = setup_pool().await;
-        {
-            let _guard = env_lock();
-            let original_path = set_env_var("FROID_REVIEW_PROMPT_PATH", DEFAULT_REVIEW_PROMPT_PATH);
-
-            configure_daily_review(
-                JournalService::new(JournalRepository::new(pool.clone())),
-                pool,
-                Some("test-api-key".to_string()),
-            )
-            .unwrap();
-
-            restore_env_var("FROID_REVIEW_PROMPT_PATH", original_path);
-        }
-    }
-
-    async fn setup_pool() -> SqlitePool {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
-        pool
-    }
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
-
-    fn set_env_var(key: &str, value: &str) -> Option<String> {
-        let original = env::var(key).ok();
-        unsafe {
-            env::set_var(key, value);
-        }
-        original
-    }
-
-    fn restore_env_var(key: &str, original: Option<String>) {
-        unsafe {
-            match original {
-                Some(value) => env::set_var(key, value),
-                None => env::remove_var(key),
-            }
-        }
-    }
-
-    trait ReviewTodayResponseForTest {
-        async fn review_today_response_for_test(
-            &self,
-            user_id: &str,
-            date: chrono::NaiveDate,
-        ) -> String;
-    }
-
-    impl ReviewTodayResponseForTest for JournalService {
-        async fn review_today_response_for_test(
-            &self,
-            user_id: &str,
-            date: chrono::NaiveDate,
-        ) -> String {
-            self.command(&JournalCommandRequest {
-                user_id: user_id.to_string(),
-                received_at: date.and_hms_opt(0, 0, 0).unwrap().and_utc(),
-                command: JournalCommand::ReviewToday,
-            })
-            .await
-            .unwrap()
-            .text
-        }
-    }
 }

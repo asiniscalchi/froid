@@ -1,4 +1,4 @@
-use std::{env, error::Error, fmt};
+use std::{env, error::Error, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use rig::{
@@ -117,7 +117,7 @@ impl fmt::Display for ReviewProviderError {
 impl Error for ReviewProviderError {}
 
 #[async_trait]
-pub trait ReviewProvider: Send + Sync {
+pub(crate) trait ReviewProvider: Send + Sync {
     async fn complete_daily_review(
         &self,
         model: &str,
@@ -127,7 +127,7 @@ pub trait ReviewProvider: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct RigOpenAiReviewProvider {
+struct RigOpenAiReviewProvider {
     client: OpenAiClient,
 }
 
@@ -163,13 +163,13 @@ impl ReviewProvider for RigOpenAiReviewProvider {
 }
 
 #[derive(Clone)]
-pub struct RigOpenAiReviewGenerator<P = RigOpenAiReviewProvider> {
+pub struct RigOpenAiReviewGenerator {
     config: ReviewConfig,
     prompt: DailyReviewPrompt,
-    provider: P,
+    provider: Arc<dyn ReviewProvider>,
 }
 
-impl RigOpenAiReviewGenerator<RigOpenAiReviewProvider> {
+impl RigOpenAiReviewGenerator {
     pub fn from_optional_api_key(
         config: ReviewConfig,
         prompt: DailyReviewPrompt,
@@ -183,30 +183,25 @@ impl RigOpenAiReviewGenerator<RigOpenAiReviewProvider> {
         Ok(Self {
             config,
             prompt,
-            provider,
+            provider: Arc::new(provider),
         })
     }
-}
 
-impl<P> RigOpenAiReviewGenerator<P>
-where
-    P: ReviewProvider,
-{
     #[cfg(test)]
-    pub(crate) fn new(config: ReviewConfig, prompt: DailyReviewPrompt, provider: P) -> Self {
+    pub(crate) fn new<P>(config: ReviewConfig, prompt: DailyReviewPrompt, provider: P) -> Self
+    where
+        P: ReviewProvider + 'static,
+    {
         Self {
             config,
             prompt,
-            provider,
+            provider: Arc::new(provider),
         }
     }
 }
 
 #[async_trait]
-impl<P> ReviewGenerator for RigOpenAiReviewGenerator<P>
-where
-    P: ReviewProvider,
-{
+impl ReviewGenerator for RigOpenAiReviewGenerator {
     fn model(&self) -> &str {
         &self.config.model
     }
