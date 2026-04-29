@@ -325,6 +325,14 @@ pub trait EmbeddingIndex: Send + Sync {
         embedding_model: &str,
         limit: usize,
     ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError>;
+
+    async fn search_for_user(
+        &self,
+        user_id: &str,
+        embedding: &Embedding,
+        embedding_model: &str,
+        limit: usize,
+    ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError>;
 }
 
 #[async_trait]
@@ -699,6 +707,43 @@ impl SqliteEmbeddingRepository {
             .collect())
     }
 
+    pub async fn search_for_user(
+        &self,
+        user_id: &str,
+        embedding: &Embedding,
+        embedding_model: &str,
+        limit: usize,
+    ) -> Result<Vec<EmbeddingSearchResult>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                m.journal_entry_id,
+                vec_distance_cosine(v.embedding, ?) AS score
+            FROM journal_entry_embedding_metadata m
+            JOIN journal_entry_embedding_vec v ON v.rowid = m.id
+            JOIN journal_entries j ON j.id = m.journal_entry_id
+            WHERE m.embedding_model = ?
+              AND j.user_id = ?
+            ORDER BY score ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(embedding_to_blob(embedding))
+        .bind(embedding_model)
+        .bind(user_id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| EmbeddingSearchResult {
+                journal_entry_id: row.get("journal_entry_id"),
+                score: row.get("score"),
+            })
+            .collect())
+    }
+
     #[cfg(test)]
     async fn stored_embedding(
         &self,
@@ -798,6 +843,18 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
         limit: usize,
     ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::search(self, embedding, embedding_model, limit)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn search_for_user(
+        &self,
+        user_id: &str,
+        embedding: &Embedding,
+        embedding_model: &str,
+        limit: usize,
+    ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
+        SqliteEmbeddingRepository::search_for_user(self, user_id, embedding, embedding_model, limit)
             .await
             .map_err(Into::into)
     }
@@ -1015,6 +1072,19 @@ mod tests {
         ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
             self.inner
                 .search(embedding, embedding_model, limit)
+                .await
+                .map_err(Into::into)
+        }
+
+        async fn search_for_user(
+            &self,
+            user_id: &str,
+            embedding: &Embedding,
+            embedding_model: &str,
+            limit: usize,
+        ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
+            self.inner
+                .search_for_user(user_id, embedding, embedding_model, limit)
                 .await
                 .map_err(Into::into)
         }

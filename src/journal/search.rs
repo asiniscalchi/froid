@@ -87,7 +87,7 @@ where
 
         let index_results = self
             .index
-            .search(&embedding, model, MAX_SEARCH_LIMIT)
+            .search_for_user(user_id, &embedding, model, MAX_SEARCH_LIMIT)
             .await
             .map_err(SemanticSearchError::Index)?;
 
@@ -393,6 +393,48 @@ mod tests {
             .unwrap();
 
         // Query at dim 1 — other user's entry is closest, but user "7" must not see it.
+        let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
+
+        let results = service.search("7", "query").await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].journal_entry.text, "real entry");
+    }
+
+    #[tokio::test]
+    async fn search_scopes_vector_candidates_to_searching_user_before_limiting() {
+        let (repo, index) = setup().await;
+
+        store_and_embed(&repo, &index, "real", "real entry", at(10, 0), 0).await;
+
+        for i in 0..MAX_SEARCH_LIMIT {
+            let msg = IncomingMessage {
+                source: MessageSource::Telegram,
+                source_conversation_id: format!("other-{i}"),
+                source_message_id: format!("other-{i}"),
+                user_id: "other_user".to_string(),
+                text: format!("other user entry {i}"),
+                received_at: at(11, i as u32),
+            };
+            repo.store(&msg).await.unwrap();
+            let other_id: i64 = sqlx::query_scalar(
+                "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = ?",
+            )
+            .bind(format!("other-{i}"))
+            .fetch_one(repo.pool())
+            .await
+            .unwrap();
+            index
+                .store_embedding(
+                    other_id,
+                    TEST_MODEL,
+                    SUPPORTED_EMBEDDING_DIMENSIONS,
+                    &directional_embedding(1),
+                )
+                .await
+                .unwrap();
+        }
+
         let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
 
         let results = service.search("7", "query").await.unwrap();
