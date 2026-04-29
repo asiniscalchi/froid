@@ -17,6 +17,3 @@ CREATE TABLE daily_reviews (
         (status = 'failed' AND review_text IS NULL AND error_message IS NOT NULL)
     )
 );
-
-CREATE INDEX idx_daily_reviews_user_date
-    ON daily_reviews (user_id, review_date);
