@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
 
+use crate::version;
+
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(version = version::VERSION, about)]
 pub struct Cli {
     #[arg(
         long,
@@ -32,6 +34,7 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeConfig {
     pub telegram_bot_token: String,
+    pub database_path: String,
     pub database_url: String,
 }
 
@@ -57,6 +60,7 @@ impl Cli {
 
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
+            database_path: self.database_path.clone(),
             database_url: format!("sqlite:{}", self.database_path),
         })
     }
@@ -82,6 +86,7 @@ mod tests {
         let config = cli.serve_config().unwrap();
 
         assert_eq!(config.telegram_bot_token, "token");
+        assert_eq!(config.database_path, "custom.db");
         assert_eq!(config.database_url, "sqlite:custom.db");
     }
 
@@ -91,6 +96,7 @@ mod tests {
 
         let config = cli.serve_config().unwrap();
 
+        assert_eq!(config.database_path, "froid.sqlite3");
         assert_eq!(config.database_url, "sqlite:froid.sqlite3");
     }
 
@@ -140,5 +146,10 @@ mod tests {
     #[test]
     fn command_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn command_version_uses_build_version() {
+        assert_eq!(Cli::command().get_version(), Some(version::VERSION));
     }
 }
