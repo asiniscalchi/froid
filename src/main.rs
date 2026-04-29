@@ -163,70 +163,72 @@ mod tests {
 
     #[tokio::test]
     async fn missing_prompt_file_does_not_break_startup_without_review_api_key() {
-        let _guard = env_lock();
-        let original_path = set_env_var("FROID_REVIEW_PROMPT_PATH", "missing-review-prompt.md");
-
         let pool = setup_pool().await;
-        let service = configure_daily_review(
-            JournalService::new(JournalRepository::new(pool.clone())),
-            pool,
-            None,
-        )
-        .unwrap();
-        let response = service
-            .command(&JournalCommandRequest {
-                user_id: "7".to_string(),
-                received_at: chrono::Utc::now(),
-                command: JournalCommand::ReviewToday,
-            })
-            .await
+        let service = {
+            let _guard = env_lock();
+            let original_path = set_env_var("FROID_REVIEW_PROMPT_PATH", "missing-review-prompt.md");
+
+            let service = configure_daily_review(
+                JournalService::new(JournalRepository::new(pool.clone())),
+                pool,
+                None,
+            )
             .unwrap();
 
+            restore_env_var("FROID_REVIEW_PROMPT_PATH", original_path);
+            service
+        };
+
         assert_eq!(
-            response.text,
+            service
+                .review_today_response_for_test("7", chrono::Utc::now().date_naive())
+                .await,
             "Daily review generation is not configured yet."
         );
-
-        restore_env_var("FROID_REVIEW_PROMPT_PATH", original_path);
     }
 
     #[tokio::test]
     async fn missing_prompt_file_fails_startup_when_review_api_key_is_configured() {
-        let _guard = env_lock();
-        let original_path = set_env_var("FROID_REVIEW_PROMPT_PATH", "missing-review-prompt.md");
-
         let pool = setup_pool().await;
-        let error = configure_daily_review(
-            JournalService::new(JournalRepository::new(pool.clone())),
-            pool,
-            Some("test-api-key".to_string()),
-        )
-        .err()
-        .unwrap();
+        let error = {
+            let _guard = env_lock();
+            let original_path = set_env_var("FROID_REVIEW_PROMPT_PATH", "missing-review-prompt.md");
+
+            let error = configure_daily_review(
+                JournalService::new(JournalRepository::new(pool.clone())),
+                pool,
+                Some("test-api-key".to_string()),
+            )
+            .err()
+            .unwrap();
+
+            restore_env_var("FROID_REVIEW_PROMPT_PATH", original_path);
+            error
+        };
 
         assert!(
             error
                 .to_string()
                 .contains("failed to load daily review prompt")
         );
-
-        restore_env_var("FROID_REVIEW_PROMPT_PATH", original_path);
     }
 
     #[tokio::test]
     async fn default_prompt_file_allows_startup_when_review_api_key_is_configured() {
-        let _guard = env_lock();
-        let original_path = set_env_var("FROID_REVIEW_PROMPT_PATH", DEFAULT_REVIEW_PROMPT_PATH);
-
         let pool = setup_pool().await;
-        configure_daily_review(
-            JournalService::new(JournalRepository::new(pool.clone())),
-            pool,
-            Some("test-api-key".to_string()),
-        )
-        .unwrap();
+        {
+            let _guard = env_lock();
+            let original_path = set_env_var("FROID_REVIEW_PROMPT_PATH", DEFAULT_REVIEW_PROMPT_PATH);
 
-        restore_env_var("FROID_REVIEW_PROMPT_PATH", original_path);
+            configure_daily_review(
+                JournalService::new(JournalRepository::new(pool.clone())),
+                pool,
+                Some("test-api-key".to_string()),
+            )
+            .unwrap();
+
+            restore_env_var("FROID_REVIEW_PROMPT_PATH", original_path);
+        }
     }
 
     async fn setup_pool() -> SqlitePool {
@@ -254,6 +256,31 @@ mod tests {
                 Some(value) => env::set_var(key, value),
                 None => env::remove_var(key),
             }
+        }
+    }
+
+    trait ReviewTodayResponseForTest {
+        async fn review_today_response_for_test(
+            &self,
+            user_id: &str,
+            date: chrono::NaiveDate,
+        ) -> String;
+    }
+
+    impl ReviewTodayResponseForTest for JournalService {
+        async fn review_today_response_for_test(
+            &self,
+            user_id: &str,
+            date: chrono::NaiveDate,
+        ) -> String {
+            self.command(&JournalCommandRequest {
+                user_id: user_id.to_string(),
+                received_at: date.and_hms_opt(0, 0, 0).unwrap().and_utc(),
+                command: JournalCommand::ReviewToday,
+            })
+            .await
+            .unwrap()
+            .text
         }
     }
 }
