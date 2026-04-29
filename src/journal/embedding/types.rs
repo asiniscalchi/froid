@@ -23,6 +23,18 @@ impl Embedding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalEntryEmbeddingCandidate {
+    pub journal_entry_id: i64,
+    pub raw_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddingSearchResult {
+    pub journal_entry_id: i64,
+    pub distance: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbedderError {
     InvalidDimension { expected: usize, actual: usize },
     Provider(String),

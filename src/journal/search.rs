@@ -14,7 +14,7 @@ pub const MAX_SEARCH_LIMIT: usize = 20;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticSearchResult {
     pub journal_entry: JournalEntry,
-    pub score: f32,
+    pub distance: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,7 +112,7 @@ where
                     .get(&r.journal_entry_id)
                     .map(|entry| SemanticSearchResult {
                         journal_entry: entry.clone(),
-                        score: r.score,
+                        distance: r.distance,
                     })
             })
             .take(DEFAULT_SEARCH_LIMIT)
@@ -162,7 +162,9 @@ mod tests {
         database,
         journal::{
             embedding::{
-                EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
+                EmbedderError, Embedding, EmbeddingRepositoryError, EmbeddingSearchResult,
+                JournalEntryEmbeddingCandidate, SUPPORTED_EMBEDDING_DIMENSIONS,
+                SqliteEmbeddingRepository,
             },
             repository::JournalRepository,
         },
@@ -258,6 +260,42 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FakeIndex {
+        results: Vec<EmbeddingSearchResult>,
+    }
+
+    #[async_trait]
+    impl EmbeddingIndex for FakeIndex {
+        async fn store_embedding(
+            &self,
+            _journal_entry_id: i64,
+            _embedding_model: &str,
+            _embedding_dim: usize,
+            _embedding: &Embedding,
+        ) -> Result<bool, EmbeddingRepositoryError> {
+            unreachable!("search tests do not store through FakeIndex")
+        }
+
+        async fn find_entries_missing_embedding(
+            &self,
+            _embedding_model: &str,
+            _limit: u32,
+        ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
+            unreachable!("search tests do not backfill through FakeIndex")
+        }
+
+        async fn search_for_user(
+            &self,
+            _user_id: &str,
+            _embedding: &Embedding,
+            _embedding_model: &str,
+            _limit: usize,
+        ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
+            Ok(self.results.clone())
+        }
+    }
+
     #[async_trait]
     impl Embedder for FakeEmbedder {
         fn model(&self) -> &str {
@@ -281,8 +319,16 @@ mod tests {
         SemanticSearchService::new(index, embedder, repo)
     }
 
+    fn make_fake_index_service(
+        index: FakeIndex,
+        embedder: FakeEmbedder,
+        repo: JournalRepository,
+    ) -> SemanticSearchService<FakeIndex, FakeEmbedder> {
+        SemanticSearchService::new(index, embedder, repo)
+    }
+
     #[tokio::test]
-    async fn search_returns_results_ordered_by_similarity() {
+    async fn search_returns_results_ordered_by_distance() {
         let (repo, index) = setup().await;
 
         // Entry at dim 1 is closest to query at dim 1.
@@ -315,6 +361,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_does_not_return_entries_without_embeddings() {
+        let (repo, index) = setup().await;
+
+        store_and_embed(&repo, &index, "1", "embedded entry", at(10, 0), 0).await;
+        repo.store(&incoming("2", "entry without embedding", at(11, 0)))
+            .await
+            .unwrap();
+
+        let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
+
+        let results = service.search("7", "query").await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].journal_entry.text, "embedded entry");
+    }
+
+    #[tokio::test]
     async fn search_returns_error_when_embedder_fails() {
         let (repo, index) = setup().await;
 
@@ -341,7 +404,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_preserves_similarity_ordering_from_index() {
+    async fn search_preserves_distance_ordering_from_index() {
         let (repo, index) = setup().await;
 
         // Entries at dims 0, 1, 2. Query at dim 1 makes entry 1 (dim 1) closest.
@@ -355,7 +418,7 @@ mod tests {
 
         assert_eq!(results[0].journal_entry.text, "entry B");
         for window in results.windows(2) {
-            assert!(window[0].score <= window[1].score);
+            assert!(window[0].distance <= window[1].distance);
         }
     }
 
@@ -444,6 +507,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_skips_index_results_that_cannot_be_loaded_for_user() {
+        let (repo, _index) = setup().await;
+        repo.store(&incoming("1", "kept entry", at(10, 0)))
+            .await
+            .unwrap();
+        let kept_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = '1'",
+        )
+        .fetch_one(repo.pool())
+        .await
+        .unwrap();
+        let index = FakeIndex {
+            results: vec![
+                EmbeddingSearchResult {
+                    journal_entry_id: 99_999,
+                    distance: 0.1,
+                },
+                EmbeddingSearchResult {
+                    journal_entry_id: kept_id,
+                    distance: 0.2,
+                },
+            ],
+        };
+        let service = make_fake_index_service(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
+
+        let results = service.search("7", "query").await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].journal_entry.text, "kept entry");
+        assert_eq!(results[0].distance, 0.2);
+    }
+
+    #[tokio::test]
     async fn search_applies_default_limit() {
         let (repo, index) = setup().await;
 
@@ -474,14 +570,14 @@ mod tests {
                     text: "felt nervous".to_string(),
                     received_at: Utc.with_ymd_and_hms(2026, 4, 29, 9, 12, 0).unwrap(),
                 },
-                score: 0.1,
+                distance: 0.1,
             },
             SemanticSearchResult {
                 journal_entry: JournalEntry {
                     text: "avoid calls".to_string(),
                     received_at: Utc.with_ymd_and_hms(2026, 4, 20, 18, 44, 0).unwrap(),
                 },
-                score: 0.2,
+                distance: 0.2,
             },
         ];
 

@@ -3,19 +3,7 @@ use std::{error::Error, fmt, mem::size_of_val};
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
 
-use super::Embedding;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JournalEntryEmbeddingCandidate {
-    pub journal_entry_id: i64,
-    pub raw_text: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct EmbeddingSearchResult {
-    pub journal_entry_id: i64,
-    pub score: f32,
-}
+use super::{Embedding, EmbeddingSearchResult, JournalEntryEmbeddingCandidate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbeddingRepositoryError {
@@ -202,11 +190,11 @@ impl SqliteEmbeddingRepository {
             r#"
             SELECT
                 m.journal_entry_id,
-                vec_distance_cosine(v.embedding, ?) AS score
+                vec_distance_cosine(v.embedding, ?) AS distance
             FROM journal_entry_embedding_metadata m
             JOIN journal_entry_embedding_vec v ON v.rowid = m.id
             WHERE m.embedding_model = ?
-            ORDER BY score ASC
+            ORDER BY distance ASC
             LIMIT ?
             "#,
         )
@@ -220,7 +208,7 @@ impl SqliteEmbeddingRepository {
             .into_iter()
             .map(|row| EmbeddingSearchResult {
                 journal_entry_id: row.get("journal_entry_id"),
-                score: row.get("score"),
+                distance: row.get("distance"),
             })
             .collect())
     }
@@ -236,13 +224,13 @@ impl SqliteEmbeddingRepository {
             r#"
             SELECT
                 m.journal_entry_id,
-                vec_distance_cosine(v.embedding, ?) AS score
+                vec_distance_cosine(v.embedding, ?) AS distance
             FROM journal_entry_embedding_metadata m
             JOIN journal_entry_embedding_vec v ON v.rowid = m.id
             JOIN journal_entries j ON j.id = m.journal_entry_id
             WHERE m.embedding_model = ?
               AND j.user_id = ?
-            ORDER BY score ASC
+            ORDER BY distance ASC
             LIMIT ?
             "#,
         )
@@ -257,7 +245,7 @@ impl SqliteEmbeddingRepository {
             .into_iter()
             .map(|row| EmbeddingSearchResult {
                 journal_entry_id: row.get("journal_entry_id"),
-                score: row.get("score"),
+                distance: row.get("distance"),
             })
             .collect())
     }
@@ -693,8 +681,8 @@ mod tests {
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].journal_entry_id, second);
-        assert!(results[0].score <= results[1].score);
-        assert!(results[1].score <= results[2].score);
+        assert!(results[0].distance <= results[1].distance);
+        assert!(results[1].distance <= results[2].distance);
     }
 
     #[tokio::test]
