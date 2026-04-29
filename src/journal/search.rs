@@ -14,7 +14,7 @@ pub const MAX_SEARCH_LIMIT: usize = 20;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticSearchResult {
     pub journal_entry: JournalEntry,
-    pub score: f32,
+    pub distance: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,7 +112,7 @@ where
                     .get(&r.journal_entry_id)
                     .map(|entry| SemanticSearchResult {
                         journal_entry: entry.clone(),
-                        score: r.score,
+                        distance: r.distance,
                     })
             })
             .take(DEFAULT_SEARCH_LIMIT)
@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_returns_results_ordered_by_similarity() {
+    async fn search_returns_results_ordered_by_distance() {
         let (repo, index) = setup().await;
 
         // Entry at dim 1 is closest to query at dim 1.
@@ -341,7 +341,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_preserves_similarity_ordering_from_index() {
+    async fn search_preserves_distance_ordering_from_index() {
         let (repo, index) = setup().await;
 
         // Entries at dims 0, 1, 2. Query at dim 1 makes entry 1 (dim 1) closest.
@@ -355,7 +355,7 @@ mod tests {
 
         assert_eq!(results[0].journal_entry.text, "entry B");
         for window in results.windows(2) {
-            assert!(window[0].score <= window[1].score);
+            assert!(window[0].distance <= window[1].distance);
         }
     }
 
@@ -474,14 +474,14 @@ mod tests {
                     text: "felt nervous".to_string(),
                     received_at: Utc.with_ymd_and_hms(2026, 4, 29, 9, 12, 0).unwrap(),
                 },
-                score: 0.1,
+                distance: 0.1,
             },
             SemanticSearchResult {
                 journal_entry: JournalEntry {
                     text: "avoid calls".to_string(),
                     received_at: Utc.with_ymd_and_hms(2026, 4, 20, 18, 44, 0).unwrap(),
                 },
-                score: 0.2,
+                distance: 0.2,
             },
         ];
 
