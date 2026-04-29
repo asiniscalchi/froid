@@ -18,4 +18,6 @@ pub enum JournalCommand {
     RecentUsage,
     Today,
     Stats,
+    Search { query: String },
+    SearchUsage,
 }

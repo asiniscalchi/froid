@@ -1,19 +1,42 @@
+use std::sync::Arc;
+
 use crate::{
     handler::MessageHandler,
-    journal::command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
+    journal::{
+        command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
+        embedding::{EmbeddingIndex, Embedder},
+        search::{
+            SemanticSearchService, SemanticSearchError, SearchService,
+            format_search_results, search_empty_response, search_error_response,
+            search_usage_response,
+        },
+    },
     messages::{IncomingMessage, OutgoingMessage},
 };
 
 use super::repository::JournalRepository;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct JournalService {
     repository: JournalRepository,
+    search: Option<Arc<dyn SearchService>>,
 }
 
 impl JournalService {
     pub fn new(repository: JournalRepository) -> Self {
-        Self { repository }
+        Self {
+            repository,
+            search: None,
+        }
+    }
+
+    pub fn with_search<I, E>(mut self, search: SemanticSearchService<I, E>) -> Self
+    where
+        I: EmbeddingIndex + Send + Sync + 'static,
+        E: Embedder + Send + Sync + 'static,
+    {
+        self.search = Some(Arc::new(search));
+        self
     }
 
     pub async fn process(&self, message: &IncomingMessage) -> Result<OutgoingMessage, sqlx::Error> {
@@ -27,7 +50,7 @@ impl JournalService {
         &self,
         request: &JournalCommandRequest,
     ) -> Result<OutgoingMessage, sqlx::Error> {
-        match request.command {
+        match &request.command {
             JournalCommand::Start => Ok(OutgoingMessage {
                 text: start_response(),
             }),
@@ -35,7 +58,7 @@ impl JournalService {
                 text: help_response(),
             }),
             JournalCommand::Recent { requested_limit } => {
-                self.recent(&request.user_id, requested_limit).await
+                self.recent(&request.user_id, *requested_limit).await
             }
             JournalCommand::RecentUsage => Ok(OutgoingMessage {
                 text: recent_usage_response(),
@@ -48,6 +71,32 @@ impl JournalService {
                 self.stats(&request.user_id, request.received_at.date_naive())
                     .await
             }
+            JournalCommand::Search { query } => {
+                Ok(self.search_command(&request.user_id, query).await)
+            }
+            JournalCommand::SearchUsage => Ok(OutgoingMessage {
+                text: search_usage_response(),
+            }),
+        }
+    }
+
+    async fn search_command(&self, user_id: &str, query: &str) -> OutgoingMessage {
+        let Some(search) = &self.search else {
+            return OutgoingMessage {
+                text: "Search is not configured.".to_string(),
+            };
+        };
+
+        match search.search(user_id, query).await {
+            Ok(results) if results.is_empty() => OutgoingMessage {
+                text: search_empty_response(),
+            },
+            Ok(results) => OutgoingMessage {
+                text: format_search_results(query, &results),
+            },
+            Err(e) => OutgoingMessage {
+                text: search_error_response(&e),
+            },
         }
     }
 
@@ -112,7 +161,7 @@ fn start_response() -> String {
 }
 
 fn help_response() -> String {
-    "Commands:\n/recent [number] - show recent entries\n/today - show today's entries\n/stats - show journal stats\n/help - show commands".to_string()
+    "Commands:\n/recent [number] - show recent entries\n/today - show today's entries\n/stats - show journal stats\n/search <query> - search entries by meaning\n/help - show commands".to_string()
 }
 
 fn recent_usage_response() -> String {
@@ -155,8 +204,15 @@ mod tests {
     use super::*;
     use crate::{
         database,
-        journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
-        journal::repository::JournalRepository,
+        journal::{
+            command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
+            embedding::{
+                EmbedderError, Embedding, EmbeddingIndex, SUPPORTED_EMBEDDING_DIMENSIONS,
+                SqliteEmbeddingRepository,
+            },
+            repository::JournalRepository,
+            search::SemanticSearchService,
+        },
         messages::MessageSource,
     };
 
@@ -165,6 +221,60 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
         JournalService::new(JournalRepository::new(pool))
+    }
+
+    async fn setup_with_search(
+        embedder: FakeEmbedder,
+    ) -> (JournalService, SqliteEmbeddingRepository, JournalRepository) {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let repo = JournalRepository::new(pool.clone());
+        let index = SqliteEmbeddingRepository::new(pool.clone());
+        let search_repo = JournalRepository::new(pool.clone());
+        let search = SemanticSearchService::new(index.clone(), embedder, search_repo);
+        let service = JournalService::new(repo.clone()).with_search(search);
+        (service, index, repo)
+    }
+
+    const TEST_MODEL: &str = "test-model";
+
+    #[derive(Clone)]
+    struct FakeEmbedder {
+        result: Result<Embedding, EmbedderError>,
+    }
+
+    impl FakeEmbedder {
+        fn succeeds() -> Self {
+            Self {
+                result: Ok(Embedding::new(
+                    vec![1.0; SUPPORTED_EMBEDDING_DIMENSIONS],
+                    SUPPORTED_EMBEDDING_DIMENSIONS,
+                )
+                .unwrap()),
+            }
+        }
+
+        fn fails() -> Self {
+            Self {
+                result: Err(EmbedderError::Provider("provider down".to_string())),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Embedder for FakeEmbedder {
+        fn model(&self) -> &str {
+            TEST_MODEL
+        }
+
+        fn dimensions(&self) -> usize {
+            SUPPORTED_EMBEDDING_DIMENSIONS
+        }
+
+        async fn embed(&self, _text: &str) -> Result<Embedding, EmbedderError> {
+            self.result.clone()
+        }
     }
 
     fn incoming(
@@ -413,5 +523,106 @@ mod tests {
             outgoing.text,
             "Journal stats:\nTotal entries: 2\nEntries today: 1\nLatest entry: 2026-04-29 09:00"
         );
+    }
+
+    #[tokio::test]
+    async fn command_help_includes_search() {
+        let service = setup().await;
+
+        let outgoing = service.command(&command(JournalCommand::Help)).await.unwrap();
+
+        assert!(outgoing.text.contains("/search <query>"));
+    }
+
+    #[tokio::test]
+    async fn command_search_usage_returns_usage_message() {
+        let service = setup().await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::SearchUsage))
+            .await
+            .unwrap();
+
+        assert!(outgoing.text.contains("Usage: /search <query>"));
+    }
+
+    #[tokio::test]
+    async fn command_search_returns_not_configured_when_search_not_set_up() {
+        let service = setup().await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::Search {
+                query: "something".to_string(),
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(outgoing.text, "Search is not configured.");
+    }
+
+    #[tokio::test]
+    async fn command_search_returns_empty_when_no_embeddings_exist() {
+        let (service, _, repo) = setup_with_search(FakeEmbedder::succeeds()).await;
+
+        repo.store(&incoming("1", "some text", at(10, 0)))
+            .await
+            .unwrap();
+
+        let outgoing = service
+            .command(&command(JournalCommand::Search {
+                query: "query".to_string(),
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(outgoing.text, "No results found.");
+    }
+
+    #[tokio::test]
+    async fn command_search_returns_results_when_embeddings_exist() {
+        let (service, index, repo) = setup_with_search(FakeEmbedder::succeeds()).await;
+
+        repo.store(&incoming("1", "journal entry text", at(10, 0)))
+            .await
+            .unwrap();
+        let entry_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM journal_entries WHERE source_message_id = '1'",
+        )
+        .fetch_one(repo.pool())
+        .await
+        .unwrap();
+        index
+            .store_embedding(
+                entry_id,
+                TEST_MODEL,
+                SUPPORTED_EMBEDDING_DIMENSIONS,
+                &Embedding::new(vec![1.0; SUPPORTED_EMBEDDING_DIMENSIONS], SUPPORTED_EMBEDDING_DIMENSIONS).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let outgoing = service
+            .command(&command(JournalCommand::Search {
+                query: "query".to_string(),
+            }))
+            .await
+            .unwrap();
+
+        assert!(outgoing.text.contains("Search results for: query"));
+        assert!(outgoing.text.contains("journal entry text"));
+    }
+
+    #[tokio::test]
+    async fn command_search_returns_error_message_when_embedder_fails() {
+        let (service, _, _) = setup_with_search(FakeEmbedder::fails()).await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::Search {
+                query: "query".to_string(),
+            }))
+            .await
+            .unwrap();
+
+        assert!(outgoing.text.starts_with("Search failed:"));
     }
 }
