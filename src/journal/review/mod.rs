@@ -1,6 +1,3 @@
-#![allow(dead_code)]
-// This foundation module is intentionally not wired to commands or adapters yet.
-
 pub mod generator;
 pub mod repository;
 pub mod service;
