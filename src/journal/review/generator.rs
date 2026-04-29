@@ -22,6 +22,8 @@ Rules:
 - Identify notable patterns or tensions from today only.
 - Suggest one or two practical points of attention for tomorrow.
 - Keep the review concise, readable, and grounded.
+- Match the main language used in the journal entries.
+- If there are too few entries to identify meaningful themes, say so briefly.
 - Avoid clinical diagnosis or therapy-style overreach.
 - Do not include a top-level "Today's review" heading; the application adds it."#;
 
@@ -488,6 +490,8 @@ mod tests {
 
         assert!(DAILY_REVIEW_PREAMBLE.contains("Use only the journal entries"));
         assert!(DAILY_REVIEW_PREAMBLE.contains("Do not refer to past days"));
+        assert!(DAILY_REVIEW_PREAMBLE.contains("Match the main language"));
+        assert!(DAILY_REVIEW_PREAMBLE.contains("too few entries"));
         assert!(DAILY_REVIEW_PREAMBLE.contains("Avoid clinical diagnosis"));
         assert!(prompt.contains("Summary:"));
         assert!(prompt.contains("Themes:"));
