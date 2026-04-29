@@ -9,9 +9,9 @@ pub use backfill::{BackfillResult, EmbeddingBackfillError, EmbeddingBackfillServ
 pub use config::EmbeddingConfig;
 pub use provider::RigOpenAiEmbedder;
 pub use repository::{EmbeddingIndex, EmbeddingRepositoryError, SqliteEmbeddingRepository};
-#[cfg(test)]
-pub(crate) use repository::{EmbeddingSearchResult, JournalEntryEmbeddingCandidate};
-pub use types::{Embedder, EmbedderError, Embedding};
+pub use types::{
+    Embedder, EmbedderError, Embedding, EmbeddingSearchResult, JournalEntryEmbeddingCandidate,
+};
 pub use worker_config::EmbeddingWorkerConfig;
 
 pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
@@ -23,7 +23,6 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use sqlx::SqlitePool;
 
-    use super::repository::{EmbeddingSearchResult, JournalEntryEmbeddingCandidate};
     use super::*;
     use crate::{
         database,

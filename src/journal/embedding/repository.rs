@@ -3,19 +3,7 @@ use std::{error::Error, fmt, mem::size_of_val};
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
 
-use super::Embedding;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JournalEntryEmbeddingCandidate {
-    pub journal_entry_id: i64,
-    pub raw_text: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct EmbeddingSearchResult {
-    pub journal_entry_id: i64,
-    pub distance: f32,
-}
+use super::{Embedding, EmbeddingSearchResult, JournalEntryEmbeddingCandidate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbeddingRepositoryError {
