@@ -4,6 +4,8 @@ pub mod service;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
+pub use generator::{ReviewConfig, RigOpenAiReviewGenerator};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyReview {
     pub id: i64,
