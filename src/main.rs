@@ -33,6 +33,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
     match cli.selected_command() {
         Command::Serve => {
             let config = cli.serve_config()?;
+            info!(
+                version = version::VERSION,
+                command = "serve",
+                adapter = "telegram",
+                database_path = %config.database_path,
+                "starting service"
+            );
 
             let pool = database::connect_pool(&config.database_url).await?;
 
