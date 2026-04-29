@@ -1,5 +1,9 @@
 use super::entry::{JournalEntry, JournalStats};
 use super::review::DailyReview;
+use super::status::{
+    DailyReviewDeliveryStatus, DailyReviewGenerationStatus, DailyReviewStatus, EmbeddingStatus,
+    SemanticSearchStatus, StatusReport,
+};
 
 pub(super) fn message_saved_response() -> String {
     "Message saved.".to_string()
@@ -13,7 +17,7 @@ pub(super) fn start_response() -> String {
 }
 
 pub(super) fn help_response() -> String {
-    "Commands:\n/recent [number] - show recent entries\n/today - show today's entries\n/review today - generate today's review\n/stats - show journal stats\n/search <query> - search entries by meaning\n/help - show commands".to_string()
+    "Commands:\n/recent [number] - show recent entries\n/today - show today's entries\n/review today - generate today's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
 }
 
 pub(super) fn recent_usage_response() -> String {
@@ -57,6 +61,60 @@ pub(super) fn stats_response(stats: &JournalStats) -> String {
         "Journal stats:\nTotal entries: {}\nEntries today: {}\nLatest entry: {}",
         stats.total_entries, stats.entries_today, latest
     )
+}
+
+pub(super) fn status_response(report: &StatusReport) -> String {
+    format!(
+        "Froid status\n\nJournal:\n- Total entries: {}\n- Entries today UTC: {}\n\nEmbeddings:\n{}\n\nDaily review:\n{}",
+        report.journal.total_entries,
+        report.journal.entries_today,
+        format_embedding_status(&report.embeddings),
+        format_daily_review_status(&report.daily_review)
+    )
+}
+
+fn format_embedding_status(status: &EmbeddingStatus) -> String {
+    let semantic_search = match status.semantic_search {
+        SemanticSearchStatus::Enabled => "enabled",
+        SemanticSearchStatus::Unavailable => "unavailable",
+    };
+    let model = status
+        .config
+        .as_ref()
+        .map(|config| config.model.as_str())
+        .unwrap_or("unavailable");
+    let dimensions = status
+        .config
+        .as_ref()
+        .map(|config| config.dimensions.to_string())
+        .unwrap_or_else(|| "unavailable".to_string());
+    let pending_embeddings = status
+        .pending_embeddings
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "unavailable".to_string());
+
+    format!(
+        "- Semantic search: {semantic_search}\n- Model: {model}\n- Dimensions: {dimensions}\n- Pending embeddings: {pending_embeddings}"
+    )
+}
+
+fn format_daily_review_status(status: &DailyReviewStatus) -> String {
+    let generation = match status.generation {
+        DailyReviewGenerationStatus::Configured => "configured",
+        DailyReviewGenerationStatus::NotConfigured => "not configured",
+    };
+    let delivery = match status.delivery {
+        DailyReviewDeliveryStatus::NotImplemented => "not implemented",
+    };
+
+    let mut lines = vec![format!("- Generation: {generation}")];
+    if let Some(prompt_version) = &status.prompt_version {
+        lines.push(format!("- Prompt: {prompt_version}"));
+    }
+    lines.push(format!("- Delivery: {delivery}"));
+    lines.push("- Date mode: UTC".to_string());
+
+    lines.join("\n")
 }
 
 pub(super) fn format_entries(entries: &[JournalEntry]) -> String {

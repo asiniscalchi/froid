@@ -51,6 +51,15 @@ pub trait EmbeddingIndex: Send + Sync {
     ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError>;
 }
 
+#[async_trait]
+pub trait PendingEmbeddingCounter: Send + Sync {
+    async fn count_entries_missing_embedding_for_user(
+        &self,
+        user_id: &str,
+        embedding_model: &str,
+    ) -> Result<i64, EmbeddingRepositoryError>;
+}
+
 #[derive(Debug, Clone)]
 pub struct SqliteEmbeddingRepository {
     pub(crate) pool: SqlitePool,
@@ -175,6 +184,28 @@ impl SqliteEmbeddingRepository {
             "#,
         )
         .bind(embedding_model)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn count_entries_missing_embedding_for_user(
+        &self,
+        user_id: &str,
+        embedding_model: &str,
+    ) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM journal_entries
+            LEFT JOIN journal_entry_embedding_metadata
+              ON journal_entry_embedding_metadata.journal_entry_id = journal_entries.id
+             AND journal_entry_embedding_metadata.embedding_model = ?
+            WHERE journal_entries.user_id = ?
+              AND journal_entry_embedding_metadata.id IS NULL
+            "#,
+        )
+        .bind(embedding_model)
+        .bind(user_id)
         .fetch_one(&self.pool)
         .await
     }
@@ -333,6 +364,23 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
         SqliteEmbeddingRepository::search_for_user(self, user_id, embedding, embedding_model, limit)
             .await
             .map_err(Into::into)
+    }
+}
+
+#[async_trait]
+impl PendingEmbeddingCounter for SqliteEmbeddingRepository {
+    async fn count_entries_missing_embedding_for_user(
+        &self,
+        user_id: &str,
+        embedding_model: &str,
+    ) -> Result<i64, EmbeddingRepositoryError> {
+        SqliteEmbeddingRepository::count_entries_missing_embedding_for_user(
+            self,
+            user_id,
+            embedding_model,
+        )
+        .await
+        .map_err(Into::into)
     }
 }
 

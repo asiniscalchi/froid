@@ -8,7 +8,9 @@ mod worker_config;
 pub use backfill::{BackfillResult, EmbeddingBackfillError, EmbeddingBackfillService};
 pub use config::EmbeddingConfig;
 pub use provider::RigOpenAiEmbedder;
-pub use repository::{EmbeddingIndex, EmbeddingRepositoryError, SqliteEmbeddingRepository};
+pub use repository::{
+    EmbeddingIndex, EmbeddingRepositoryError, PendingEmbeddingCounter, SqliteEmbeddingRepository,
+};
 pub use types::{
     Embedder, EmbedderError, Embedding, EmbeddingSearchResult, JournalEntryEmbeddingCandidate,
 };
