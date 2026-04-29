@@ -1,9 +1,16 @@
 use std::{error::Error, fmt, mem::size_of_val};
 
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
 use super::{Embedding, EmbeddingSearchResult, JournalEntryEmbeddingCandidate};
+
+fn map_search_result(row: SqliteRow) -> EmbeddingSearchResult {
+    EmbeddingSearchResult {
+        journal_entry_id: row.get("journal_entry_id"),
+        distance: row.get("distance"),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbeddingRepositoryError {
@@ -235,13 +242,7 @@ impl SqliteEmbeddingRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows
-            .into_iter()
-            .map(|row| EmbeddingSearchResult {
-                journal_entry_id: row.get("journal_entry_id"),
-                distance: row.get("distance"),
-            })
-            .collect())
+        Ok(rows.into_iter().map(map_search_result).collect())
     }
 
     pub async fn search_for_user(
@@ -272,13 +273,7 @@ impl SqliteEmbeddingRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows
-            .into_iter()
-            .map(|row| EmbeddingSearchResult {
-                journal_entry_id: row.get("journal_entry_id"),
-                distance: row.get("distance"),
-            })
-            .collect())
+        Ok(rows.into_iter().map(map_search_result).collect())
     }
 
     #[cfg(test)]

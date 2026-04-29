@@ -1,9 +1,16 @@
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
 use crate::messages::IncomingMessage;
 
 use super::entry::{JournalEntry, JournalStats};
+
+fn map_entry(row: SqliteRow) -> JournalEntry {
+    JournalEntry {
+        text: row.get("raw_text"),
+        received_at: row.get("received_at"),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct JournalRepository {
@@ -69,15 +76,7 @@ impl JournalRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        let entries = rows
-            .into_iter()
-            .map(|row| JournalEntry {
-                text: row.get("raw_text"),
-                received_at: row.get("received_at"),
-            })
-            .collect();
-
-        Ok(entries)
+        Ok(rows.into_iter().map(map_entry).collect())
     }
 
     pub async fn fetch_today(
@@ -104,15 +103,7 @@ impl JournalRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        let entries = rows
-            .into_iter()
-            .map(|row| JournalEntry {
-                text: row.get("raw_text"),
-                received_at: row.get("received_at"),
-            })
-            .collect();
-
-        Ok(entries)
+        Ok(rows.into_iter().map(map_entry).collect())
     }
 
     pub async fn fetch_by_ids(
@@ -137,13 +128,8 @@ impl JournalRepository {
         Ok(rows
             .into_iter()
             .map(|row| {
-                (
-                    row.get("id"),
-                    JournalEntry {
-                        text: row.get("raw_text"),
-                        received_at: row.get("received_at"),
-                    },
-                )
+                let id = row.get("id");
+                (id, map_entry(row))
             })
             .collect())
     }
