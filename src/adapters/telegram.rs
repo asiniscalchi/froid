@@ -4,12 +4,12 @@ use tracing::{error, info};
 
 use crate::{
     handler::MessageHandler,
+    journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
     messages::{IncomingMessage, MessageSource},
 };
 
 use super::Adapter;
 
-const DEFAULT_RECENT_LIMIT: u32 = 10;
 const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Unsupported message type";
 
 pub struct TelegramAdapter<H: MessageHandler> {
@@ -54,16 +54,21 @@ async fn handle_message<H: MessageHandler>(
         .map(|u| u.id.to_string())
         .unwrap_or_else(|| message.chat.id.to_string());
 
-    if let Some(limit) = parse_recent_command(text) {
-        info!(user_id = %user_id, limit, "received /recent command");
+    if let Some(command) = parse_command(text) {
+        let request = JournalCommandRequest {
+            user_id: user_id.clone(),
+            received_at: Utc::now(),
+            command,
+        };
 
-        match handler.recent(&user_id, limit).await {
-            Ok(Some(outgoing)) => {
+        info!(user_id = %user_id, "received Telegram command");
+
+        match handler.command(&request).await {
+            Ok(outgoing) => {
                 bot.send_message(message.chat.id, outgoing.text).await?;
             }
-            Ok(None) => {}
             Err(err) => {
-                error!(%err, "failed to fetch recent entries");
+                error!(%err, "failed to process journal command");
             }
         }
 
@@ -103,19 +108,36 @@ fn incoming_from_text_message(message: &Message, user_id: String) -> IncomingMes
     }
 }
 
-fn parse_recent_command(text: &str) -> Option<u32> {
+fn parse_command(text: &str) -> Option<JournalCommand> {
     let mut parts = text.trim().splitn(2, char::is_whitespace);
     let command = parts.next()?;
     // strip optional @botname suffix
     let command = command.split('@').next()?;
-    if command != "/recent" {
-        return None;
+    let argument = parts.next().map(str::trim).filter(|s| !s.is_empty());
+
+    match command {
+        "/start" => Some(JournalCommand::Start),
+        "/help" => Some(JournalCommand::Help),
+        "/recent" => parse_recent_argument(argument),
+        "/today" => Some(JournalCommand::Today),
+        "/stats" => Some(JournalCommand::Stats),
+        _ => None,
     }
-    let limit = parts
-        .next()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .unwrap_or(DEFAULT_RECENT_LIMIT);
-    Some(limit)
+}
+
+fn parse_recent_argument(argument: Option<&str>) -> Option<JournalCommand> {
+    let Some(argument) = argument else {
+        return Some(JournalCommand::Recent {
+            requested_limit: DEFAULT_RECENT_LIMIT,
+        });
+    };
+
+    match argument.parse::<u32>() {
+        Ok(limit) if limit > 0 => Some(JournalCommand::Recent {
+            requested_limit: limit,
+        }),
+        _ => Some(JournalCommand::RecentUsage),
+    }
 }
 
 #[cfg(test)]
@@ -154,28 +176,77 @@ mod tests {
     }
 
     #[test]
+    fn parse_start_command() {
+        assert_eq!(parse_command("/start"), Some(JournalCommand::Start));
+    }
+
+    #[test]
+    fn parse_help_command() {
+        assert_eq!(parse_command("/help"), Some(JournalCommand::Help));
+    }
+
+    #[test]
     fn parse_recent_command_with_no_argument_uses_default_limit() {
-        assert_eq!(parse_recent_command("/recent"), Some(DEFAULT_RECENT_LIMIT));
+        assert_eq!(
+            parse_command("/recent"),
+            Some(JournalCommand::Recent {
+                requested_limit: DEFAULT_RECENT_LIMIT
+            })
+        );
     }
 
     #[test]
     fn parse_recent_command_with_explicit_limit() {
-        assert_eq!(parse_recent_command("/recent 5"), Some(5));
+        assert_eq!(
+            parse_command("/recent 5"),
+            Some(JournalCommand::Recent { requested_limit: 5 })
+        );
     }
 
     #[test]
     fn parse_recent_command_strips_bot_name_suffix() {
         assert_eq!(
-            parse_recent_command("/recent@mybot"),
-            Some(DEFAULT_RECENT_LIMIT)
+            parse_command("/recent@mybot"),
+            Some(JournalCommand::Recent {
+                requested_limit: DEFAULT_RECENT_LIMIT
+            })
         );
-        assert_eq!(parse_recent_command("/recent@mybot 3"), Some(3));
+        assert_eq!(
+            parse_command("/recent@mybot 3"),
+            Some(JournalCommand::Recent { requested_limit: 3 })
+        );
+    }
+
+    #[test]
+    fn parse_recent_command_returns_usage_for_invalid_argument() {
+        assert_eq!(
+            parse_command("/recent abc"),
+            Some(JournalCommand::RecentUsage)
+        );
+        assert_eq!(
+            parse_command("/recent 0"),
+            Some(JournalCommand::RecentUsage)
+        );
+        assert_eq!(
+            parse_command("/recent -3"),
+            Some(JournalCommand::RecentUsage)
+        );
+    }
+
+    #[test]
+    fn parse_today_command() {
+        assert_eq!(parse_command("/today"), Some(JournalCommand::Today));
+    }
+
+    #[test]
+    fn parse_stats_command() {
+        assert_eq!(parse_command("/stats"), Some(JournalCommand::Stats));
     }
 
     #[test]
     fn parse_recent_command_returns_none_for_non_command() {
-        assert_eq!(parse_recent_command("hello"), None);
-        assert_eq!(parse_recent_command("/other"), None);
+        assert_eq!(parse_command("hello"), None);
+        assert_eq!(parse_command("/other"), None);
     }
 
     fn telegram_message(value: serde_json::Value) -> Message {

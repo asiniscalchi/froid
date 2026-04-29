@@ -1,6 +1,9 @@
 use std::{error::Error, future::Future};
 
-use crate::messages::{IncomingMessage, OutgoingMessage};
+use crate::{
+    journal::command::JournalCommandRequest,
+    messages::{IncomingMessage, OutgoingMessage},
+};
 
 pub trait MessageHandler: Clone + Send + Sync + 'static {
     fn process(
@@ -8,9 +11,8 @@ pub trait MessageHandler: Clone + Send + Sync + 'static {
         message: &IncomingMessage,
     ) -> impl Future<Output = Result<OutgoingMessage, Box<dyn Error + Send + Sync>>> + Send;
 
-    fn recent(
+    fn command(
         &self,
-        user_id: &str,
-        limit: u32,
-    ) -> impl Future<Output = Result<Option<OutgoingMessage>, Box<dyn Error + Send + Sync>>> + Send;
+        request: &JournalCommandRequest,
+    ) -> impl Future<Output = Result<OutgoingMessage, Box<dyn Error + Send + Sync>>> + Send;
 }
