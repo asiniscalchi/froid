@@ -10,6 +10,10 @@ use froid::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
         },
         repository::JournalRepository,
+        review::{
+            RigOpenAiReviewGenerator, repository::DailyReviewRepository,
+            service::DailyReviewService,
+        },
         search::SemanticSearchService,
         service::JournalService,
     },
@@ -17,7 +21,7 @@ use froid::{
     workers::embedding::EmbeddingReconciliationWorker,
 };
 use sqlx::SqlitePool;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
@@ -88,6 +92,17 @@ fn build_journal_service(
     embedding_config: Option<EmbeddingConfig>,
 ) -> JournalService {
     let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
+
+    if let Ok(review_generator) = RigOpenAiReviewGenerator::from_env() {
+        let daily_review_service = DailyReviewService::new(
+            DailyReviewRepository::new(pool.clone()),
+            JournalRepository::new(pool.clone()),
+            review_generator,
+        );
+        journal_service = journal_service.with_daily_review_runner(daily_review_service);
+    } else {
+        warn!("daily review generation is not configured");
+    }
 
     if let Some(cfg) = embedding_config
         && let Ok(search_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
