@@ -5,6 +5,10 @@ use crate::{
     journal::{
         command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
         embedding::{Embedder, EmbeddingIndex},
+        responses::{
+            format_entries, help_response, message_saved_response, no_entries_response,
+            no_entries_today_response, recent_usage_response, start_response, stats_response,
+        },
         search::{
             SearchService, SemanticSearchService, format_search_results, search_empty_response,
             search_error_response, search_usage_response,
@@ -41,7 +45,7 @@ impl JournalService {
     pub async fn process(&self, message: &IncomingMessage) -> Result<OutgoingMessage, sqlx::Error> {
         self.repository.store(message).await?;
         Ok(OutgoingMessage {
-            text: "Message saved.".to_string(),
+            text: message_saved_response(),
         })
     }
 
@@ -105,7 +109,7 @@ impl JournalService {
 
         if entries.is_empty() {
             return Ok(OutgoingMessage {
-                text: "No journal entries found.".to_string(),
+                text: no_entries_response(),
             });
         }
 
@@ -123,7 +127,7 @@ impl JournalService {
 
         if entries.is_empty() {
             return Ok(OutgoingMessage {
-                text: "No journal entries found for today.".to_string(),
+                text: no_entries_today_response(),
             });
         }
 
@@ -138,41 +142,11 @@ impl JournalService {
         today: chrono::NaiveDate,
     ) -> Result<OutgoingMessage, sqlx::Error> {
         let stats = self.repository.stats(user_id, today).await?;
-        let latest = stats
-            .latest_received_at
-            .map(|timestamp| timestamp.format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_else(|| "none".to_string());
 
         Ok(OutgoingMessage {
-            text: format!(
-                "Journal stats:\nTotal entries: {}\nEntries today: {}\nLatest entry: {}",
-                stats.total_entries, stats.entries_today, latest
-            ),
+            text: stats_response(&stats),
         })
     }
-}
-
-fn start_response() -> String {
-    format!(
-        "Froid is running.\n\nSend me any text message and I will store it as a journal entry.\n\n{}",
-        help_response()
-    )
-}
-
-fn help_response() -> String {
-    "Commands:\n/recent [number] - show recent entries\n/today - show today's entries\n/stats - show journal stats\n/search <query> - search entries by meaning\n/help - show commands".to_string()
-}
-
-fn recent_usage_response() -> String {
-    "Usage: /recent [number]\n\nExamples:\n/recent\n/recent 5".to_string()
-}
-
-fn format_entries(entries: &[super::entry::JournalEntry]) -> String {
-    entries
-        .iter()
-        .map(|e| format!("{} - {}", e.received_at.format("%Y-%m-%d %H:%M"), e.text))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 impl MessageHandler for JournalService {
