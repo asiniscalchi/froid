@@ -56,31 +56,26 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
             let embedding_config = EmbeddingConfig::from_env().ok();
 
-            if config.embedding_worker.enabled {
-                if let Some(ref cfg) = embedding_config {
-                    let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
-                    let index = SqliteEmbeddingRepository::new(pool.clone());
-                    let backfill_service = EmbeddingBackfillService::new(index, embedder);
-                    let worker = EmbeddingReconciliationWorker::new(
-                        backfill_service,
-                        config.embedding_worker,
-                    );
-                    tokio::spawn(async move { worker.run_forever().await });
-                }
+            if config.embedding_worker.enabled
+                && let Some(ref cfg) = embedding_config
+            {
+                let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
+                let index = SqliteEmbeddingRepository::new(pool.clone());
+                let backfill_service = EmbeddingBackfillService::new(index, embedder);
+                let worker =
+                    EmbeddingReconciliationWorker::new(backfill_service, config.embedding_worker);
+                tokio::spawn(async move { worker.run_forever().await });
             }
 
             let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
 
-            if let Some(cfg) = embedding_config {
-                if let Ok(embedder) = RigOpenAiEmbedder::from_env(cfg) {
-                    let index = SqliteEmbeddingRepository::new(pool.clone());
-                    let search = SemanticSearchService::new(
-                        index,
-                        embedder,
-                        JournalRepository::new(pool),
-                    );
-                    journal_service = journal_service.with_search(search);
-                }
+            if let Some(cfg) = embedding_config
+                && let Ok(embedder) = RigOpenAiEmbedder::from_env(cfg)
+            {
+                let index = SqliteEmbeddingRepository::new(pool.clone());
+                let search =
+                    SemanticSearchService::new(index, embedder, JournalRepository::new(pool));
+                journal_service = journal_service.with_search(search);
             }
 
             TelegramAdapter::new(config.telegram_bot_token, journal_service)

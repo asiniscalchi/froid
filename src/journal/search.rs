@@ -1,10 +1,9 @@
 use std::{collections::HashMap, error::Error, fmt};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 
 use super::{
-    embedding::{EmbedderError, EmbeddingIndex, EmbeddingRepositoryError, Embedder},
+    embedding::{Embedder, EmbedderError, EmbeddingIndex, EmbeddingRepositoryError},
     entry::JournalEntry,
     repository::JournalRepository,
 };
@@ -109,10 +108,12 @@ where
         let results = index_results
             .into_iter()
             .filter_map(|r| {
-                entry_map.get(&r.journal_entry_id).map(|entry| SemanticSearchResult {
-                    journal_entry: entry.clone(),
-                    score: r.score,
-                })
+                entry_map
+                    .get(&r.journal_entry_id)
+                    .map(|entry| SemanticSearchResult {
+                        journal_entry: entry.clone(),
+                        score: r.score,
+                    })
             })
             .take(DEFAULT_SEARCH_LIMIT)
             .collect();
@@ -153,7 +154,7 @@ pub fn search_error_response(error: &SemanticSearchError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
+    use chrono::{DateTime, TimeZone, Utc};
     use sqlx::SqlitePool;
 
     use super::*;
@@ -216,7 +217,12 @@ mod tests {
 
         let embedding = directional_embedding(dim);
         index
-            .store_embedding(entry_id, TEST_MODEL, SUPPORTED_EMBEDDING_DIMENSIONS, &embedding)
+            .store_embedding(
+                entry_id,
+                TEST_MODEL,
+                SUPPORTED_EMBEDDING_DIMENSIONS,
+                &embedding,
+            )
             .await
             .unwrap();
 
@@ -282,14 +288,11 @@ mod tests {
 
         // Entry at dim 1 is closest to query at dim 1.
         let _ = store_and_embed(&repo, &index, "1", "irrelevant entry", at(10, 0), 0).await;
-        let closest = store_and_embed(&repo, &index, "2", "most relevant entry", at(11, 0), 1).await;
+        let closest =
+            store_and_embed(&repo, &index, "2", "most relevant entry", at(11, 0), 1).await;
         let _ = store_and_embed(&repo, &index, "3", "another irrelevant", at(12, 0), 2).await;
 
-        let service = make_service(
-            index,
-            FakeEmbedder::succeeds(TEST_MODEL, 1),
-            repo,
-        );
+        let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
 
         let results = service.search("7", "query").await.unwrap();
 
@@ -301,7 +304,9 @@ mod tests {
     #[tokio::test]
     async fn search_returns_empty_when_no_embeddings_exist() {
         let (repo, index) = setup().await;
-        repo.store(&incoming("1", "some text", at(10, 0))).await.unwrap();
+        repo.store(&incoming("1", "some text", at(10, 0)))
+            .await
+            .unwrap();
 
         let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
 
@@ -329,11 +334,7 @@ mod tests {
         store_and_embed(&repo, &index, "1", "some text", at(10, 0), 0).await;
 
         // Query with a model that has no stored embeddings.
-        let service = make_service(
-            index,
-            FakeEmbedder::succeeds("other-model", 0),
-            repo,
-        );
+        let service = make_service(index, FakeEmbedder::succeeds("other-model", 0), repo);
 
         let results = service.search("7", "query").await.unwrap();
 
@@ -349,11 +350,7 @@ mod tests {
         store_and_embed(&repo, &index, "2", "entry B", at(11, 0), 1).await;
         store_and_embed(&repo, &index, "3", "entry C", at(12, 0), 0).await;
 
-        let service = make_service(
-            index,
-            FakeEmbedder::succeeds(TEST_MODEL, 1),
-            repo,
-        );
+        let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
 
         let results = service.search("7", "query").await.unwrap();
 
@@ -387,7 +384,12 @@ mod tests {
         .await
         .unwrap();
         index
-            .store_embedding(other_id, TEST_MODEL, SUPPORTED_EMBEDDING_DIMENSIONS, &directional_embedding(1))
+            .store_embedding(
+                other_id,
+                TEST_MODEL,
+                SUPPORTED_EMBEDDING_DIMENSIONS,
+                &directional_embedding(1),
+            )
             .await
             .unwrap();
 

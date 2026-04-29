@@ -4,11 +4,10 @@ use crate::{
     handler::MessageHandler,
     journal::{
         command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
-        embedding::{EmbeddingIndex, Embedder},
+        embedding::{Embedder, EmbeddingIndex},
         search::{
-            SemanticSearchService, SemanticSearchError, SearchService,
-            format_search_results, search_empty_response, search_error_response,
-            search_usage_response,
+            SearchService, SemanticSearchService, format_search_results, search_empty_response,
+            search_error_response, search_usage_response,
         },
     },
     messages::{IncomingMessage, OutgoingMessage},
@@ -529,7 +528,10 @@ mod tests {
     async fn command_help_includes_search() {
         let service = setup().await;
 
-        let outgoing = service.command(&command(JournalCommand::Help)).await.unwrap();
+        let outgoing = service
+            .command(&command(JournalCommand::Help))
+            .await
+            .unwrap();
 
         assert!(outgoing.text.contains("/search <query>"));
     }
@@ -585,18 +587,21 @@ mod tests {
         repo.store(&incoming("1", "journal entry text", at(10, 0)))
             .await
             .unwrap();
-        let entry_id: i64 = sqlx::query_scalar(
-            "SELECT id FROM journal_entries WHERE source_message_id = '1'",
-        )
-        .fetch_one(repo.pool())
-        .await
-        .unwrap();
+        let entry_id: i64 =
+            sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '1'")
+                .fetch_one(repo.pool())
+                .await
+                .unwrap();
         index
             .store_embedding(
                 entry_id,
                 TEST_MODEL,
                 SUPPORTED_EMBEDDING_DIMENSIONS,
-                &Embedding::new(vec![1.0; SUPPORTED_EMBEDDING_DIMENSIONS], SUPPORTED_EMBEDDING_DIMENSIONS).unwrap(),
+                &Embedding::new(
+                    vec![1.0; SUPPORTED_EMBEDDING_DIMENSIONS],
+                    SUPPORTED_EMBEDDING_DIMENSIONS,
+                )
+                .unwrap(),
             )
             .await
             .unwrap();

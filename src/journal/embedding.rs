@@ -1524,15 +1524,30 @@ mod tests {
         // Give each entry a unique direction so cosine distances are meaningfully distinct.
         // query points along dim 1, so second (also dim 1) is the closest match.
         embedding_repository
-            .store_embedding(first, TEST_EMBEDDING_MODEL, TEST_EMBEDDING_DIMENSIONS, &directional_embedding(0, 1.0))
+            .store_embedding(
+                first,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(0, 1.0),
+            )
             .await
             .unwrap();
         embedding_repository
-            .store_embedding(second, TEST_EMBEDDING_MODEL, TEST_EMBEDDING_DIMENSIONS, &directional_embedding(1, 1.0))
+            .store_embedding(
+                second,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(1, 1.0),
+            )
             .await
             .unwrap();
         embedding_repository
-            .store_embedding(third, TEST_EMBEDDING_MODEL, TEST_EMBEDDING_DIMENSIONS, &directional_embedding(2, 1.0))
+            .store_embedding(
+                third,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(2, 1.0),
+            )
             .await
             .unwrap();
 
@@ -1557,7 +1572,12 @@ mod tests {
 
         for (id, dim) in [(first, 0), (second, 1), (third, 2)] {
             embedding_repository
-                .store_embedding(id, TEST_EMBEDDING_MODEL, TEST_EMBEDDING_DIMENSIONS, &directional_embedding(dim, 1.0))
+                .store_embedding(
+                    id,
+                    TEST_EMBEDDING_MODEL,
+                    TEST_EMBEDDING_DIMENSIONS,
+                    &directional_embedding(dim, 1.0),
+                )
                 .await
                 .unwrap();
         }

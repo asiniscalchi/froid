@@ -360,9 +360,15 @@ mod tests {
     async fn fetch_by_ids_returns_entries_matching_ids() {
         let repo = setup().await;
 
-        repo.store(&incoming("1", "first", at(10, 0))).await.unwrap();
-        repo.store(&incoming("2", "second", at(11, 0))).await.unwrap();
-        repo.store(&incoming("3", "third", at(12, 0))).await.unwrap();
+        repo.store(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second", at(11, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "third", at(12, 0)))
+            .await
+            .unwrap();
 
         let first_id = stored_id(&repo, "1").await;
         let third_id = stored_id(&repo, "3").await;
