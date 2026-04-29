@@ -15,6 +15,10 @@ impl JournalRepository {
         Self { pool }
     }
 
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     pub async fn store(&self, message: &IncomingMessage) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
@@ -142,9 +146,11 @@ mod tests {
     use sqlx::SqlitePool;
 
     use super::*;
+    use crate::database;
     use crate::messages::MessageSource;
 
     async fn setup() -> JournalRepository {
+        database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
         JournalRepository::new(pool)

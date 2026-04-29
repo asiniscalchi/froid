@@ -1,9 +1,20 @@
+use sqlite_vec::sqlite3_vec_init;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 
+pub fn register_sqlite_vec_extension() {
+    unsafe {
+        libsqlite3_sys::sqlite3_auto_extension(Some(std::mem::transmute(
+            sqlite3_vec_init as *const (),
+        )));
+    }
+}
+
 pub async fn connect_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
+    register_sqlite_vec_extension();
+
     let options = sqlite_connect_options(database_url)?;
 
     SqlitePoolOptions::new().connect_with(options).await
