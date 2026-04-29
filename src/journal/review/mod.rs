@@ -1,4 +1,9 @@
+#![allow(dead_code)]
+// This foundation module is intentionally not wired to commands or adapters yet.
+
+pub mod generator;
 pub mod repository;
+pub mod service;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
@@ -20,4 +25,21 @@ pub struct DailyReview {
 pub enum DailyReviewStatus {
     Completed,
     Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DailyReviewResult {
+    Existing(DailyReview),
+    Generated(DailyReview),
+    EmptyDay,
+    GenerationFailed(DailyReviewFailure),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DailyReviewFailure {
+    pub user_id: String,
+    pub review_date: NaiveDate,
+    pub model: String,
+    pub prompt_version: String,
+    pub error_message: String,
 }

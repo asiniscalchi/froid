@@ -98,7 +98,9 @@ impl DailyReviewRepository {
 
         self.find_by_user_and_date(user_id, review_date)
             .await?
-            .ok_or_else(|| DailyReviewRepositoryError::Storage("daily review was not stored".into()))
+            .ok_or_else(|| {
+                DailyReviewRepositoryError::Storage("daily review was not stored".into())
+            })
     }
 
     pub async fn upsert_failed(
@@ -134,7 +136,9 @@ impl DailyReviewRepository {
 
         self.find_by_user_and_date(user_id, review_date)
             .await?
-            .ok_or_else(|| DailyReviewRepositoryError::Storage("daily review was not stored".into()))
+            .ok_or_else(|| {
+                DailyReviewRepositoryError::Storage("daily review was not stored".into())
+            })
     }
 }
 
