@@ -206,8 +206,7 @@ mod tests {
         journal::{
             command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
             embedding::{
-                EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS,
-                SqliteEmbeddingRepository,
+                EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
             },
             repository::JournalRepository,
             search::SemanticSearchService,

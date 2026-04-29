@@ -162,8 +162,7 @@ mod tests {
         database,
         journal::{
             embedding::{
-                EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS,
-                SqliteEmbeddingRepository,
+                EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
             },
             repository::JournalRepository,
         },
