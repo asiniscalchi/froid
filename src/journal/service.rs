@@ -7,12 +7,15 @@ use crate::{
     handler::MessageHandler,
     journal::{
         command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
-        embedding::{Embedder, EmbedderError, Embedding, EmbeddingIndex, EmbeddingRepositoryError},
+        embedding::{
+            Embedder, EmbedderError, Embedding, EmbeddingIndex, EmbeddingRepositoryError,
+            PendingEmbeddingCounter,
+        },
         responses::{
             daily_review_failure_response, daily_review_unavailable_response,
             daily_review_usage_response, format_daily_review, format_entries, help_response,
             message_saved_response, no_entries_response, no_entries_today_response,
-            recent_usage_response, start_response, stats_response,
+            recent_usage_response, start_response, stats_response, status_response,
         },
         review::{
             DailyReviewResult,
@@ -21,6 +24,11 @@ use crate::{
         search::{
             SearchService, SemanticSearchService, format_search_results, search_empty_response,
             search_error_response, search_usage_response,
+        },
+        status::{
+            DailyReviewDateMode, DailyReviewDeliveryStatus, DailyReviewGenerationStatus,
+            DailyReviewStatus, EmbeddingStatus, EmbeddingStatusConfig, SemanticSearchStatus,
+            StatusReport,
         },
     },
     messages::{IncomingMessage, OutgoingMessage},
@@ -34,6 +42,9 @@ pub struct JournalService {
     search: Option<Arc<dyn SearchService>>,
     capture_embedding: Option<Arc<dyn CaptureEmbeddingService>>,
     daily_review: Option<Arc<dyn DailyReviewRunner>>,
+    embedding_status_config: Option<EmbeddingStatusConfig>,
+    pending_embedding_counter: Option<Arc<dyn PendingEmbeddingCounter>>,
+    daily_review_prompt_version: Option<String>,
 }
 
 impl JournalService {
@@ -43,6 +54,9 @@ impl JournalService {
             search: None,
             capture_embedding: None,
             daily_review: None,
+            embedding_status_config: None,
+            pending_embedding_counter: None,
+            daily_review_prompt_version: None,
         }
     }
 
@@ -52,6 +66,19 @@ impl JournalService {
         E: Embedder + Send + Sync + 'static,
     {
         self.search = Some(Arc::new(search));
+        self
+    }
+
+    pub fn with_embedding_status_config(mut self, config: EmbeddingStatusConfig) -> Self {
+        self.embedding_status_config = Some(config);
+        self
+    }
+
+    pub fn with_pending_embedding_counter<C>(mut self, counter: C) -> Self
+    where
+        C: PendingEmbeddingCounter + 'static,
+    {
+        self.pending_embedding_counter = Some(Arc::new(counter));
         self
     }
 
@@ -71,6 +98,11 @@ impl JournalService {
         R: DailyReviewRunner + 'static,
     {
         self.daily_review = Some(Arc::new(daily_review));
+        self
+    }
+
+    pub fn with_daily_review_prompt_version(mut self, prompt_version: impl Into<String>) -> Self {
+        self.daily_review_prompt_version = Some(prompt_version.into());
         self
     }
 
@@ -116,6 +148,10 @@ impl JournalService {
             }
             JournalCommand::Stats => {
                 self.stats(&request.user_id, request.received_at.date_naive())
+                    .await
+            }
+            JournalCommand::Status => {
+                self.status(&request.user_id, request.received_at.date_naive())
                     .await
             }
             JournalCommand::ReviewToday => Ok(self
@@ -233,6 +269,72 @@ impl JournalService {
         Ok(OutgoingMessage {
             text: stats_response(&stats),
         })
+    }
+
+    async fn status(
+        &self,
+        user_id: &str,
+        today: chrono::NaiveDate,
+    ) -> Result<OutgoingMessage, sqlx::Error> {
+        let journal = self.repository.stats(user_id, today).await?;
+        let embeddings = self.embedding_status(user_id).await;
+        let daily_review = self.daily_review_status();
+
+        Ok(OutgoingMessage {
+            text: status_response(&StatusReport {
+                journal,
+                embeddings,
+                daily_review,
+            }),
+        })
+    }
+
+    async fn embedding_status(&self, user_id: &str) -> EmbeddingStatus {
+        let semantic_search = if self.search.is_some() && self.embedding_status_config.is_some() {
+            SemanticSearchStatus::Enabled
+        } else {
+            SemanticSearchStatus::Unavailable
+        };
+
+        let pending_embeddings = match (
+            self.embedding_status_config.as_ref(),
+            self.pending_embedding_counter.as_ref(),
+        ) {
+            (Some(config), Some(counter)) => {
+                match counter
+                    .count_entries_missing_embedding_for_user(user_id, &config.model)
+                    .await
+                {
+                    Ok(count) => Some(count),
+                    Err(error) => {
+                        warn!(%error, "failed to count pending embeddings for status");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        EmbeddingStatus {
+            semantic_search,
+            config: self.embedding_status_config.clone(),
+            pending_embeddings,
+        }
+    }
+
+    fn daily_review_status(&self) -> DailyReviewStatus {
+        let generation = if self.daily_review.is_some() {
+            DailyReviewGenerationStatus::Configured
+        } else {
+            DailyReviewGenerationStatus::NotConfigured
+        };
+
+        DailyReviewStatus {
+            generation,
+            prompt_version: self.daily_review_prompt_version.clone(),
+            delivery: DailyReviewDeliveryStatus::NotImplemented,
+            date_mode: DailyReviewDateMode::Utc,
+        }
     }
 }
 
@@ -525,6 +627,22 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FailingPendingEmbeddingCounter;
+
+    #[async_trait::async_trait]
+    impl PendingEmbeddingCounter for FailingPendingEmbeddingCounter {
+        async fn count_entries_missing_embedding_for_user(
+            &self,
+            _user_id: &str,
+            _embedding_model: &str,
+        ) -> Result<i64, EmbeddingRepositoryError> {
+            Err(EmbeddingRepositoryError::Database(
+                "database path /tmp/secret.sqlite unavailable".to_string(),
+            ))
+        }
+    }
+
     fn incoming(
         source_message_id: &str,
         text: &str,
@@ -674,6 +792,205 @@ mod tests {
         assert!(outgoing.text.contains("/today"));
         assert!(outgoing.text.contains("/review today"));
         assert!(outgoing.text.contains("/stats"));
+        assert!(outgoing.text.contains("/status"));
+    }
+
+    #[tokio::test]
+    async fn status_returns_stable_sections_when_optional_subsystems_are_unavailable() {
+        let service = setup().await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::Status))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outgoing.text,
+            "Froid status\n\nJournal:\n- Total entries: 0\n- Entries today UTC: 0\n\nEmbeddings:\n- Semantic search: unavailable\n- Model: unavailable\n- Dimensions: unavailable\n- Pending embeddings: unavailable\n\nDaily review:\n- Generation: not configured\n- Delivery: not implemented\n- Date mode: UTC"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_uses_user_scoped_journal_stats_and_command_received_at_date() {
+        let (service, pool) = setup_with_pool().await;
+        service
+            .process(&incoming(
+                "1",
+                "previous day",
+                Utc.with_ymd_and_hms(2026, 4, 28, 23, 59, 0).unwrap(),
+            ))
+            .await
+            .unwrap();
+        service
+            .process(&incoming(
+                "2",
+                "requested day",
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+            ))
+            .await
+            .unwrap();
+        JournalRepository::new(pool.clone())
+            .store(&IncomingMessage {
+                source: MessageSource::Telegram,
+                source_conversation_id: "42".to_string(),
+                source_message_id: "3".to_string(),
+                user_id: "8".to_string(),
+                text: "other user".to_string(),
+                received_at: Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
+            })
+            .await
+            .unwrap();
+
+        let outgoing = service
+            .command(&JournalCommandRequest {
+                user_id: "7".to_string(),
+                received_at: Utc.with_ymd_and_hms(2026, 4, 29, 12, 0, 0).unwrap(),
+                command: JournalCommand::Status,
+            })
+            .await
+            .unwrap();
+
+        assert!(outgoing.text.contains("- Total entries: 2"));
+        assert!(outgoing.text.contains("- Entries today UTC: 1"));
+    }
+
+    #[tokio::test]
+    async fn status_command_does_not_store_command_text_as_journal_entry() {
+        let (service, pool) = setup_with_pool().await;
+
+        service
+            .command(&command(JournalCommand::Status))
+            .await
+            .unwrap();
+
+        let entry_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(entry_count, 0);
+    }
+
+    #[tokio::test]
+    async fn status_reports_configured_embedding_status_and_user_scoped_pending_count() {
+        let (service, index, repo) = setup_with_search(FakeEmbedder::fails()).await;
+        let service = service
+            .with_embedding_status_config(EmbeddingStatusConfig {
+                model: TEST_MODEL.to_string(),
+                dimensions: SUPPORTED_EMBEDDING_DIMENSIONS,
+            })
+            .with_pending_embedding_counter(index.clone());
+        repo.store(&incoming("1", "embedded entry", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "pending entry", at(11, 0)))
+            .await
+            .unwrap();
+        let embedded_entry_id: i64 =
+            sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '1'")
+                .fetch_one(repo.pool())
+                .await
+                .unwrap();
+        index
+            .store_embedding(
+                embedded_entry_id,
+                TEST_MODEL,
+                SUPPORTED_EMBEDDING_DIMENSIONS,
+                &Embedding::new(
+                    vec![1.0; SUPPORTED_EMBEDDING_DIMENSIONS],
+                    SUPPORTED_EMBEDDING_DIMENSIONS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        repo.store(&IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: "42".to_string(),
+            source_message_id: "3".to_string(),
+            user_id: "8".to_string(),
+            text: "other user pending entry".to_string(),
+            received_at: at(12, 0),
+        })
+        .await
+        .unwrap();
+
+        let outgoing = service
+            .command(&command(JournalCommand::Status))
+            .await
+            .unwrap();
+
+        assert!(outgoing.text.contains("- Semantic search: enabled"));
+        assert!(outgoing.text.contains("- Model: test-model"));
+        assert!(outgoing.text.contains("- Dimensions: 1536"));
+        assert!(outgoing.text.contains("- Pending embeddings: 1"));
+    }
+
+    #[tokio::test]
+    async fn status_reports_pending_embeddings_unavailable_when_counter_fails() {
+        let (service, _, _) = setup_with_search(FakeEmbedder::fails()).await;
+        let service = service
+            .with_embedding_status_config(EmbeddingStatusConfig {
+                model: TEST_MODEL.to_string(),
+                dimensions: SUPPORTED_EMBEDDING_DIMENSIONS,
+            })
+            .with_pending_embedding_counter(FailingPendingEmbeddingCounter);
+
+        let outgoing = service
+            .command(&command(JournalCommand::Status))
+            .await
+            .unwrap();
+
+        assert!(outgoing.text.contains("- Semantic search: enabled"));
+        assert!(outgoing.text.contains("- Pending embeddings: unavailable"));
+        assert!(!outgoing.text.contains("/tmp/secret.sqlite"));
+        assert!(!outgoing.text.contains("database path"));
+    }
+
+    #[tokio::test]
+    async fn status_reports_daily_review_prompt_when_configured() {
+        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::EmptyDay));
+        let service = setup_with_daily_review_runner(runner)
+            .await
+            .with_daily_review_prompt_version("daily-review-v1");
+
+        let outgoing = service
+            .command(&command(JournalCommand::Status))
+            .await
+            .unwrap();
+
+        assert!(outgoing.text.contains("- Generation: configured"));
+        assert!(outgoing.text.contains("- Prompt: daily-review-v1"));
+        assert!(outgoing.text.contains("- Delivery: not implemented"));
+        assert!(outgoing.text.contains("- Date mode: UTC"));
+    }
+
+    #[tokio::test]
+    async fn status_does_not_expose_secrets_or_raw_internal_errors() {
+        let (service, _, _) = setup_with_search(FakeEmbedder::fails()).await;
+        let service = service
+            .with_embedding_status_config(EmbeddingStatusConfig {
+                model: TEST_MODEL.to_string(),
+                dimensions: SUPPORTED_EMBEDDING_DIMENSIONS,
+            })
+            .with_pending_embedding_counter(FailingPendingEmbeddingCounter);
+
+        let outgoing = service
+            .command(&command(JournalCommand::Status))
+            .await
+            .unwrap();
+
+        for forbidden in [
+            "OPENAI_API_KEY",
+            "TELEGRAM_BOT_TOKEN",
+            "bot token",
+            "sqlite:",
+            "/tmp/secret.sqlite",
+            "provider down",
+            "database path",
+            "stack trace",
+        ] {
+            assert!(!outgoing.text.contains(forbidden), "{forbidden}");
+        }
     }
 
     #[tokio::test]

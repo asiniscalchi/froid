@@ -120,6 +120,7 @@ fn parse_command(text: &str) -> Option<JournalCommand> {
         "/recent" => parse_recent_argument(argument),
         "/today" => Some(JournalCommand::Today),
         "/stats" => Some(JournalCommand::Stats),
+        "/status" => Some(JournalCommand::Status),
         "/review" => Some(parse_review_argument(argument)),
         "/search" => Some(parse_search_argument(argument)),
         _ => None,
@@ -262,6 +263,16 @@ mod tests {
     #[test]
     fn parse_stats_command() {
         assert_eq!(parse_command("/stats"), Some(JournalCommand::Stats));
+    }
+
+    #[test]
+    fn parse_status_command() {
+        assert_eq!(parse_command("/status"), Some(JournalCommand::Status));
+    }
+
+    #[test]
+    fn parse_status_command_strips_bot_name_suffix() {
+        assert_eq!(parse_command("/status@mybot"), Some(JournalCommand::Status));
     }
 
     #[test]
