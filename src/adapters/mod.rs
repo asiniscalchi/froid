@@ -1,5 +1,5 @@
 pub mod telegram;
 
 pub trait Adapter {
-    async fn run(self);
+    fn run(self) -> impl std::future::Future<Output = ()> + Send;
 }

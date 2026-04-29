@@ -42,12 +42,12 @@ impl fmt::Display for ProviderError {
 impl Error for ProviderError {}
 
 #[async_trait]
-pub(crate) trait EmbeddingProvider: Send + Sync {
+pub trait EmbeddingProvider: Send + Sync {
     async fn embed(&self, model: &str, text: &str) -> Result<Vec<f32>, ProviderError>;
 }
 
 #[derive(Clone)]
-pub(crate) struct RigOpenAiProvider {
+pub struct RigOpenAiProvider {
     embedding_model: openai::EmbeddingModel,
 }
 
