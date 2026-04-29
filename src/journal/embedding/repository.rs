@@ -39,7 +39,6 @@ impl From<sqlx::Error> for EmbeddingRepositoryError {
 }
 
 #[async_trait]
-#[allow(dead_code)]
 pub trait EmbeddingIndex: Send + Sync {
     async fn store_embedding(
         &self,
@@ -49,29 +48,11 @@ pub trait EmbeddingIndex: Send + Sync {
         embedding: &Embedding,
     ) -> Result<bool, EmbeddingRepositoryError>;
 
-    async fn has_embedding(
-        &self,
-        journal_entry_id: i64,
-        embedding_model: &str,
-    ) -> Result<bool, EmbeddingRepositoryError>;
-
     async fn find_entries_missing_embedding(
         &self,
         embedding_model: &str,
         limit: u32,
     ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError>;
-
-    async fn count_entries_missing_embedding(
-        &self,
-        embedding_model: &str,
-    ) -> Result<i64, EmbeddingRepositoryError>;
-
-    async fn search(
-        &self,
-        embedding: &Embedding,
-        embedding_model: &str,
-        limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError>;
 
     async fn search_for_user(
         &self,
@@ -135,7 +116,8 @@ impl SqliteEmbeddingRepository {
         Ok(true)
     }
 
-    pub async fn has_embedding(
+    #[cfg(test)]
+    pub(crate) async fn has_embedding(
         &self,
         journal_entry_id: i64,
         embedding_model: &str,
@@ -189,7 +171,8 @@ impl SqliteEmbeddingRepository {
             .collect())
     }
 
-    pub async fn count_entries_missing_embedding(
+    #[cfg(test)]
+    pub(crate) async fn count_entries_missing_embedding(
         &self,
         embedding_model: &str,
     ) -> Result<i64, sqlx::Error> {
@@ -208,7 +191,8 @@ impl SqliteEmbeddingRepository {
         .await
     }
 
-    pub async fn search(
+    #[cfg(test)]
+    pub(crate) async fn search(
         &self,
         embedding: &Embedding,
         embedding_model: &str,
@@ -341,42 +325,12 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
         .map_err(Into::into)
     }
 
-    async fn has_embedding(
-        &self,
-        journal_entry_id: i64,
-        embedding_model: &str,
-    ) -> Result<bool, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::has_embedding(self, journal_entry_id, embedding_model)
-            .await
-            .map_err(Into::into)
-    }
-
     async fn find_entries_missing_embedding(
         &self,
         embedding_model: &str,
         limit: u32,
     ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::find_entries_missing_embedding(self, embedding_model, limit)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn count_entries_missing_embedding(
-        &self,
-        embedding_model: &str,
-    ) -> Result<i64, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::count_entries_missing_embedding(self, embedding_model)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn search(
-        &self,
-        embedding: &Embedding,
-        embedding_model: &str,
-        limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::search(self, embedding, embedding_model, limit)
             .await
             .map_err(Into::into)
     }

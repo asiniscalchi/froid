@@ -1,4 +1,4 @@
-use std::{env, error::Error, fmt, time::Duration};
+use std::{error::Error, fmt, time::Duration};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbeddingWorkerConfigError {
@@ -41,15 +41,6 @@ impl Default for EmbeddingWorkerConfig {
 }
 
 impl EmbeddingWorkerConfig {
-    #[allow(dead_code)]
-    pub fn from_env() -> Result<Self, EmbeddingWorkerConfigError> {
-        Self::from_values(
-            env::var("FROID_EMBEDDING_WORKER_ENABLED").ok(),
-            env::var("FROID_EMBEDDING_WORKER_BATCH_SIZE").ok(),
-            env::var("FROID_EMBEDDING_WORKER_INTERVAL_SECONDS").ok(),
-        )
-    }
-
     pub fn from_values(
         enabled: Option<String>,
         batch_size: Option<String>,

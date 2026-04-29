@@ -6,20 +6,11 @@ mod types;
 mod worker_config;
 
 pub use backfill::{BackfillResult, EmbeddingBackfillError, EmbeddingBackfillService};
-#[allow(unused_imports)]
-pub use config::{EmbeddingConfig, EmbeddingConfigError};
-#[allow(unused_imports)]
-pub(crate) use provider::EmbeddingProvider;
-#[allow(unused_imports)]
-pub use provider::{ProviderError, RigOpenAiEmbedder, RigOpenAiEmbedderError};
-#[allow(unused_imports)]
-pub use repository::{
-    EmbeddingIndex, EmbeddingRepositoryError, EmbeddingSearchResult,
-    JournalEntryEmbeddingCandidate, SqliteEmbeddingRepository,
-};
+pub use config::EmbeddingConfig;
+pub use provider::RigOpenAiEmbedder;
+pub use repository::{EmbeddingIndex, EmbeddingRepositoryError, SqliteEmbeddingRepository};
 pub use types::{Embedder, EmbedderError, Embedding};
-#[allow(unused_imports)]
-pub use worker_config::{EmbeddingWorkerConfig, EmbeddingWorkerConfigError};
+pub use worker_config::EmbeddingWorkerConfig;
 
 pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 pub const SUPPORTED_EMBEDDING_DIMENSIONS: usize = 1536;
@@ -30,6 +21,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use sqlx::SqlitePool;
 
+    use super::repository::{EmbeddingSearchResult, JournalEntryEmbeddingCandidate};
     use super::*;
     use crate::{
         database,
@@ -142,17 +134,6 @@ mod tests {
                 .map_err(Into::into)
         }
 
-        async fn has_embedding(
-            &self,
-            journal_entry_id: i64,
-            embedding_model: &str,
-        ) -> Result<bool, EmbeddingRepositoryError> {
-            self.inner
-                .has_embedding(journal_entry_id, embedding_model)
-                .await
-                .map_err(Into::into)
-        }
-
         async fn find_entries_missing_embedding(
             &self,
             embedding_model: &str,
@@ -160,28 +141,6 @@ mod tests {
         ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
             self.inner
                 .find_entries_missing_embedding(embedding_model, limit)
-                .await
-                .map_err(Into::into)
-        }
-
-        async fn count_entries_missing_embedding(
-            &self,
-            embedding_model: &str,
-        ) -> Result<i64, EmbeddingRepositoryError> {
-            self.inner
-                .count_entries_missing_embedding(embedding_model)
-                .await
-                .map_err(Into::into)
-        }
-
-        async fn search(
-            &self,
-            embedding: &Embedding,
-            embedding_model: &str,
-            limit: usize,
-        ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
-            self.inner
-                .search(embedding, embedding_model, limit)
                 .await
                 .map_err(Into::into)
         }
