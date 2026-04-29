@@ -264,6 +264,12 @@ pub struct JournalEntryEmbeddingCandidate {
     pub raw_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddingSearchResult {
+    pub journal_entry_id: i64,
+    pub score: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbeddingRepositoryError {
     Database(String),
@@ -312,6 +318,13 @@ pub trait EmbeddingIndex: Send + Sync {
         &self,
         embedding_model: &str,
     ) -> Result<i64, EmbeddingRepositoryError>;
+
+    async fn search(
+        &self,
+        embedding: &Embedding,
+        embedding_model: &str,
+        limit: usize,
+    ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError>;
 }
 
 #[async_trait]
@@ -653,6 +666,39 @@ impl SqliteEmbeddingRepository {
         .await
     }
 
+    pub async fn search(
+        &self,
+        embedding: &Embedding,
+        embedding_model: &str,
+        limit: usize,
+    ) -> Result<Vec<EmbeddingSearchResult>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                m.journal_entry_id,
+                vec_distance_cosine(v.embedding, ?) AS score
+            FROM journal_entry_embedding_metadata m
+            JOIN journal_entry_embedding_vec v ON v.rowid = m.id
+            WHERE m.embedding_model = ?
+            ORDER BY score ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(embedding_to_blob(embedding))
+        .bind(embedding_model)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| EmbeddingSearchResult {
+                journal_entry_id: row.get("journal_entry_id"),
+                score: row.get("score"),
+            })
+            .collect())
+    }
+
     #[cfg(test)]
     async fn stored_embedding(
         &self,
@@ -741,6 +787,17 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
         embedding_model: &str,
     ) -> Result<i64, EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::count_entries_missing_embedding(self, embedding_model)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn search(
+        &self,
+        embedding: &Embedding,
+        embedding_model: &str,
+        limit: usize,
+    ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
+        SqliteEmbeddingRepository::search(self, embedding, embedding_model, limit)
             .await
             .map_err(Into::into)
     }
@@ -846,6 +903,14 @@ mod tests {
         .unwrap()
     }
 
+    // Creates an embedding with a single nonzero dimension, giving each entry a distinct direction
+    // so vec_distance_cosine produces meaningful ordering.
+    fn directional_embedding(nonzero_dim: usize, value: f32) -> Embedding {
+        let mut values = vec![0.0f32; TEST_EMBEDDING_DIMENSIONS];
+        values[nonzero_dim] = value;
+        Embedding::new(values, TEST_EMBEDDING_DIMENSIONS).unwrap()
+    }
+
     #[derive(Debug, Clone)]
     struct FakeEmbedder;
 
@@ -938,6 +1003,18 @@ mod tests {
         ) -> Result<i64, EmbeddingRepositoryError> {
             self.inner
                 .count_entries_missing_embedding(embedding_model)
+                .await
+                .map_err(Into::into)
+        }
+
+        async fn search(
+            &self,
+            embedding: &Embedding,
+            embedding_model: &str,
+            limit: usize,
+        ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
+            self.inner
+                .search(embedding, embedding_model, limit)
                 .await
                 .map_err(Into::into)
         }
@@ -1421,6 +1498,112 @@ mod tests {
             error,
             EmbeddingWorkerConfigError::InvalidInterval("abc".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn search_returns_results_ordered_by_cosine_distance() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let first = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+        let second = store_entry(&journal_repository, "2", "second", at(11, 0)).await;
+        let third = store_entry(&journal_repository, "3", "third", at(12, 0)).await;
+
+        // Give each entry a unique direction so cosine distances are meaningfully distinct.
+        // query points along dim 1, so second (also dim 1) is the closest match.
+        embedding_repository
+            .store_embedding(
+                first,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(0, 1.0),
+            )
+            .await
+            .unwrap();
+        embedding_repository
+            .store_embedding(
+                second,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(1, 1.0),
+            )
+            .await
+            .unwrap();
+        embedding_repository
+            .store_embedding(
+                third,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(2, 1.0),
+            )
+            .await
+            .unwrap();
+
+        let query = directional_embedding(1, 1.0);
+        let results = embedding_repository
+            .search(&query, TEST_EMBEDDING_MODEL, 3)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].journal_entry_id, second);
+        assert!(results[0].score <= results[1].score);
+        assert!(results[1].score <= results[2].score);
+    }
+
+    #[tokio::test]
+    async fn search_respects_limit() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let first = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+        let second = store_entry(&journal_repository, "2", "second", at(11, 0)).await;
+        let third = store_entry(&journal_repository, "3", "third", at(12, 0)).await;
+
+        for (id, dim) in [(first, 0), (second, 1), (third, 2)] {
+            embedding_repository
+                .store_embedding(
+                    id,
+                    TEST_EMBEDDING_MODEL,
+                    TEST_EMBEDDING_DIMENSIONS,
+                    &directional_embedding(dim, 1.0),
+                )
+                .await
+                .unwrap();
+        }
+
+        let results = embedding_repository
+            .search(&directional_embedding(0, 1.0), TEST_EMBEDDING_MODEL, 2)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_embedding_model() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let entry = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+
+        embedding_repository
+            .store_embedding(entry, "model-a", TEST_EMBEDDING_DIMENSIONS, &embedding(1.0))
+            .await
+            .unwrap();
+
+        let results = embedding_repository
+            .search(&embedding(1.0), "model-b", 10)
+            .await
+            .unwrap();
+
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_returns_empty_when_no_embeddings_exist() {
+        let (_, embedding_repository) = setup().await;
+
+        let results = embedding_repository
+            .search(&embedding(1.0), TEST_EMBEDDING_MODEL, 10)
+            .await
+            .unwrap();
+
+        assert!(results.is_empty());
     }
 
     #[tokio::test]

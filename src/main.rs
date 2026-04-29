@@ -17,6 +17,7 @@ use journal::{
         EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
     },
     repository::JournalRepository,
+    search::SemanticSearchService,
     service::JournalService,
 };
 use tracing::info;
@@ -53,9 +54,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
             sqlx::migrate!().run(&pool).await?;
 
-            if config.embedding_worker.enabled {
-                let embedding_config = EmbeddingConfig::from_env()?;
-                let embedder = RigOpenAiEmbedder::from_env(embedding_config)?;
+            let embedding_config = EmbeddingConfig::from_env().ok();
+
+            if config.embedding_worker.enabled
+                && let Some(ref cfg) = embedding_config
+            {
+                let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
                 let index = SqliteEmbeddingRepository::new(pool.clone());
                 let backfill_service = EmbeddingBackfillService::new(index, embedder);
                 let worker =
@@ -63,7 +67,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 tokio::spawn(async move { worker.run_forever().await });
             }
 
-            let journal_service = JournalService::new(JournalRepository::new(pool));
+            let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
+
+            if let Some(cfg) = embedding_config
+                && let Ok(embedder) = RigOpenAiEmbedder::from_env(cfg)
+            {
+                let index = SqliteEmbeddingRepository::new(pool.clone());
+                let search =
+                    SemanticSearchService::new(index, embedder, JournalRepository::new(pool));
+                journal_service = journal_service.with_search(search);
+            }
 
             TelegramAdapter::new(config.telegram_bot_token, journal_service)
                 .run()

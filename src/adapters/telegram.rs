@@ -121,7 +121,17 @@ fn parse_command(text: &str) -> Option<JournalCommand> {
         "/recent" => parse_recent_argument(argument),
         "/today" => Some(JournalCommand::Today),
         "/stats" => Some(JournalCommand::Stats),
+        "/search" => Some(parse_search_argument(argument)),
         _ => None,
+    }
+}
+
+fn parse_search_argument(argument: Option<&str>) -> JournalCommand {
+    match argument {
+        Some(query) => JournalCommand::Search {
+            query: query.to_string(),
+        },
+        None => JournalCommand::SearchUsage,
     }
 }
 
@@ -241,6 +251,41 @@ mod tests {
     #[test]
     fn parse_stats_command() {
         assert_eq!(parse_command("/stats"), Some(JournalCommand::Stats));
+    }
+
+    #[test]
+    fn parse_search_command_with_query() {
+        assert_eq!(
+            parse_command("/search anxiety before meetings"),
+            Some(JournalCommand::Search {
+                query: "anxiety before meetings".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_search_command_strips_bot_name_suffix() {
+        assert_eq!(
+            parse_command("/search@mybot something"),
+            Some(JournalCommand::Search {
+                query: "something".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_search_command_without_query_returns_usage() {
+        assert_eq!(parse_command("/search"), Some(JournalCommand::SearchUsage));
+    }
+
+    #[test]
+    fn parse_search_command_treats_all_words_after_command_as_query() {
+        assert_eq!(
+            parse_command("/search word1 word2 word3"),
+            Some(JournalCommand::Search {
+                query: "word1 word2 word3".to_string()
+            })
+        );
     }
 
     #[test]

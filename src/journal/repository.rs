@@ -109,6 +109,39 @@ impl JournalRepository {
         Ok(entries)
     }
 
+    pub async fn fetch_by_ids(
+        &self,
+        user_id: &str,
+        ids: &[i64],
+    ) -> Result<Vec<(i64, JournalEntry)>, sqlx::Error> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT id, raw_text, received_at FROM journal_entries WHERE user_id = ? AND id IN ({placeholders})"
+        );
+        let mut query = sqlx::query(&sql).bind(user_id);
+        for id in ids {
+            query = query.bind(id);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get("id"),
+                    JournalEntry {
+                        text: row.get("raw_text"),
+                        received_at: row.get("received_at"),
+                    },
+                )
+            })
+            .collect())
+    }
+
     pub async fn stats(
         &self,
         user_id: &str,
@@ -311,6 +344,83 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].text, "first");
         assert_eq!(entries[1].text, "second");
+    }
+
+    async fn stored_id(repo: &JournalRepository, source_message_id: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = ?",
+        )
+        .bind(source_message_id)
+        .fetch_one(&repo.pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn fetch_by_ids_returns_entries_matching_ids() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second", at(11, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "third", at(12, 0)))
+            .await
+            .unwrap();
+
+        let first_id = stored_id(&repo, "1").await;
+        let third_id = stored_id(&repo, "3").await;
+
+        let rows = repo.fetch_by_ids("7", &[first_id, third_id]).await.unwrap();
+
+        let ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
+        assert_eq!(rows.len(), 2);
+        assert!(ids.contains(&first_id));
+        assert!(ids.contains(&third_id));
+    }
+
+    #[tokio::test]
+    async fn fetch_by_ids_excludes_entries_for_other_users() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "mine", at(10, 0))).await.unwrap();
+        let my_id = stored_id(&repo, "1").await;
+
+        let other = IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: "99".to_string(),
+            source_message_id: "2".to_string(),
+            user_id: "other_user".to_string(),
+            text: "theirs".to_string(),
+            received_at: at(11, 0),
+        };
+        repo.store(&other).await.unwrap();
+        let other_id = stored_id(&repo, "2").await;
+
+        let rows = repo.fetch_by_ids("7", &[my_id, other_id]).await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, my_id);
+    }
+
+    #[tokio::test]
+    async fn fetch_by_ids_returns_empty_for_empty_id_list() {
+        let repo = setup().await;
+
+        let rows = repo.fetch_by_ids("7", &[]).await.unwrap();
+
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_by_ids_returns_empty_when_no_ids_match() {
+        let repo = setup().await;
+
+        let rows = repo.fetch_by_ids("7", &[999]).await.unwrap();
+
+        assert!(rows.is_empty());
     }
 
     #[tokio::test]
