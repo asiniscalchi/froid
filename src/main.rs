@@ -1,5 +1,6 @@
 mod adapters;
 mod cli;
+mod database;
 mod handler;
 mod journal;
 mod messages;
@@ -10,7 +11,6 @@ use adapters::{Adapter, telegram::TelegramAdapter};
 use clap::Parser;
 use cli::{Cli, Command};
 use journal::{repository::JournalRepository, service::JournalService};
-use sqlx::sqlite::SqlitePoolOptions;
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
@@ -31,9 +31,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         Command::Serve => {
             let config = cli.serve_config()?;
 
-            let pool = SqlitePoolOptions::new()
-                .connect(&config.database_url)
-                .await?;
+            let pool = database::connect_pool(&config.database_url).await?;
 
             sqlx::migrate!().run(&pool).await?;
 
