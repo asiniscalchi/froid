@@ -6,16 +6,16 @@ use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
 use tracing::{info, warn};
 
-pub const EMBEDDING_DIMENSIONS: usize = 4;
+pub const SUPPORTED_EMBEDDING_DIMENSIONS: usize = 1536;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Embedding(Vec<f32>);
 
 impl Embedding {
-    pub fn new(values: Vec<f32>) -> Result<Self, EmbeddingError> {
-        if values.len() != EMBEDDING_DIMENSIONS {
+    pub fn new(values: Vec<f32>, expected_dimensions: usize) -> Result<Self, EmbeddingError> {
+        if values.len() != expected_dimensions {
             return Err(EmbeddingError::InvalidDimension {
-                expected: EMBEDDING_DIMENSIONS,
+                expected: expected_dimensions,
                 actual: values.len(),
             });
         }
@@ -84,6 +84,7 @@ pub trait EmbeddingIndex: Send + Sync {
         &self,
         journal_entry_id: i64,
         embedding_model: &str,
+        embedding_dim: usize,
         embedding: &Embedding,
     ) -> Result<bool, EmbeddingRepositoryError>;
 
@@ -107,6 +108,10 @@ pub trait EmbeddingIndex: Send + Sync {
 
 #[async_trait]
 pub trait Embedder: Send + Sync {
+    fn model(&self) -> &str;
+
+    fn dimensions(&self) -> usize;
+
     async fn embed(&self, text: &str) -> Result<Embedding, EmbeddingError>;
 }
 
@@ -149,12 +154,14 @@ where
 
     pub async fn backfill_missing_embeddings(
         &self,
-        embedding_model: &str,
         limit: u32,
     ) -> Result<BackfillResult, EmbeddingBackfillError> {
+        let embedding_model = self.embedder.model();
+        let embedding_dim = self.embedder.dimensions();
+
         info!(
             embedding_model,
-            limit, "starting journal entry embedding backfill"
+            embedding_dim, limit, "starting journal entry embedding backfill"
         );
 
         let candidates = self
@@ -177,6 +184,7 @@ where
                     warn!(
                         journal_entry_id = candidate.journal_entry_id,
                         embedding_model,
+                        embedding_dim,
                         error = %error,
                         "failed to generate journal entry embedding"
                     );
@@ -186,7 +194,12 @@ where
 
             match self
                 .index
-                .store_embedding(candidate.journal_entry_id, embedding_model, &embedding)
+                .store_embedding(
+                    candidate.journal_entry_id,
+                    embedding_model,
+                    embedding_dim,
+                    &embedding,
+                )
                 .await
             {
                 Ok(true) => result.created += 1,
@@ -196,6 +209,7 @@ where
                     warn!(
                         journal_entry_id = candidate.journal_entry_id,
                         embedding_model,
+                        embedding_dim,
                         error = %error,
                         "failed to store journal entry embedding"
                     );
@@ -205,6 +219,7 @@ where
 
         info!(
             embedding_model,
+            embedding_dim,
             attempted = result.attempted,
             created = result.created,
             failed = result.failed,
@@ -229,6 +244,7 @@ impl SqliteEmbeddingRepository {
         &self,
         journal_entry_id: i64,
         embedding_model: &str,
+        embedding_dim: usize,
         embedding: &Embedding,
     ) -> Result<bool, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
@@ -236,12 +252,13 @@ impl SqliteEmbeddingRepository {
         let result = sqlx::query(
             r#"
             INSERT OR IGNORE INTO journal_entry_embedding_metadata
-                (journal_entry_id, embedding_model)
-            VALUES (?, ?)
+                (journal_entry_id, embedding_model, embedding_dim)
+            VALUES (?, ?, ?)
             "#,
         )
         .bind(journal_entry_id)
         .bind(embedding_model)
+        .bind(embedding_dim as i64)
         .execute(&mut *tx)
         .await?;
 
@@ -351,6 +368,7 @@ impl SqliteEmbeddingRepository {
                 metadata.id,
                 metadata.journal_entry_id,
                 metadata.embedding_model,
+                metadata.embedding_dim,
                 vec.embedding
             FROM journal_entry_embedding_metadata metadata
             JOIN journal_entry_embedding_vec vec
@@ -369,9 +387,11 @@ impl SqliteEmbeddingRepository {
                 metadata_id: row.get("id"),
                 journal_entry_id: row.get("journal_entry_id"),
                 embedding_model: row.get("embedding_model"),
-                embedding: Embedding::new(blob_to_embedding_values(
-                    &row.get::<Vec<u8>, _>("embedding"),
-                ))
+                embedding_dim: row.get("embedding_dim"),
+                embedding: Embedding::new(
+                    blob_to_embedding_values(&row.get::<Vec<u8>, _>("embedding")),
+                    row.get::<i64, _>("embedding_dim") as usize,
+                )
                 .map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
             })
         })
@@ -385,12 +405,14 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
         &self,
         journal_entry_id: i64,
         embedding_model: &str,
+        embedding_dim: usize,
         embedding: &Embedding,
     ) -> Result<bool, EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::store_embedding(
             self,
             journal_entry_id,
             embedding_model,
+            embedding_dim,
             embedding,
         )
         .await
@@ -433,6 +455,7 @@ struct StoredEmbedding {
     metadata_id: i64,
     journal_entry_id: i64,
     embedding_model: String,
+    embedding_dim: i64,
     embedding: Embedding,
 }
 
@@ -515,8 +538,15 @@ mod tests {
         .unwrap()
     }
 
-    fn embedding(values: [f32; EMBEDDING_DIMENSIONS]) -> Embedding {
-        Embedding::new(values.to_vec()).unwrap()
+    const TEST_EMBEDDING_MODEL: &str = "test-model-v1";
+    const TEST_EMBEDDING_DIMENSIONS: usize = SUPPORTED_EMBEDDING_DIMENSIONS;
+
+    fn embedding(seed: f32) -> Embedding {
+        Embedding::new(
+            vec![seed; TEST_EMBEDDING_DIMENSIONS],
+            TEST_EMBEDDING_DIMENSIONS,
+        )
+        .unwrap()
     }
 
     #[derive(Debug, Clone)]
@@ -524,17 +554,23 @@ mod tests {
 
     #[async_trait]
     impl Embedder for FakeEmbedder {
+        fn model(&self) -> &str {
+            TEST_EMBEDDING_MODEL
+        }
+
+        fn dimensions(&self) -> usize {
+            TEST_EMBEDDING_DIMENSIONS
+        }
+
         async fn embed(&self, text: &str) -> Result<Embedding, EmbeddingError> {
             if text == "fail embedding" {
                 return Err(EmbeddingError::GenerationFailed(text.to_string()));
             }
 
-            Embedding::new(vec![
-                text.len() as f32,
-                text.bytes().map(u32::from).sum::<u32>() as f32,
-                text.split_whitespace().count() as f32,
-                text.bytes().next().unwrap_or_default() as f32,
-            ])
+            Embedding::new(
+                vec![text.len() as f32; TEST_EMBEDDING_DIMENSIONS],
+                TEST_EMBEDDING_DIMENSIONS,
+            )
         }
     }
 
@@ -550,6 +586,7 @@ mod tests {
             &self,
             journal_entry_id: i64,
             embedding_model: &str,
+            embedding_dim: usize,
             embedding: &Embedding,
         ) -> Result<bool, EmbeddingRepositoryError> {
             if journal_entry_id == self.failing_journal_entry_id {
@@ -559,7 +596,7 @@ mod tests {
             }
 
             self.inner
-                .store_embedding(journal_entry_id, embedding_model, embedding)
+                .store_embedding(journal_entry_id, embedding_model, embedding_dim, embedding)
                 .await
                 .map_err(Into::into)
         }
@@ -617,8 +654,9 @@ mod tests {
         let created = embedding_repository
             .store_embedding(
                 journal_entry_id,
-                "test-model-v1",
-                &embedding([1.0, 2.0, 3.0, 4.0]),
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &embedding(1.0),
             )
             .await
             .unwrap();
@@ -626,14 +664,15 @@ mod tests {
         assert!(created);
 
         let stored = embedding_repository
-            .stored_embedding(journal_entry_id, "test-model-v1")
+            .stored_embedding(journal_entry_id, TEST_EMBEDDING_MODEL)
             .await
             .unwrap()
             .unwrap();
 
         assert_eq!(stored.journal_entry_id, journal_entry_id);
-        assert_eq!(stored.embedding_model, "test-model-v1");
-        assert_eq!(stored.embedding, embedding([1.0, 2.0, 3.0, 4.0]));
+        assert_eq!(stored.embedding_model, TEST_EMBEDDING_MODEL);
+        assert_eq!(stored.embedding_dim, TEST_EMBEDDING_DIMENSIONS as i64);
+        assert_eq!(stored.embedding, embedding(1.0));
     }
 
     #[tokio::test]
@@ -644,16 +683,18 @@ mod tests {
         let first_created = embedding_repository
             .store_embedding(
                 journal_entry_id,
-                "test-model-v1",
-                &embedding([1.0, 2.0, 3.0, 4.0]),
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &embedding(1.0),
             )
             .await
             .unwrap();
         let second_created = embedding_repository
             .store_embedding(
                 journal_entry_id,
-                "test-model-v1",
-                &embedding([4.0, 3.0, 2.0, 1.0]),
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &embedding(4.0),
             )
             .await
             .unwrap();
@@ -662,13 +703,13 @@ mod tests {
             "SELECT COUNT(*) FROM journal_entry_embedding_metadata WHERE journal_entry_id = ? AND embedding_model = ?",
         )
         .bind(journal_entry_id)
-        .bind("test-model-v1")
+        .bind(TEST_EMBEDDING_MODEL)
         .fetch_one(&embedding_repository.pool)
         .await
         .unwrap();
 
         let stored = embedding_repository
-            .stored_embedding(journal_entry_id, "test-model-v1")
+            .stored_embedding(journal_entry_id, TEST_EMBEDDING_MODEL)
             .await
             .unwrap()
             .unwrap();
@@ -676,7 +717,7 @@ mod tests {
         assert!(first_created);
         assert!(!second_created);
         assert_eq!(count, 1);
-        assert_eq!(stored.embedding, embedding([1.0, 2.0, 3.0, 4.0]));
+        assert_eq!(stored.embedding, embedding(1.0));
     }
 
     #[tokio::test]
@@ -687,8 +728,9 @@ mod tests {
         embedding_repository
             .store_embedding(
                 journal_entry_id,
-                "test-model-v1",
-                &embedding([1.0, 2.0, 3.0, 4.0]),
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &embedding(1.0),
             )
             .await
             .unwrap();
@@ -696,14 +738,15 @@ mod tests {
             .store_embedding(
                 journal_entry_id,
                 "test-model-v2",
-                &embedding([4.0, 3.0, 2.0, 1.0]),
+                TEST_EMBEDDING_DIMENSIONS,
+                &embedding(4.0),
             )
             .await
             .unwrap();
 
         assert!(
             embedding_repository
-                .has_embedding(journal_entry_id, "test-model-v1")
+                .has_embedding(journal_entry_id, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
@@ -723,12 +766,17 @@ mod tests {
         let third = store_entry(&journal_repository, "3", "third", at(12, 0)).await;
 
         embedding_repository
-            .store_embedding(second, "test-model-v1", &embedding([1.0, 2.0, 3.0, 4.0]))
+            .store_embedding(
+                second,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &embedding(1.0),
+            )
             .await
             .unwrap();
 
         let missing = embedding_repository
-            .find_entries_missing_embedding("test-model-v1", 2)
+            .find_entries_missing_embedding(TEST_EMBEDDING_MODEL, 2)
             .await
             .unwrap();
 
@@ -755,15 +803,16 @@ mod tests {
         embedding_repository
             .store_embedding(
                 journal_entry_id,
-                "test-model-v1",
-                &embedding([1.0, 2.0, 3.0, 4.0]),
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &embedding(1.0),
             )
             .await
             .unwrap();
 
         assert_eq!(
             embedding_repository
-                .count_entries_missing_embedding("test-model-v1")
+                .count_entries_missing_embedding(TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap(),
             0
@@ -786,10 +835,7 @@ mod tests {
 
         let service = EmbeddingBackfillService::new(embedding_repository.clone(), FakeEmbedder);
 
-        let result = service
-            .backfill_missing_embeddings("test-model-v1", 2)
-            .await
-            .unwrap();
+        let result = service.backfill_missing_embeddings(2).await.unwrap();
 
         assert_eq!(
             result,
@@ -801,19 +847,19 @@ mod tests {
         );
         assert!(
             embedding_repository
-                .has_embedding(first, "test-model-v1")
+                .has_embedding(first, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
         assert!(
             embedding_repository
-                .has_embedding(second, "test-model-v1")
+                .has_embedding(second, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
         assert!(
             !embedding_repository
-                .has_embedding(third, "test-model-v1")
+                .has_embedding(third, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
@@ -827,14 +873,8 @@ mod tests {
 
         let service = EmbeddingBackfillService::new(embedding_repository.clone(), FakeEmbedder);
 
-        let first_result = service
-            .backfill_missing_embeddings("test-model-v1", 50)
-            .await
-            .unwrap();
-        let second_result = service
-            .backfill_missing_embeddings("test-model-v1", 50)
-            .await
-            .unwrap();
+        let first_result = service.backfill_missing_embeddings(50).await.unwrap();
+        let second_result = service.backfill_missing_embeddings(50).await.unwrap();
 
         let count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_embedding_metadata")
@@ -869,10 +909,7 @@ mod tests {
 
         let service = EmbeddingBackfillService::new(embedding_repository.clone(), FakeEmbedder);
 
-        let result = service
-            .backfill_missing_embeddings("test-model-v1", 50)
-            .await
-            .unwrap();
+        let result = service.backfill_missing_embeddings(50).await.unwrap();
 
         assert_eq!(
             result,
@@ -884,13 +921,13 @@ mod tests {
         );
         assert!(
             embedding_repository
-                .has_embedding(second, "test-model-v1")
+                .has_embedding(second, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
         assert_eq!(
             embedding_repository
-                .count_entries_missing_embedding("test-model-v1")
+                .count_entries_missing_embedding(TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap(),
             1
@@ -908,10 +945,7 @@ mod tests {
         };
         let service = EmbeddingBackfillService::new(failing_index, FakeEmbedder);
 
-        let result = service
-            .backfill_missing_embeddings("test-model-v1", 50)
-            .await
-            .unwrap();
+        let result = service.backfill_missing_embeddings(50).await.unwrap();
 
         assert_eq!(
             result,
@@ -923,13 +957,13 @@ mod tests {
         );
         assert!(
             !embedding_repository
-                .has_embedding(first, "test-model-v1")
+                .has_embedding(first, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
         assert!(
             embedding_repository
-                .has_embedding(second, "test-model-v1")
+                .has_embedding(second, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
