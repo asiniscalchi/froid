@@ -95,11 +95,15 @@ fn build_journal_service(
     let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
 
     if let Some(cfg) = embedding_config
-        && let Ok(embedder) = RigOpenAiEmbedder::from_env(cfg)
+        && let Ok(search_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
+        && let Ok(capture_embedder) = RigOpenAiEmbedder::from_env(cfg)
     {
-        let index = SqliteEmbeddingRepository::new(pool.clone());
-        let search = SemanticSearchService::new(index, embedder, JournalRepository::new(pool));
+        let search_index = SqliteEmbeddingRepository::new(pool.clone());
+        let capture_index = SqliteEmbeddingRepository::new(pool.clone());
+        let search =
+            SemanticSearchService::new(search_index, search_embedder, JournalRepository::new(pool));
         journal_service = journal_service.with_search(search);
+        journal_service = journal_service.with_capture_embedding(capture_index, capture_embedder);
     }
 
     journal_service

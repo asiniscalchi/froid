@@ -20,10 +20,10 @@ impl JournalRepository {
         &self.pool
     }
 
-    pub async fn store(&self, message: &IncomingMessage) -> Result<(), sqlx::Error> {
+    pub async fn store(&self, message: &IncomingMessage) -> Result<Option<i64>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT OR IGNORE INTO journal_entries
                 (user_id, source, source_conversation_id, source_message_id, raw_text, received_at)
@@ -39,9 +39,15 @@ impl JournalRepository {
         .execute(&mut *tx)
         .await?;
 
+        let journal_entry_id = if result.rows_affected() == 0 {
+            None
+        } else {
+            Some(result.last_insert_rowid())
+        };
+
         tx.commit().await?;
 
-        Ok(())
+        Ok(journal_entry_id)
     }
 
     pub async fn fetch_recent(
@@ -218,15 +224,16 @@ mod tests {
         let repo = setup().await;
         let message = incoming("100", "hello froid", Utc::now());
 
-        repo.store(&message).await.unwrap();
+        let journal_entry_id = repo.store(&message).await.unwrap();
 
         let row = sqlx::query(
-            "SELECT user_id, source, source_conversation_id, source_message_id, raw_text FROM journal_entries",
+            "SELECT id, user_id, source, source_conversation_id, source_message_id, raw_text FROM journal_entries",
         )
         .fetch_one(&repo.pool)
         .await
         .unwrap();
 
+        assert_eq!(journal_entry_id, Some(row.get("id")));
         assert_eq!(row.get::<String, _>("user_id"), "7");
         assert_eq!(row.get::<String, _>("source"), "telegram");
         assert_eq!(row.get::<String, _>("source_conversation_id"), "42");
@@ -239,14 +246,16 @@ mod tests {
         let repo = setup().await;
         let message = incoming("100", "hello froid", Utc::now());
 
-        repo.store(&message).await.unwrap();
-        repo.store(&message).await.unwrap();
+        let first = repo.store(&message).await.unwrap();
+        let second = repo.store(&message).await.unwrap();
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
             .fetch_one(&repo.pool)
             .await
             .unwrap();
 
+        assert!(first.is_some());
+        assert_eq!(second, None);
         assert_eq!(count, 1);
     }
 

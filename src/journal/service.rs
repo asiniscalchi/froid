@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use tracing::warn;
+
 use crate::{
     handler::MessageHandler,
     journal::{
         command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
-        embedding::{Embedder, EmbeddingIndex},
+        embedding::{Embedder, EmbedderError, Embedding, EmbeddingIndex, EmbeddingRepositoryError},
         responses::{
             format_entries, help_response, message_saved_response, no_entries_response,
             no_entries_today_response, recent_usage_response, start_response, stats_response,
@@ -23,6 +26,7 @@ use super::repository::JournalRepository;
 pub struct JournalService {
     repository: JournalRepository,
     search: Option<Arc<dyn SearchService>>,
+    capture_embedding: Option<Arc<dyn CaptureEmbeddingService>>,
 }
 
 impl JournalService {
@@ -30,6 +34,7 @@ impl JournalService {
         Self {
             repository,
             search: None,
+            capture_embedding: None,
         }
     }
 
@@ -42,8 +47,31 @@ impl JournalService {
         self
     }
 
+    pub fn with_capture_embedding<I, E>(mut self, index: I, embedder: E) -> Self
+    where
+        I: EmbeddingIndex + Send + Sync + 'static,
+        E: Embedder + Send + Sync + 'static,
+    {
+        self.capture_embedding = Some(Arc::new(ImmediateCaptureEmbeddingService::new(
+            index, embedder,
+        )));
+        self
+    }
+
     pub async fn process(&self, message: &IncomingMessage) -> Result<OutgoingMessage, sqlx::Error> {
-        self.repository.store(message).await?;
+        if let Some(journal_entry_id) = self.repository.store(message).await?
+            && let Some(capture_embedding) = &self.capture_embedding
+            && let Err(error) = capture_embedding
+                .embed_entry(journal_entry_id, &message.text)
+                .await
+        {
+            warn!(
+                journal_entry_id,
+                error = %error,
+                "failed to create journal entry embedding after capture"
+            );
+        }
+
         Ok(OutgoingMessage {
             text: message_saved_response(),
         })
@@ -149,6 +177,75 @@ impl JournalService {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CaptureEmbeddingError {
+    Embedder(EmbedderError),
+    Index(EmbeddingRepositoryError),
+}
+
+impl std::fmt::Display for CaptureEmbeddingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Embedder(error) => write!(f, "failed to embed journal entry: {error}"),
+            Self::Index(error) => write!(f, "failed to store journal entry embedding: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for CaptureEmbeddingError {}
+
+#[async_trait]
+trait CaptureEmbeddingService: Send + Sync {
+    async fn embed_entry(
+        &self,
+        journal_entry_id: i64,
+        text: &str,
+    ) -> Result<(), CaptureEmbeddingError>;
+}
+
+#[derive(Debug, Clone)]
+struct ImmediateCaptureEmbeddingService<I, E> {
+    index: I,
+    embedder: E,
+}
+
+impl<I, E> ImmediateCaptureEmbeddingService<I, E> {
+    fn new(index: I, embedder: E) -> Self {
+        Self { index, embedder }
+    }
+}
+
+#[async_trait]
+impl<I, E> CaptureEmbeddingService for ImmediateCaptureEmbeddingService<I, E>
+where
+    I: EmbeddingIndex + Send + Sync,
+    E: Embedder + Send + Sync,
+{
+    async fn embed_entry(
+        &self,
+        journal_entry_id: i64,
+        text: &str,
+    ) -> Result<(), CaptureEmbeddingError> {
+        let embedding: Embedding = self
+            .embedder
+            .embed(text)
+            .await
+            .map_err(CaptureEmbeddingError::Embedder)?;
+
+        self.index
+            .store_embedding(
+                journal_entry_id,
+                self.embedder.model(),
+                self.embedder.dimensions(),
+                &embedding,
+            )
+            .await
+            .map_err(CaptureEmbeddingError::Index)?;
+
+        Ok(())
+    }
+}
+
 impl MessageHandler for JournalService {
     async fn process(
         &self,
@@ -207,6 +304,40 @@ mod tests {
         let search = SemanticSearchService::new(index.clone(), embedder, search_repo);
         let service = JournalService::new(repo.clone()).with_search(search);
         (service, index, repo)
+    }
+
+    async fn setup_with_capture_embedding(
+        embedder: FakeEmbedder,
+    ) -> (JournalService, SqliteEmbeddingRepository, JournalRepository) {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let repo = JournalRepository::new(pool.clone());
+        let index = SqliteEmbeddingRepository::new(pool.clone());
+        let service =
+            JournalService::new(repo.clone()).with_capture_embedding(index.clone(), embedder);
+        (service, index, repo)
+    }
+
+    async fn setup_with_search_and_capture_embedding(
+        search_embedder: FakeEmbedder,
+        capture_embedder: FakeEmbedder,
+    ) -> (JournalService, SqliteEmbeddingRepository) {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let repo = JournalRepository::new(pool.clone());
+        let search_index = SqliteEmbeddingRepository::new(pool.clone());
+        let capture_index = SqliteEmbeddingRepository::new(pool.clone());
+        let search = SemanticSearchService::new(
+            search_index,
+            search_embedder,
+            JournalRepository::new(pool.clone()),
+        );
+        let service = JournalService::new(repo)
+            .with_search(search)
+            .with_capture_embedding(capture_index.clone(), capture_embedder);
+        (service, capture_index)
     }
 
     const TEST_MODEL: &str = "test-model";
@@ -295,6 +426,62 @@ mod tests {
         let outgoing = service.process(&message).await.unwrap();
 
         assert_eq!(outgoing.text, "Message saved.");
+    }
+
+    #[tokio::test]
+    async fn process_embeds_new_entry_when_capture_embedding_is_configured() {
+        let (service, index, repo) = setup_with_capture_embedding(FakeEmbedder::succeeds()).await;
+        let message = incoming("100", "hello froid", at(10, 0));
+
+        let outgoing = service.process(&message).await.unwrap();
+        let entry_id: i64 =
+            sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '100'")
+                .fetch_one(repo.pool())
+                .await
+                .unwrap();
+
+        assert_eq!(outgoing.text, "Message saved.");
+        assert!(index.has_embedding(entry_id, TEST_MODEL).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn process_still_saves_message_when_capture_embedding_fails() {
+        let (service, index, repo) = setup_with_capture_embedding(FakeEmbedder::fails()).await;
+        let message = incoming("100", "hello froid", at(10, 0));
+
+        let outgoing = service.process(&message).await.unwrap();
+        let entry_id: i64 =
+            sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '100'")
+                .fetch_one(repo.pool())
+                .await
+                .unwrap();
+
+        assert_eq!(outgoing.text, "Message saved.");
+        assert!(!index.has_embedding(entry_id, TEST_MODEL).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn command_search_can_find_entry_embedded_during_capture() {
+        let (service, _) = setup_with_search_and_capture_embedding(
+            FakeEmbedder::succeeds(),
+            FakeEmbedder::succeeds(),
+        )
+        .await;
+
+        service
+            .process(&incoming("100", "journal entry text", at(10, 0)))
+            .await
+            .unwrap();
+
+        let outgoing = service
+            .command(&command(JournalCommand::Search {
+                query: "query".to_string(),
+            }))
+            .await
+            .unwrap();
+
+        assert!(outgoing.text.contains("Search results for: query"));
+        assert!(outgoing.text.contains("journal entry text"));
     }
 
     #[tokio::test]
