@@ -9,7 +9,7 @@ use rig::{
     providers::openai::{self, Client as OpenAiClient},
 };
 use sqlx::{Row, SqlitePool};
-use tracing::{info, warn};
+use tracing::warn;
 
 pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 pub const SUPPORTED_EMBEDDING_DIMENSIONS: usize = 1536;
@@ -375,11 +375,6 @@ where
         let embedding_model = self.embedder.model();
         let embedding_dim = self.embedder.dimensions();
 
-        info!(
-            embedding_model,
-            embedding_dim, limit, "starting journal entry embedding backfill"
-        );
-
         let candidates = self
             .index
             .find_entries_missing_embedding(embedding_model, limit)
@@ -432,15 +427,6 @@ where
                 }
             }
         }
-
-        info!(
-            embedding_model,
-            embedding_dim,
-            attempted = result.attempted,
-            created = result.created,
-            failed = result.failed,
-            "completed journal entry embedding backfill"
-        );
 
         Ok(result)
     }
