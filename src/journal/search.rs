@@ -140,6 +140,10 @@ pub fn format_search_results(query: &str, results: &[SemanticSearchResult]) -> S
     format!("{header}\n\n{entries}")
 }
 
+pub fn search_unavailable_response() -> String {
+    "Search is not configured.".to_string()
+}
+
 pub fn search_usage_response() -> String {
     "Usage: /search <query>\n\nExample:\n/search anxiety before meetings".to_string()
 }

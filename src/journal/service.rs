@@ -19,11 +19,11 @@ use crate::{
         },
         review::{
             DailyReviewResult,
-            service::{DailyReviewRunner, DailyReviewServiceError},
+            service::DailyReviewRunner,
         },
         search::{
             SearchService, SemanticSearchService, format_search_results, search_empty_response,
-            search_error_response, search_usage_response,
+            search_error_response, search_unavailable_response, search_usage_response,
         },
         status::{
             DailyReviewDateMode, DailyReviewDeliveryStatus, DailyReviewGenerationStatus,
@@ -199,7 +199,7 @@ impl JournalService {
                 }
             }
             Err(error) => {
-                log_daily_review_service_error(&error);
+                error!(%error, "failed to process daily review command");
                 OutgoingMessage {
                     text: daily_review_failure_response(),
                 }
@@ -210,7 +210,7 @@ impl JournalService {
     async fn search_command(&self, user_id: &str, query: &str) -> OutgoingMessage {
         let Some(search) = &self.search else {
             return OutgoingMessage {
-                text: "Search is not configured.".to_string(),
+                text: search_unavailable_response(),
             };
         };
 
@@ -339,10 +339,6 @@ impl JournalService {
     }
 }
 
-fn log_daily_review_service_error(error: &DailyReviewServiceError) {
-    error!(%error, "failed to process daily review command");
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CaptureEmbeddingError {
     Embedder(EmbedderError),
@@ -453,7 +449,7 @@ mod tests {
                 DailyReview, DailyReviewFailure, DailyReviewResult, DailyReviewStatus,
                 generator::fake::FakeReviewGenerator,
                 repository::DailyReviewRepository,
-                service::{DailyReviewRunner, DailyReviewService},
+                service::{DailyReviewRunner, DailyReviewService, DailyReviewServiceError},
             },
             search::SemanticSearchService,
         },
