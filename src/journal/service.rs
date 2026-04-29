@@ -191,6 +191,7 @@ impl JournalService {
                     review_date = %failure.review_date,
                     model = %failure.model,
                     prompt_version = %failure.prompt_version,
+                    error = %failure.error_message,
                     "failed to generate daily review"
                 );
                 OutgoingMessage {
