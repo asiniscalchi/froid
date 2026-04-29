@@ -1,8 +1,8 @@
 use tracing::{error, info};
 
 use crate::journal::embedding::{
-    BackfillResult, EmbeddingBackfillError, EmbeddingBackfillService, EmbeddingIndex,
-    EmbeddingWorkerConfig, Embedder,
+    BackfillResult, Embedder, EmbeddingBackfillError, EmbeddingBackfillService, EmbeddingIndex,
+    EmbeddingWorkerConfig,
 };
 
 pub struct EmbeddingReconciliationWorker<I, E> {
@@ -67,7 +67,7 @@ mod tests {
         journal::{
             embedding::{
                 EmbedderError, Embedding, EmbeddingBackfillService, EmbeddingWorkerConfig,
-                SqliteEmbeddingRepository, SUPPORTED_EMBEDDING_DIMENSIONS,
+                SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
             },
             repository::JournalRepository,
         },

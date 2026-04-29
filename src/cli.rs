@@ -239,7 +239,11 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(error.to_string().contains("FROID_EMBEDDING_WORKER_BATCH_SIZE"));
+        assert!(
+            error
+                .to_string()
+                .contains("FROID_EMBEDDING_WORKER_BATCH_SIZE")
+        );
     }
 
     #[test]
@@ -256,8 +260,10 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(error
-            .to_string()
-            .contains("FROID_EMBEDDING_WORKER_INTERVAL_SECONDS"));
+        assert!(
+            error
+                .to_string()
+                .contains("FROID_EMBEDDING_WORKER_INTERVAL_SECONDS")
+        );
     }
 }

@@ -1388,14 +1388,21 @@ mod tests {
         let error =
             EmbeddingWorkerConfig::from_values(None, Some("0".to_string()), None).unwrap_err();
 
-        assert_eq!(error, EmbeddingWorkerConfigError::InvalidBatchSize("0".to_string()));
-        assert!(error.to_string().contains("FROID_EMBEDDING_WORKER_BATCH_SIZE"));
+        assert_eq!(
+            error,
+            EmbeddingWorkerConfigError::InvalidBatchSize("0".to_string())
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("FROID_EMBEDDING_WORKER_BATCH_SIZE")
+        );
     }
 
     #[test]
     fn worker_config_rejects_invalid_batch_size() {
-        let error = EmbeddingWorkerConfig::from_values(None, Some("abc".to_string()), None)
-            .unwrap_err();
+        let error =
+            EmbeddingWorkerConfig::from_values(None, Some("abc".to_string()), None).unwrap_err();
 
         assert_eq!(
             error,
@@ -1408,14 +1415,21 @@ mod tests {
         let error =
             EmbeddingWorkerConfig::from_values(None, None, Some("0".to_string())).unwrap_err();
 
-        assert_eq!(error, EmbeddingWorkerConfigError::InvalidInterval("0".to_string()));
-        assert!(error.to_string().contains("FROID_EMBEDDING_WORKER_INTERVAL_SECONDS"));
+        assert_eq!(
+            error,
+            EmbeddingWorkerConfigError::InvalidInterval("0".to_string())
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("FROID_EMBEDDING_WORKER_INTERVAL_SECONDS")
+        );
     }
 
     #[test]
     fn worker_config_rejects_invalid_interval() {
-        let error = EmbeddingWorkerConfig::from_values(None, None, Some("abc".to_string()))
-            .unwrap_err();
+        let error =
+            EmbeddingWorkerConfig::from_values(None, None, Some("abc".to_string())).unwrap_err();
 
         assert_eq!(
             error,
