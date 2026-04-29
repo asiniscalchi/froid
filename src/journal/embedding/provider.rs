@@ -135,3 +135,83 @@ where
         Embedding::new(values, self.config.dimensions)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::journal::embedding::{DEFAULT_EMBEDDING_MODEL, SUPPORTED_EMBEDDING_DIMENSIONS};
+
+    #[derive(Debug, Clone)]
+    struct FakeProvider {
+        result: Result<Vec<f32>, ProviderError>,
+    }
+
+    #[async_trait]
+    impl EmbeddingProvider for FakeProvider {
+        async fn embed(&self, _model: &str, _text: &str) -> Result<Vec<f32>, ProviderError> {
+            self.result.clone()
+        }
+    }
+
+    #[test]
+    fn real_openai_embedder_requires_api_key() {
+        let result = RigOpenAiEmbedder::from_optional_api_key(EmbeddingConfig::default(), None);
+
+        assert!(matches!(
+            result,
+            Err(RigOpenAiEmbedderError::MissingOpenAiApiKey)
+        ));
+    }
+
+    #[tokio::test]
+    async fn accepts_provider_vector_with_configured_dimensions() {
+        let embedder = RigOpenAiEmbedder::new(
+            EmbeddingConfig::default(),
+            FakeProvider {
+                result: Ok(vec![1.0; SUPPORTED_EMBEDDING_DIMENSIONS]),
+            },
+        );
+
+        let embedding = embedder.embed("hello").await.unwrap();
+
+        assert_eq!(embedder.model(), DEFAULT_EMBEDDING_MODEL);
+        assert_eq!(embedder.dimensions(), SUPPORTED_EMBEDDING_DIMENSIONS);
+        assert_eq!(embedding.values().len(), SUPPORTED_EMBEDDING_DIMENSIONS);
+    }
+
+    #[tokio::test]
+    async fn rejects_provider_vector_with_wrong_dimensions() {
+        let embedder = RigOpenAiEmbedder::new(
+            EmbeddingConfig::default(),
+            FakeProvider {
+                result: Ok(vec![1.0; SUPPORTED_EMBEDDING_DIMENSIONS - 1]),
+            },
+        );
+
+        let error = embedder.embed("hello").await.unwrap_err();
+
+        assert_eq!(
+            error,
+            EmbedderError::InvalidDimension {
+                expected: SUPPORTED_EMBEDDING_DIMENSIONS,
+                actual: SUPPORTED_EMBEDDING_DIMENSIONS - 1,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn maps_provider_errors() {
+        let embedder = RigOpenAiEmbedder::new(
+            EmbeddingConfig::default(),
+            FakeProvider {
+                result: Err(ProviderError::Request("provider down".to_string())),
+            },
+        );
+
+        let error = embedder.embed("hello").await.unwrap_err();
+
+        assert_eq!(error, EmbedderError::Provider("provider down".to_string()));
+    }
+}

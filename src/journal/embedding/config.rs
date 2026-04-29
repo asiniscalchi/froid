@@ -77,3 +77,30 @@ impl EmbeddingConfig {
         Ok(Self { model, dimensions })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::journal::embedding::{DEFAULT_EMBEDDING_MODEL, SUPPORTED_EMBEDDING_DIMENSIONS};
+
+    #[test]
+    fn uses_default_model_and_dimensions() {
+        let config = EmbeddingConfig::from_values(None, None).unwrap();
+
+        assert_eq!(config.model, DEFAULT_EMBEDDING_MODEL);
+        assert_eq!(config.dimensions, SUPPORTED_EMBEDDING_DIMENSIONS);
+    }
+
+    #[test]
+    fn rejects_non_1536_dimensions() {
+        let error = EmbeddingConfig::from_values(None, Some("4".to_string())).unwrap_err();
+
+        assert_eq!(
+            error,
+            EmbeddingConfigError::UnsupportedDimensions {
+                configured: 4,
+                supported: SUPPORTED_EMBEDDING_DIMENSIONS,
+            }
+        );
+    }
+}
