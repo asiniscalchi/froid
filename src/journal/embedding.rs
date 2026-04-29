@@ -1,20 +1,26 @@
 #![allow(dead_code)]
 
-use std::{error::Error, fmt, mem::size_of_val};
+use std::{env, error::Error, fmt, mem::size_of_val};
 
 use async_trait::async_trait;
+use rig::{
+    client::EmbeddingsClient,
+    embeddings::EmbeddingModel,
+    providers::openai::{self, Client as OpenAiClient},
+};
 use sqlx::{Row, SqlitePool};
 use tracing::{info, warn};
 
+pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 pub const SUPPORTED_EMBEDDING_DIMENSIONS: usize = 1536;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Embedding(Vec<f32>);
 
 impl Embedding {
-    pub fn new(values: Vec<f32>, expected_dimensions: usize) -> Result<Self, EmbeddingError> {
+    pub fn new(values: Vec<f32>, expected_dimensions: usize) -> Result<Self, EmbedderError> {
         if values.len() != expected_dimensions {
-            return Err(EmbeddingError::InvalidDimension {
+            return Err(EmbedderError::InvalidDimension {
                 expected: expected_dimensions,
                 actual: values.len(),
             });
@@ -29,12 +35,12 @@ impl Embedding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EmbeddingError {
+pub enum EmbedderError {
     InvalidDimension { expected: usize, actual: usize },
-    GenerationFailed(String),
+    Provider(String),
 }
 
-impl fmt::Display for EmbeddingError {
+impl fmt::Display for EmbedderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidDimension { expected, actual } => {
@@ -43,12 +49,214 @@ impl fmt::Display for EmbeddingError {
                     "embedding dimension mismatch: expected {expected}, got {actual}"
                 )
             }
-            Self::GenerationFailed(message) => write!(f, "embedding generation failed: {message}"),
+            Self::Provider(message) => write!(f, "embedding provider failed: {message}"),
         }
     }
 }
 
-impl Error for EmbeddingError {}
+impl Error for EmbedderError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddingConfig {
+    pub model: String,
+    pub dimensions: usize,
+}
+
+impl Default for EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            model: DEFAULT_EMBEDDING_MODEL.to_string(),
+            dimensions: SUPPORTED_EMBEDDING_DIMENSIONS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbeddingConfigError {
+    InvalidDimensions(String),
+    UnsupportedDimensions { configured: usize, supported: usize },
+}
+
+impl fmt::Display for EmbeddingConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidDimensions(value) => {
+                write!(
+                    f,
+                    "FROID_EMBEDDING_DIMENSIONS must be a positive integer, got {value:?}"
+                )
+            }
+            Self::UnsupportedDimensions {
+                configured,
+                supported,
+            } => write!(
+                f,
+                "FROID_EMBEDDING_DIMENSIONS={configured} is not supported; this build supports only {supported}"
+            ),
+        }
+    }
+}
+
+impl Error for EmbeddingConfigError {}
+
+impl EmbeddingConfig {
+    pub fn from_env() -> Result<Self, EmbeddingConfigError> {
+        Self::from_values(
+            env::var("FROID_EMBEDDING_MODEL").ok(),
+            env::var("FROID_EMBEDDING_DIMENSIONS").ok(),
+        )
+    }
+
+    fn from_values(
+        model: Option<String>,
+        dimensions: Option<String>,
+    ) -> Result<Self, EmbeddingConfigError> {
+        let model = model
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_EMBEDDING_MODEL.to_string());
+        let dimensions = match dimensions {
+            Some(value) if !value.trim().is_empty() => value
+                .parse::<usize>()
+                .map_err(|_| EmbeddingConfigError::InvalidDimensions(value))?,
+            _ => SUPPORTED_EMBEDDING_DIMENSIONS,
+        };
+
+        if dimensions != SUPPORTED_EMBEDDING_DIMENSIONS {
+            return Err(EmbeddingConfigError::UnsupportedDimensions {
+                configured: dimensions,
+                supported: SUPPORTED_EMBEDDING_DIMENSIONS,
+            });
+        }
+
+        Ok(Self { model, dimensions })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RigOpenAiEmbedderError {
+    MissingOpenAiApiKey,
+    Client(String),
+}
+
+impl fmt::Display for RigOpenAiEmbedderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingOpenAiApiKey => write!(f, "OPENAI_API_KEY is required"),
+            Self::Client(message) => write!(f, "failed to construct OpenAI embedder: {message}"),
+        }
+    }
+}
+
+impl Error for RigOpenAiEmbedderError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderError {
+    Request(String),
+}
+
+impl fmt::Display for ProviderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Request(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl Error for ProviderError {}
+
+#[async_trait]
+pub(crate) trait EmbeddingProvider: Send + Sync {
+    async fn embed(&self, model: &str, text: &str) -> Result<Vec<f32>, ProviderError>;
+}
+
+#[derive(Clone)]
+pub(crate) struct RigOpenAiProvider {
+    embedding_model: openai::EmbeddingModel,
+}
+
+impl RigOpenAiProvider {
+    fn new(config: &EmbeddingConfig, api_key: &str) -> Result<Self, RigOpenAiEmbedderError> {
+        let client = OpenAiClient::new(api_key)
+            .map_err(|error| RigOpenAiEmbedderError::Client(error.to_string()))?;
+        let embedding_model = client.embedding_model_with_ndims(&config.model, config.dimensions);
+
+        Ok(Self { embedding_model })
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for RigOpenAiProvider {
+    async fn embed(&self, _model: &str, text: &str) -> Result<Vec<f32>, ProviderError> {
+        let embedding = self
+            .embedding_model
+            .embed_text(text)
+            .await
+            .map_err(|error| ProviderError::Request(error.to_string()))?;
+
+        Ok(embedding
+            .vec
+            .into_iter()
+            .map(|value| value as f32)
+            .collect())
+    }
+}
+
+#[derive(Clone)]
+pub struct RigOpenAiEmbedder<P = RigOpenAiProvider> {
+    config: EmbeddingConfig,
+    provider: P,
+}
+
+impl RigOpenAiEmbedder<RigOpenAiProvider> {
+    pub fn from_env(config: EmbeddingConfig) -> Result<Self, RigOpenAiEmbedderError> {
+        Self::from_optional_api_key(config, env::var("OPENAI_API_KEY").ok())
+    }
+
+    fn from_optional_api_key(
+        config: EmbeddingConfig,
+        api_key: Option<String>,
+    ) -> Result<Self, RigOpenAiEmbedderError> {
+        let api_key = api_key
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(RigOpenAiEmbedderError::MissingOpenAiApiKey)?;
+        let provider = RigOpenAiProvider::new(&config, &api_key)?;
+
+        Ok(Self { config, provider })
+    }
+}
+
+impl<P> RigOpenAiEmbedder<P>
+where
+    P: EmbeddingProvider,
+{
+    fn new(config: EmbeddingConfig, provider: P) -> Self {
+        Self { config, provider }
+    }
+}
+
+#[async_trait]
+impl<P> Embedder for RigOpenAiEmbedder<P>
+where
+    P: EmbeddingProvider,
+{
+    fn model(&self) -> &str {
+        &self.config.model
+    }
+
+    fn dimensions(&self) -> usize {
+        self.config.dimensions
+    }
+
+    async fn embed(&self, text: &str) -> Result<Embedding, EmbedderError> {
+        let values = self
+            .provider
+            .embed(&self.config.model, text)
+            .await
+            .map_err(|error| EmbedderError::Provider(error.to_string()))?;
+
+        Embedding::new(values, self.config.dimensions)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryEmbeddingCandidate {
@@ -112,7 +320,7 @@ pub trait Embedder: Send + Sync {
 
     fn dimensions(&self) -> usize;
 
-    async fn embed(&self, text: &str) -> Result<Embedding, EmbeddingError>;
+    async fn embed(&self, text: &str) -> Result<Embedding, EmbedderError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -562,15 +770,27 @@ mod tests {
             TEST_EMBEDDING_DIMENSIONS
         }
 
-        async fn embed(&self, text: &str) -> Result<Embedding, EmbeddingError> {
+        async fn embed(&self, text: &str) -> Result<Embedding, EmbedderError> {
             if text == "fail embedding" {
-                return Err(EmbeddingError::GenerationFailed(text.to_string()));
+                return Err(EmbedderError::Provider(text.to_string()));
             }
 
             Embedding::new(
                 vec![text.len() as f32; TEST_EMBEDDING_DIMENSIONS],
                 TEST_EMBEDDING_DIMENSIONS,
             )
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct FakeProvider {
+        result: Result<Vec<f32>, ProviderError>,
+    }
+
+    #[async_trait]
+    impl EmbeddingProvider for FakeProvider {
+        async fn embed(&self, _model: &str, _text: &str) -> Result<Vec<f32>, ProviderError> {
+            self.result.clone()
         }
     }
 
@@ -644,6 +864,87 @@ mod tests {
             .unwrap();
 
         assert!(!version.is_empty());
+    }
+
+    #[test]
+    fn embedding_config_uses_default_model_and_dimensions() {
+        let config = EmbeddingConfig::from_values(None, None).unwrap();
+
+        assert_eq!(config.model, DEFAULT_EMBEDDING_MODEL);
+        assert_eq!(config.dimensions, SUPPORTED_EMBEDDING_DIMENSIONS);
+    }
+
+    #[test]
+    fn embedding_config_rejects_non_1536_dimensions() {
+        let error = EmbeddingConfig::from_values(None, Some("4".to_string())).unwrap_err();
+
+        assert_eq!(
+            error,
+            EmbeddingConfigError::UnsupportedDimensions {
+                configured: 4,
+                supported: SUPPORTED_EMBEDDING_DIMENSIONS,
+            }
+        );
+    }
+
+    #[test]
+    fn real_openai_embedder_requires_api_key() {
+        let result = RigOpenAiEmbedder::from_optional_api_key(EmbeddingConfig::default(), None);
+
+        assert!(matches!(
+            result,
+            Err(RigOpenAiEmbedderError::MissingOpenAiApiKey)
+        ));
+    }
+
+    #[tokio::test]
+    async fn rig_openai_embedder_accepts_provider_vector_with_configured_dimensions() {
+        let embedder = RigOpenAiEmbedder::new(
+            EmbeddingConfig::default(),
+            FakeProvider {
+                result: Ok(vec![1.0; SUPPORTED_EMBEDDING_DIMENSIONS]),
+            },
+        );
+
+        let embedding = embedder.embed("hello").await.unwrap();
+
+        assert_eq!(embedder.model(), DEFAULT_EMBEDDING_MODEL);
+        assert_eq!(embedder.dimensions(), SUPPORTED_EMBEDDING_DIMENSIONS);
+        assert_eq!(embedding.values().len(), SUPPORTED_EMBEDDING_DIMENSIONS);
+    }
+
+    #[tokio::test]
+    async fn rig_openai_embedder_rejects_provider_vector_with_wrong_dimensions() {
+        let embedder = RigOpenAiEmbedder::new(
+            EmbeddingConfig::default(),
+            FakeProvider {
+                result: Ok(vec![1.0; SUPPORTED_EMBEDDING_DIMENSIONS - 1]),
+            },
+        );
+
+        let error = embedder.embed("hello").await.unwrap_err();
+
+        assert_eq!(
+            error,
+            EmbedderError::InvalidDimension {
+                expected: SUPPORTED_EMBEDDING_DIMENSIONS,
+                actual: SUPPORTED_EMBEDDING_DIMENSIONS - 1,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn rig_openai_embedder_maps_provider_errors() {
+        let embedder = RigOpenAiEmbedder::new(
+            EmbeddingConfig::default(),
+            FakeProvider {
+                result: Err(ProviderError::Request("provider down".to_string())),
+            },
+        );
+
+        let error = embedder.embed("hello").await.unwrap_err();
+
+        assert_eq!(error, EmbedderError::Provider("provider down".to_string()));
     }
 
     #[tokio::test]
@@ -851,6 +1152,13 @@ mod tests {
                 .await
                 .unwrap()
         );
+        let first_stored = embedding_repository
+            .stored_embedding(first, TEST_EMBEDDING_MODEL)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_stored.embedding_model, TEST_EMBEDDING_MODEL);
+        assert_eq!(first_stored.embedding_dim, TEST_EMBEDDING_DIMENSIONS as i64);
         assert!(
             embedding_repository
                 .has_embedding(second, TEST_EMBEDDING_MODEL)
