@@ -7,58 +7,37 @@ use rig::{
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::entry::JournalEntry;
+use crate::journal::{
+    entry::JournalEntry,
+    review::{DailyReviewPrompt, DailyReviewPromptError},
+};
 
 pub const DEFAULT_REVIEW_MODEL: &str = GPT_5_MINI;
-pub const DEFAULT_REVIEW_PROMPT_VERSION: &str = "daily-review-v1";
-
-const DAILY_REVIEW_PREAMBLE: &str = r#"You generate concise daily journal reviews.
-
-Rules:
-- Use only the journal entries provided in the prompt.
-- Do not infer facts that are not supported by the entries.
-- Do not refer to past days or long-term patterns.
-- Summarize emotional and practical themes from today only.
-- Identify notable patterns or tensions from today only.
-- Suggest one or two practical points of attention for tomorrow.
-- Keep the review concise, readable, and grounded.
-- Match the main language used in the journal entries.
-- If there are too few entries to identify meaningful themes, say so briefly.
-- Avoid clinical diagnosis or therapy-style overreach.
-- Do not include a top-level "Today's review" heading; the application adds it."#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewConfig {
     pub model: String,
-    pub prompt_version: String,
 }
 
 impl Default for ReviewConfig {
     fn default() -> Self {
         Self {
             model: DEFAULT_REVIEW_MODEL.to_string(),
-            prompt_version: DEFAULT_REVIEW_PROMPT_VERSION.to_string(),
         }
     }
 }
 
 impl ReviewConfig {
     pub fn from_env() -> Self {
-        Self::from_values(
-            env::var("FROID_REVIEW_MODEL").ok(),
-            env::var("FROID_REVIEW_PROMPT_VERSION").ok(),
-        )
+        Self::from_values(env::var("FROID_REVIEW_MODEL").ok())
     }
 
-    pub(crate) fn from_values(model: Option<String>, prompt_version: Option<String>) -> Self {
+    pub(crate) fn from_values(model: Option<String>) -> Self {
         let defaults = Self::default();
         Self {
             model: model
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or(defaults.model),
-            prompt_version: prompt_version
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or(defaults.prompt_version),
         }
     }
 }
@@ -98,6 +77,7 @@ pub trait ReviewGenerator: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RigOpenAiReviewGeneratorError {
     MissingOpenAiApiKey,
+    Prompt(DailyReviewPromptError),
     Client(String),
 }
 
@@ -105,6 +85,7 @@ impl fmt::Display for RigOpenAiReviewGeneratorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingOpenAiApiKey => write!(f, "OPENAI_API_KEY is required"),
+            Self::Prompt(error) => write!(f, "{error}"),
             Self::Client(message) => {
                 write!(f, "failed to construct OpenAI review generator: {message}")
             }
@@ -113,6 +94,12 @@ impl fmt::Display for RigOpenAiReviewGeneratorError {
 }
 
 impl Error for RigOpenAiReviewGeneratorError {}
+
+impl From<DailyReviewPromptError> for RigOpenAiReviewGeneratorError {
+    fn from(error: DailyReviewPromptError) -> Self {
+        Self::Prompt(error)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewProviderError {
@@ -134,6 +121,7 @@ pub trait ReviewProvider: Send + Sync {
     async fn complete_daily_review(
         &self,
         model: &str,
+        instructions: &str,
         prompt: &str,
     ) -> Result<String, ReviewProviderError>;
 }
@@ -156,12 +144,13 @@ impl ReviewProvider for RigOpenAiReviewProvider {
     async fn complete_daily_review(
         &self,
         model: &str,
+        instructions: &str,
         prompt: &str,
     ) -> Result<String, ReviewProviderError> {
         let agent = self
             .client
             .agent(model)
-            .preamble(DAILY_REVIEW_PREAMBLE)
+            .preamble(instructions)
             .temperature(0.2)
             .max_tokens(700)
             .build();
@@ -176,16 +165,14 @@ impl ReviewProvider for RigOpenAiReviewProvider {
 #[derive(Clone)]
 pub struct RigOpenAiReviewGenerator<P = RigOpenAiReviewProvider> {
     config: ReviewConfig,
+    prompt: DailyReviewPrompt,
     provider: P,
 }
 
 impl RigOpenAiReviewGenerator<RigOpenAiReviewProvider> {
-    pub fn from_env() -> Result<Self, RigOpenAiReviewGeneratorError> {
-        Self::from_optional_api_key(ReviewConfig::from_env(), env::var("OPENAI_API_KEY").ok())
-    }
-
     pub fn from_optional_api_key(
         config: ReviewConfig,
+        prompt: DailyReviewPrompt,
         api_key: Option<String>,
     ) -> Result<Self, RigOpenAiReviewGeneratorError> {
         let api_key = api_key
@@ -193,7 +180,11 @@ impl RigOpenAiReviewGenerator<RigOpenAiReviewProvider> {
             .ok_or(RigOpenAiReviewGeneratorError::MissingOpenAiApiKey)?;
         let provider = RigOpenAiReviewProvider::new(&api_key)?;
 
-        Ok(Self { config, provider })
+        Ok(Self {
+            config,
+            prompt,
+            provider,
+        })
     }
 }
 
@@ -202,8 +193,12 @@ where
     P: ReviewProvider,
 {
     #[cfg(test)]
-    pub(crate) fn new(config: ReviewConfig, provider: P) -> Self {
-        Self { config, provider }
+    pub(crate) fn new(config: ReviewConfig, prompt: DailyReviewPrompt, provider: P) -> Self {
+        Self {
+            config,
+            prompt,
+            provider,
+        }
     }
 }
 
@@ -217,7 +212,7 @@ where
     }
 
     fn prompt_version(&self) -> &str {
-        &self.config.prompt_version
+        &self.prompt.version
     }
 
     async fn generate_daily_review(
@@ -226,7 +221,7 @@ where
     ) -> Result<String, ReviewGenerationError> {
         let prompt = build_daily_review_prompt(entries);
         self.provider
-            .complete_daily_review(&self.config.model, &prompt)
+            .complete_daily_review(&self.config.model, &self.prompt.text, &prompt)
             .await
             .map_err(|error| ReviewGenerationError::new(error.to_string()))
     }
@@ -355,6 +350,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct FakeReviewProvider {
         result: Result<String, ReviewProviderError>,
+        instructions: Arc<Mutex<Vec<String>>>,
         prompts: Arc<Mutex<Vec<String>>>,
         models: Arc<Mutex<Vec<String>>>,
     }
@@ -363,6 +359,7 @@ mod tests {
         fn succeeding(review_text: &str) -> Self {
             Self {
                 result: Ok(review_text.to_string()),
+                instructions: Arc::new(Mutex::new(Vec::new())),
                 prompts: Arc::new(Mutex::new(Vec::new())),
                 models: Arc::new(Mutex::new(Vec::new())),
             }
@@ -371,9 +368,14 @@ mod tests {
         fn failing(error_message: &str) -> Self {
             Self {
                 result: Err(ReviewProviderError::Request(error_message.to_string())),
+                instructions: Arc::new(Mutex::new(Vec::new())),
                 prompts: Arc::new(Mutex::new(Vec::new())),
                 models: Arc::new(Mutex::new(Vec::new())),
             }
+        }
+
+        fn instructions(&self) -> Vec<String> {
+            self.instructions.lock().unwrap().clone()
         }
 
         fn prompts(&self) -> Vec<String> {
@@ -390,9 +392,14 @@ mod tests {
         async fn complete_daily_review(
             &self,
             model: &str,
+            instructions: &str,
             prompt: &str,
         ) -> Result<String, ReviewProviderError> {
             self.models.lock().unwrap().push(model.to_string());
+            self.instructions
+                .lock()
+                .unwrap()
+                .push(instructions.to_string());
             self.prompts.lock().unwrap().push(prompt.to_string());
             self.result.clone()
         }
@@ -405,26 +412,34 @@ mod tests {
         }
     }
 
+    fn prompt(version: &str, text: &str) -> DailyReviewPrompt {
+        DailyReviewPrompt {
+            version: version.to_string(),
+            text: text.to_string(),
+        }
+    }
+
     #[test]
     fn review_config_uses_defaults() {
-        let config = ReviewConfig::from_values(None, None);
+        let config = ReviewConfig::from_values(None);
 
         assert_eq!(config.model, DEFAULT_REVIEW_MODEL);
-        assert_eq!(config.prompt_version, DEFAULT_REVIEW_PROMPT_VERSION);
     }
 
     #[test]
     fn review_config_accepts_overrides() {
-        let config =
-            ReviewConfig::from_values(Some("custom-model".to_string()), Some("v2".to_string()));
+        let config = ReviewConfig::from_values(Some("custom-model".to_string()));
 
         assert_eq!(config.model, "custom-model");
-        assert_eq!(config.prompt_version, "v2");
     }
 
     #[test]
     fn real_openai_review_generator_requires_api_key() {
-        let result = RigOpenAiReviewGenerator::from_optional_api_key(ReviewConfig::default(), None);
+        let result = RigOpenAiReviewGenerator::from_optional_api_key(
+            ReviewConfig::default(),
+            prompt("v1", "prompt text"),
+            None,
+        );
 
         assert!(matches!(
             result,
@@ -438,8 +453,8 @@ mod tests {
         let generator = RigOpenAiReviewGenerator::new(
             ReviewConfig {
                 model: "custom-model".to_string(),
-                prompt_version: "custom-prompt".to_string(),
             },
+            prompt("custom-prompt", "injected instructions"),
             provider.clone(),
         );
 
@@ -453,12 +468,20 @@ mod tests {
             "review text"
         );
         assert_eq!(provider.models(), vec!["custom-model".to_string()]);
+        assert_eq!(
+            provider.instructions(),
+            vec!["injected instructions".to_string()]
+        );
     }
 
     #[tokio::test]
-    async fn prompt_contains_only_entries_passed_to_generator() {
+    async fn generated_prompt_contains_only_entries_passed_to_generator() {
         let provider = FakeReviewProvider::succeeding("review text");
-        let generator = RigOpenAiReviewGenerator::new(ReviewConfig::default(), provider.clone());
+        let generator = RigOpenAiReviewGenerator::new(
+            ReviewConfig::default(),
+            prompt("v1", "injected instructions"),
+            provider.clone(),
+        );
 
         generator
             .generate_daily_review(&[entry(28, "requested date entry")])
@@ -474,7 +497,11 @@ mod tests {
     #[tokio::test]
     async fn maps_provider_failure_to_generation_error() {
         let provider = FakeReviewProvider::failing("provider down");
-        let generator = RigOpenAiReviewGenerator::new(ReviewConfig::default(), provider);
+        let generator = RigOpenAiReviewGenerator::new(
+            ReviewConfig::default(),
+            prompt("v1", "injected instructions"),
+            provider,
+        );
 
         let error = generator
             .generate_daily_review(&[entry(28, "wrote a test")])
@@ -485,17 +512,12 @@ mod tests {
     }
 
     #[test]
-    fn prompt_instructs_grounded_same_day_review() {
-        let prompt = build_daily_review_prompt(&[entry(28, "finished the feature")]);
+    fn generated_prompt_requests_review_format() {
+        let prompt_text = build_daily_review_prompt(&[entry(28, "finished the feature")]);
 
-        assert!(DAILY_REVIEW_PREAMBLE.contains("Use only the journal entries"));
-        assert!(DAILY_REVIEW_PREAMBLE.contains("Do not refer to past days"));
-        assert!(DAILY_REVIEW_PREAMBLE.contains("Match the main language"));
-        assert!(DAILY_REVIEW_PREAMBLE.contains("too few entries"));
-        assert!(DAILY_REVIEW_PREAMBLE.contains("Avoid clinical diagnosis"));
-        assert!(prompt.contains("Summary:"));
-        assert!(prompt.contains("Themes:"));
-        assert!(prompt.contains("Pay attention tomorrow:"));
-        assert!(prompt.contains("finished the feature"));
+        assert!(prompt_text.contains("Summary:"));
+        assert!(prompt_text.contains("Themes:"));
+        assert!(prompt_text.contains("Pay attention tomorrow:"));
+        assert!(prompt_text.contains("finished the feature"));
     }
 }

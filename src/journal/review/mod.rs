@@ -1,10 +1,12 @@
 pub mod generator;
+pub mod prompt;
 pub mod repository;
 pub mod service;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
 pub use generator::{ReviewConfig, RigOpenAiReviewGenerator};
+pub use prompt::{DailyReviewPrompt, DailyReviewPromptConfig, DailyReviewPromptError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyReview {
