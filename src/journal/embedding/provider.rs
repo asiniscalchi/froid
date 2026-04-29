@@ -106,6 +106,7 @@ impl<P> RigOpenAiEmbedder<P>
 where
     P: EmbeddingProvider,
 {
+    #[allow(dead_code)]
     pub(crate) fn new(config: EmbeddingConfig, provider: P) -> Self {
         Self { config, provider }
     }
