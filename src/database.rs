@@ -4,11 +4,18 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 
+type SqliteExtensionFn = unsafe extern "C" fn(
+    *mut libsqlite3_sys::sqlite3,
+    *mut *mut i8,
+    *const libsqlite3_sys::sqlite3_api_routines,
+) -> i32;
+
 pub fn register_sqlite_vec_extension() {
     unsafe {
-        libsqlite3_sys::sqlite3_auto_extension(Some(std::mem::transmute(
-            sqlite3_vec_init as *const (),
-        )));
+        libsqlite3_sys::sqlite3_auto_extension(Some(std::mem::transmute::<
+            *const (),
+            SqliteExtensionFn,
+        >(sqlite3_vec_init as *const ())));
     }
 }
 

@@ -1,5 +1,8 @@
-use std::{error::Error, fmt};
+#![allow(dead_code)]
 
+use std::{error::Error, fmt, mem::size_of_val};
+
+use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
 
 pub const EMBEDDING_DIMENSIONS: usize = 4;
@@ -50,6 +53,135 @@ impl Error for EmbeddingError {}
 pub struct JournalEntryEmbeddingCandidate {
     pub journal_entry_id: i64,
     pub raw_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbeddingRepositoryError {
+    Database(String),
+}
+
+impl fmt::Display for EmbeddingRepositoryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Database(message) => write!(f, "embedding repository database error: {message}"),
+        }
+    }
+}
+
+impl Error for EmbeddingRepositoryError {}
+
+impl From<sqlx::Error> for EmbeddingRepositoryError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Database(error.to_string())
+    }
+}
+
+#[async_trait]
+#[allow(dead_code)]
+pub trait EmbeddingIndex: Send + Sync {
+    async fn store_embedding(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+        embedding: &Embedding,
+    ) -> Result<bool, EmbeddingRepositoryError>;
+
+    async fn has_embedding(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+    ) -> Result<bool, EmbeddingRepositoryError>;
+
+    async fn find_entries_missing_embedding(
+        &self,
+        embedding_model: &str,
+        limit: u32,
+    ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError>;
+
+    async fn count_entries_missing_embedding(
+        &self,
+        embedding_model: &str,
+    ) -> Result<i64, EmbeddingRepositoryError>;
+}
+
+#[async_trait]
+pub trait Embedder: Send + Sync {
+    async fn embed(&self, text: &str) -> Result<Embedding, EmbeddingError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackfillResult {
+    pub attempted: u32,
+    pub created: u32,
+    pub failed: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbeddingBackfillError {
+    Repository(EmbeddingRepositoryError),
+}
+
+impl fmt::Display for EmbeddingBackfillError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Repository(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl Error for EmbeddingBackfillError {}
+
+#[derive(Debug, Clone)]
+pub struct EmbeddingBackfillService<I, E> {
+    index: I,
+    embedder: E,
+}
+
+impl<I, E> EmbeddingBackfillService<I, E>
+where
+    I: EmbeddingIndex,
+    E: Embedder,
+{
+    pub fn new(index: I, embedder: E) -> Self {
+        Self { index, embedder }
+    }
+
+    pub async fn backfill_missing_embeddings(
+        &self,
+        embedding_model: &str,
+        limit: u32,
+    ) -> Result<BackfillResult, EmbeddingBackfillError> {
+        let candidates = self
+            .index
+            .find_entries_missing_embedding(embedding_model, limit)
+            .await
+            .map_err(EmbeddingBackfillError::Repository)?;
+
+        let mut result = BackfillResult {
+            attempted: candidates.len() as u32,
+            created: 0,
+            failed: 0,
+        };
+
+        for candidate in candidates {
+            let Ok(embedding) = self.embedder.embed(&candidate.raw_text).await else {
+                result.failed += 1;
+                continue;
+            };
+
+            match self
+                .index
+                .store_embedding(candidate.journal_entry_id, embedding_model, &embedding)
+                .await
+            {
+                Ok(true) => result.created += 1,
+                Ok(false) => {}
+                Err(_) => result.failed += 1,
+            }
+        }
+
+        Ok(result)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -216,6 +348,54 @@ impl SqliteEmbeddingRepository {
     }
 }
 
+#[async_trait]
+impl EmbeddingIndex for SqliteEmbeddingRepository {
+    async fn store_embedding(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+        embedding: &Embedding,
+    ) -> Result<bool, EmbeddingRepositoryError> {
+        SqliteEmbeddingRepository::store_embedding(
+            self,
+            journal_entry_id,
+            embedding_model,
+            embedding,
+        )
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn has_embedding(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+    ) -> Result<bool, EmbeddingRepositoryError> {
+        SqliteEmbeddingRepository::has_embedding(self, journal_entry_id, embedding_model)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn find_entries_missing_embedding(
+        &self,
+        embedding_model: &str,
+        limit: u32,
+    ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
+        SqliteEmbeddingRepository::find_entries_missing_embedding(self, embedding_model, limit)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn count_entries_missing_embedding(
+        &self,
+        embedding_model: &str,
+    ) -> Result<i64, EmbeddingRepositoryError> {
+        SqliteEmbeddingRepository::count_entries_missing_embedding(self, embedding_model)
+            .await
+            .map_err(Into::into)
+    }
+}
+
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 struct StoredEmbedding {
@@ -226,7 +406,7 @@ struct StoredEmbedding {
 }
 
 fn embedding_to_blob(embedding: &Embedding) -> Vec<u8> {
-    let mut blob = Vec::with_capacity(embedding.values().len() * size_of::<f32>());
+    let mut blob = Vec::with_capacity(size_of_val(embedding.values()));
 
     for value in embedding.values() {
         blob.extend_from_slice(&value.to_le_bytes());
@@ -237,7 +417,7 @@ fn embedding_to_blob(embedding: &Embedding) -> Vec<u8> {
 
 #[cfg(test)]
 fn blob_to_embedding_values(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(size_of::<f32>())
+    blob.chunks_exact(std::mem::size_of::<f32>())
         .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
         .collect()
 }
@@ -306,6 +486,84 @@ mod tests {
 
     fn embedding(values: [f32; EMBEDDING_DIMENSIONS]) -> Embedding {
         Embedding::new(values.to_vec()).unwrap()
+    }
+
+    #[derive(Debug, Clone)]
+    struct FakeEmbedder;
+
+    #[async_trait]
+    impl Embedder for FakeEmbedder {
+        async fn embed(&self, text: &str) -> Result<Embedding, EmbeddingError> {
+            if text == "fail embedding" {
+                return Err(EmbeddingError::GenerationFailed(text.to_string()));
+            }
+
+            Embedding::new(vec![
+                text.len() as f32,
+                text.bytes().map(u32::from).sum::<u32>() as f32,
+                text.split_whitespace().count() as f32,
+                text.bytes().next().unwrap_or_default() as f32,
+            ])
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct StorageFailingIndex {
+        inner: SqliteEmbeddingRepository,
+        failing_journal_entry_id: i64,
+    }
+
+    #[async_trait]
+    impl EmbeddingIndex for StorageFailingIndex {
+        async fn store_embedding(
+            &self,
+            journal_entry_id: i64,
+            embedding_model: &str,
+            embedding: &Embedding,
+        ) -> Result<bool, EmbeddingRepositoryError> {
+            if journal_entry_id == self.failing_journal_entry_id {
+                return Err(EmbeddingRepositoryError::Database(
+                    "forced storage failure".to_string(),
+                ));
+            }
+
+            self.inner
+                .store_embedding(journal_entry_id, embedding_model, embedding)
+                .await
+                .map_err(Into::into)
+        }
+
+        async fn has_embedding(
+            &self,
+            journal_entry_id: i64,
+            embedding_model: &str,
+        ) -> Result<bool, EmbeddingRepositoryError> {
+            self.inner
+                .has_embedding(journal_entry_id, embedding_model)
+                .await
+                .map_err(Into::into)
+        }
+
+        async fn find_entries_missing_embedding(
+            &self,
+            embedding_model: &str,
+            limit: u32,
+        ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
+            self.inner
+                .find_entries_missing_embedding(embedding_model, limit)
+                .await
+                .map_err(Into::into)
+        }
+
+        async fn count_entries_missing_embedding(
+            &self,
+            embedding_model: &str,
+        ) -> Result<i64, EmbeddingRepositoryError> {
+            self.inner
+                .count_entries_missing_embedding(embedding_model)
+                .await
+                .map_err(Into::into)
+        }
     }
 
     #[tokio::test]
@@ -485,6 +743,164 @@ mod tests {
                 .await
                 .unwrap(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_generates_missing_embeddings_with_limit_oldest_first() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let first = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+        let second = store_entry(&journal_repository, "2", "second", at(11, 0)).await;
+        let third = store_entry(&journal_repository, "3", "third", at(12, 0)).await;
+
+        let service = EmbeddingBackfillService::new(embedding_repository.clone(), FakeEmbedder);
+
+        let result = service
+            .backfill_missing_embeddings("test-model-v1", 2)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            BackfillResult {
+                attempted: 2,
+                created: 2,
+                failed: 0,
+            }
+        );
+        assert!(
+            embedding_repository
+                .has_embedding(first, "test-model-v1")
+                .await
+                .unwrap()
+        );
+        assert!(
+            embedding_repository
+                .has_embedding(second, "test-model-v1")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !embedding_repository
+                .has_embedding(third, "test-model-v1")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_backfill_does_not_create_duplicates() {
+        let (journal_repository, embedding_repository) = setup().await;
+        store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+        store_entry(&journal_repository, "2", "second", at(11, 0)).await;
+
+        let service = EmbeddingBackfillService::new(embedding_repository.clone(), FakeEmbedder);
+
+        let first_result = service
+            .backfill_missing_embeddings("test-model-v1", 50)
+            .await
+            .unwrap();
+        let second_result = service
+            .backfill_missing_embeddings("test-model-v1", 50)
+            .await
+            .unwrap();
+
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_embedding_metadata")
+                .fetch_one(&embedding_repository.pool)
+                .await
+                .unwrap();
+
+        assert_eq!(
+            first_result,
+            BackfillResult {
+                attempted: 2,
+                created: 2,
+                failed: 0,
+            }
+        );
+        assert_eq!(
+            second_result,
+            BackfillResult {
+                attempted: 0,
+                created: 0,
+                failed: 0,
+            }
+        );
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn backfill_continues_after_embedder_failure() {
+        let (journal_repository, embedding_repository) = setup().await;
+        store_entry(&journal_repository, "1", "fail embedding", at(10, 0)).await;
+        let second = store_entry(&journal_repository, "2", "second", at(11, 0)).await;
+
+        let service = EmbeddingBackfillService::new(embedding_repository.clone(), FakeEmbedder);
+
+        let result = service
+            .backfill_missing_embeddings("test-model-v1", 50)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            BackfillResult {
+                attempted: 2,
+                created: 1,
+                failed: 1,
+            }
+        );
+        assert!(
+            embedding_repository
+                .has_embedding(second, "test-model-v1")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            embedding_repository
+                .count_entries_missing_embedding("test-model-v1")
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_continues_after_storage_failure() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let first = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+        let second = store_entry(&journal_repository, "2", "second", at(11, 0)).await;
+        let failing_index = StorageFailingIndex {
+            inner: embedding_repository.clone(),
+            failing_journal_entry_id: first,
+        };
+        let service = EmbeddingBackfillService::new(failing_index, FakeEmbedder);
+
+        let result = service
+            .backfill_missing_embeddings("test-model-v1", 50)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            BackfillResult {
+                attempted: 2,
+                created: 1,
+                failed: 1,
+            }
+        );
+        assert!(
+            !embedding_repository
+                .has_embedding(first, "test-model-v1")
+                .await
+                .unwrap()
+        );
+        assert!(
+            embedding_repository
+                .has_embedding(second, "test-model-v1")
+                .await
+                .unwrap()
         );
     }
 }

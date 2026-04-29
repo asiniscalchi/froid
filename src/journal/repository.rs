@@ -15,6 +15,7 @@ impl JournalRepository {
         Self { pool }
     }
 
+    #[cfg(test)]
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
