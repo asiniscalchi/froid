@@ -1,8 +1,9 @@
+use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use sqlx::{Row, SqlitePool};
 
 use crate::messages::IncomingMessage;
 
-use super::entry::JournalEntry;
+use super::entry::{JournalEntry, JournalStats};
 
 #[derive(Debug, Clone)]
 pub struct JournalRepository {
@@ -67,6 +68,72 @@ impl JournalRepository {
 
         Ok(entries)
     }
+
+    pub async fn fetch_today(
+        &self,
+        user_id: &str,
+        date: NaiveDate,
+    ) -> Result<Vec<JournalEntry>, sqlx::Error> {
+        let start = Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap());
+        let end = start + Duration::days(1);
+
+        let rows = sqlx::query(
+            r#"
+            SELECT raw_text, received_at
+            FROM journal_entries
+            WHERE user_id = ?
+              AND received_at >= ?
+              AND received_at < ?
+            ORDER BY received_at ASC, id ASC
+            "#,
+        )
+        .bind(user_id)
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let entries = rows
+            .into_iter()
+            .map(|row| JournalEntry {
+                text: row.get("raw_text"),
+                received_at: row.get("received_at"),
+            })
+            .collect();
+
+        Ok(entries)
+    }
+
+    pub async fn stats(
+        &self,
+        user_id: &str,
+        today: NaiveDate,
+    ) -> Result<JournalStats, sqlx::Error> {
+        let start = Utc.from_utc_datetime(&today.and_hms_opt(0, 0, 0).unwrap());
+        let end = start + Duration::days(1);
+
+        let row = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) AS total_entries,
+                COALESCE(SUM(CASE WHEN received_at >= ? AND received_at < ? THEN 1 ELSE 0 END), 0) AS entries_today,
+                MAX(received_at) AS latest_received_at
+            FROM journal_entries
+            WHERE user_id = ?
+            "#,
+        )
+        .bind(start)
+        .bind(end)
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(JournalStats {
+            total_entries: row.get("total_entries"),
+            entries_today: row.get("entries_today"),
+            latest_received_at: row.get("latest_received_at"),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -100,6 +167,10 @@ mod tests {
 
     fn at(h: u32, m: u32) -> chrono::DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 4, 28, h, m, 0).unwrap()
+    }
+
+    fn date() -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
     }
 
     #[tokio::test]
@@ -208,5 +279,66 @@ mod tests {
         let entries = repo.fetch_recent("unknown", 10).await.unwrap();
 
         assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_today_returns_entries_oldest_first_for_user() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second", at(11, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming(
+            "3",
+            "tomorrow",
+            Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
+        ))
+        .await
+        .unwrap();
+
+        let entries = repo.fetch_today("7", date()).await.unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].text, "first");
+        assert_eq!(entries[1].text, "second");
+    }
+
+    #[tokio::test]
+    async fn stats_returns_counts_and_latest_timestamp_for_user() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming(
+            "2",
+            "tomorrow",
+            Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
+        ))
+        .await
+        .unwrap();
+
+        let stats = repo.stats("7", date()).await.unwrap();
+
+        assert_eq!(stats.total_entries, 2);
+        assert_eq!(stats.entries_today, 1);
+        assert_eq!(
+            stats.latest_received_at,
+            Some(Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn stats_returns_zeroes_for_unknown_user() {
+        let repo = setup().await;
+
+        let stats = repo.stats("unknown", date()).await.unwrap();
+
+        assert_eq!(stats.total_entries, 0);
+        assert_eq!(stats.entries_today, 0);
+        assert_eq!(stats.latest_received_at, None);
     }
 }
