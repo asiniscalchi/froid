@@ -9,6 +9,8 @@ pub use backfill::{BackfillResult, EmbeddingBackfillError, EmbeddingBackfillServ
 pub use config::EmbeddingConfig;
 pub use provider::RigOpenAiEmbedder;
 pub use repository::{EmbeddingIndex, EmbeddingRepositoryError, SqliteEmbeddingRepository};
+#[cfg(test)]
+pub(crate) use repository::{EmbeddingSearchResult, JournalEntryEmbeddingCandidate};
 pub use types::{Embedder, EmbedderError, Embedding};
 pub use worker_config::EmbeddingWorkerConfig;
 

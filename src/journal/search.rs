@@ -162,7 +162,9 @@ mod tests {
         database,
         journal::{
             embedding::{
-                EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
+                EmbedderError, Embedding, EmbeddingRepositoryError, EmbeddingSearchResult,
+                JournalEntryEmbeddingCandidate, SUPPORTED_EMBEDDING_DIMENSIONS,
+                SqliteEmbeddingRepository,
             },
             repository::JournalRepository,
         },
@@ -258,6 +260,42 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FakeIndex {
+        results: Vec<EmbeddingSearchResult>,
+    }
+
+    #[async_trait]
+    impl EmbeddingIndex for FakeIndex {
+        async fn store_embedding(
+            &self,
+            _journal_entry_id: i64,
+            _embedding_model: &str,
+            _embedding_dim: usize,
+            _embedding: &Embedding,
+        ) -> Result<bool, EmbeddingRepositoryError> {
+            unreachable!("search tests do not store through FakeIndex")
+        }
+
+        async fn find_entries_missing_embedding(
+            &self,
+            _embedding_model: &str,
+            _limit: u32,
+        ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
+            unreachable!("search tests do not backfill through FakeIndex")
+        }
+
+        async fn search_for_user(
+            &self,
+            _user_id: &str,
+            _embedding: &Embedding,
+            _embedding_model: &str,
+            _limit: usize,
+        ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
+            Ok(self.results.clone())
+        }
+    }
+
     #[async_trait]
     impl Embedder for FakeEmbedder {
         fn model(&self) -> &str {
@@ -278,6 +316,14 @@ mod tests {
         embedder: FakeEmbedder,
         repo: JournalRepository,
     ) -> SemanticSearchService<SqliteEmbeddingRepository, FakeEmbedder> {
+        SemanticSearchService::new(index, embedder, repo)
+    }
+
+    fn make_fake_index_service(
+        index: FakeIndex,
+        embedder: FakeEmbedder,
+        repo: JournalRepository,
+    ) -> SemanticSearchService<FakeIndex, FakeEmbedder> {
         SemanticSearchService::new(index, embedder, repo)
     }
 
@@ -312,6 +358,23 @@ mod tests {
         let results = service.search("7", "query").await.unwrap();
 
         assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_does_not_return_entries_without_embeddings() {
+        let (repo, index) = setup().await;
+
+        store_and_embed(&repo, &index, "1", "embedded entry", at(10, 0), 0).await;
+        repo.store(&incoming("2", "entry without embedding", at(11, 0)))
+            .await
+            .unwrap();
+
+        let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
+
+        let results = service.search("7", "query").await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].journal_entry.text, "embedded entry");
     }
 
     #[tokio::test]
@@ -441,6 +504,39 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].journal_entry.text, "real entry");
+    }
+
+    #[tokio::test]
+    async fn search_skips_index_results_that_cannot_be_loaded_for_user() {
+        let (repo, _index) = setup().await;
+        repo.store(&incoming("1", "kept entry", at(10, 0)))
+            .await
+            .unwrap();
+        let kept_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = '1'",
+        )
+        .fetch_one(repo.pool())
+        .await
+        .unwrap();
+        let index = FakeIndex {
+            results: vec![
+                EmbeddingSearchResult {
+                    journal_entry_id: 99_999,
+                    distance: 0.1,
+                },
+                EmbeddingSearchResult {
+                    journal_entry_id: kept_id,
+                    distance: 0.2,
+                },
+            ],
+        };
+        let service = make_fake_index_service(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
+
+        let results = service.search("7", "query").await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].journal_entry.text, "kept entry");
+        assert_eq!(results[0].distance, 0.2);
     }
 
     #[tokio::test]
