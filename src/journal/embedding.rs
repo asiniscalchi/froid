@@ -4,6 +4,7 @@ use std::{error::Error, fmt, mem::size_of_val};
 
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
+use tracing::{info, warn};
 
 pub const EMBEDDING_DIMENSIONS: usize = 4;
 
@@ -164,9 +165,18 @@ where
         };
 
         for candidate in candidates {
-            let Ok(embedding) = self.embedder.embed(&candidate.raw_text).await else {
-                result.failed += 1;
-                continue;
+            let embedding = match self.embedder.embed(&candidate.raw_text).await {
+                Ok(embedding) => embedding,
+                Err(error) => {
+                    result.failed += 1;
+                    warn!(
+                        journal_entry_id = candidate.journal_entry_id,
+                        embedding_model,
+                        error = %error,
+                        "failed to generate journal entry embedding"
+                    );
+                    continue;
+                }
             };
 
             match self
@@ -176,9 +186,25 @@ where
             {
                 Ok(true) => result.created += 1,
                 Ok(false) => {}
-                Err(_) => result.failed += 1,
+                Err(error) => {
+                    result.failed += 1;
+                    warn!(
+                        journal_entry_id = candidate.journal_entry_id,
+                        embedding_model,
+                        error = %error,
+                        "failed to store journal entry embedding"
+                    );
+                }
             }
         }
+
+        info!(
+            embedding_model,
+            attempted = result.attempted,
+            created = result.created,
+            failed = result.failed,
+            "completed journal entry embedding backfill"
+        );
 
         Ok(result)
     }
