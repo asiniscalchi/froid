@@ -1,29 +1,25 @@
-mod adapters;
-mod cli;
-mod database;
-mod handler;
-mod journal;
-mod messages;
-mod version;
-mod workers;
-
 use std::error::Error;
 
-use adapters::{Adapter, telegram::TelegramAdapter};
 use clap::Parser;
-use cli::{Cli, Command, ServeConfig};
-use journal::{
-    embedding::{
-        EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
+use froid::{
+    adapters::{Adapter, telegram::TelegramAdapter},
+    cli::{Cli, Command, ServeConfig},
+    database,
+    journal::{
+        embedding::{
+            EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
+        },
+        repository::JournalRepository,
+        review::{DailyReviewRuntimeConfig, configure_daily_review},
+        search::SemanticSearchService,
+        service::JournalService,
     },
-    repository::JournalRepository,
-    search::SemanticSearchService,
-    service::JournalService,
+    version,
+    workers::embedding::EmbeddingReconciliationWorker,
 };
 use sqlx::SqlitePool;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
-use workers::embedding::EmbeddingReconciliationWorker;
 
 #[tokio::main]
 async fn main() {
@@ -58,7 +54,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let embedding_config = EmbeddingConfig::from_env().ok();
 
             spawn_embedding_worker(&pool, &config, embedding_config.as_ref())?;
-            let journal_service = build_journal_service(pool, embedding_config);
+            let journal_service = build_journal_service(pool, embedding_config)?;
 
             TelegramAdapter::new(config.telegram_bot_token, journal_service)
                 .run()
@@ -91,8 +87,14 @@ fn spawn_embedding_worker(
 fn build_journal_service(
     pool: SqlitePool,
     embedding_config: Option<EmbeddingConfig>,
-) -> JournalService {
+) -> Result<JournalService, Box<dyn Error>> {
     let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
+
+    journal_service = configure_daily_review(
+        journal_service,
+        pool.clone(),
+        DailyReviewRuntimeConfig::from_env(),
+    )?;
 
     if let Some(cfg) = embedding_config
         && let Ok(search_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
@@ -106,7 +108,7 @@ fn build_journal_service(
         journal_service = journal_service.with_capture_embedding(capture_index, capture_embedder);
     }
 
-    journal_service
+    Ok(journal_service)
 }
 
 fn init_tracing() {

@@ -1,4 +1,3 @@
-use chrono::Utc;
 use teloxide::{prelude::*, types::Message};
 use tracing::{error, info};
 
@@ -57,7 +56,7 @@ async fn handle_message<H: MessageHandler>(
     if let Some(command) = parse_command(text) {
         let request = JournalCommandRequest {
             user_id: user_id.clone(),
-            received_at: Utc::now(),
+            received_at: message.date,
             command,
         };
 
@@ -104,7 +103,7 @@ fn incoming_from_text_message(message: &Message, user_id: String) -> IncomingMes
         source_message_id: message.id.to_string(),
         user_id,
         text: message.text().unwrap_or_default().to_string(),
-        received_at: Utc::now(),
+        received_at: message.date,
     }
 }
 
@@ -121,8 +120,16 @@ fn parse_command(text: &str) -> Option<JournalCommand> {
         "/recent" => parse_recent_argument(argument),
         "/today" => Some(JournalCommand::Today),
         "/stats" => Some(JournalCommand::Stats),
+        "/review" => Some(parse_review_argument(argument)),
         "/search" => Some(parse_search_argument(argument)),
         _ => None,
+    }
+}
+
+fn parse_review_argument(argument: Option<&str>) -> JournalCommand {
+    match argument {
+        Some("today") => JournalCommand::ReviewToday,
+        _ => JournalCommand::ReviewUsage,
     }
 }
 
@@ -183,6 +190,10 @@ mod tests {
         assert_eq!(incoming.source_message_id, "100");
         assert_eq!(incoming.user_id, "7");
         assert_eq!(incoming.text, "hello froid");
+        assert_eq!(
+            incoming.received_at,
+            chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+        );
     }
 
     #[test]
@@ -251,6 +262,40 @@ mod tests {
     #[test]
     fn parse_stats_command() {
         assert_eq!(parse_command("/stats"), Some(JournalCommand::Stats));
+    }
+
+    #[test]
+    fn parse_review_today_command() {
+        assert_eq!(
+            parse_command("/review today"),
+            Some(JournalCommand::ReviewToday)
+        );
+    }
+
+    #[test]
+    fn parse_review_today_command_strips_bot_name_suffix() {
+        assert_eq!(
+            parse_command("/review@mybot today"),
+            Some(JournalCommand::ReviewToday)
+        );
+    }
+
+    #[test]
+    fn parse_review_command_without_today_returns_usage() {
+        assert_eq!(parse_command("/review"), Some(JournalCommand::ReviewUsage));
+        assert_eq!(parse_command("/review "), Some(JournalCommand::ReviewUsage));
+    }
+
+    #[test]
+    fn parse_review_command_with_unsupported_argument_returns_usage() {
+        assert_eq!(
+            parse_command("/review yesterday"),
+            Some(JournalCommand::ReviewUsage)
+        );
+        assert_eq!(
+            parse_command("/review today extra"),
+            Some(JournalCommand::ReviewUsage)
+        );
     }
 
     #[test]
