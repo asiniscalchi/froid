@@ -4,6 +4,7 @@ mod database;
 mod handler;
 mod journal;
 mod messages;
+mod version;
 
 use std::error::Error;
 
@@ -11,6 +12,7 @@ use adapters::{Adapter, telegram::TelegramAdapter};
 use clap::Parser;
 use cli::{Cli, Command};
 use journal::{repository::JournalRepository, service::JournalService};
+use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
@@ -23,9 +25,10 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
-    init_tracing();
-
     let cli = Cli::parse();
+
+    init_tracing();
+    info!(version = version::VERSION, "starting froid");
 
     match cli.selected_command() {
         Command::Serve => {

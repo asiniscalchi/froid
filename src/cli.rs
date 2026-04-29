@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
 
+use crate::version;
+
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(version = version::VERSION, about)]
 pub struct Cli {
     #[arg(
         long,
@@ -140,5 +142,10 @@ mod tests {
     #[test]
     fn command_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn command_version_uses_build_version() {
+        assert_eq!(Cli::command().get_version(), Some(version::VERSION));
     }
 }
