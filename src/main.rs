@@ -5,6 +5,7 @@ mod handler;
 mod journal;
 mod messages;
 mod version;
+mod workers;
 
 use std::error::Error;
 
