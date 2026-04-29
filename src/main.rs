@@ -13,6 +13,7 @@ use froid::{
         review::{DailyReviewRuntimeConfig, configure_daily_review},
         search::SemanticSearchService,
         service::JournalService,
+        status::EmbeddingStatusConfig,
     },
     version,
     workers::embedding::EmbeddingReconciliationWorker,
@@ -98,14 +99,21 @@ fn build_journal_service(
 
     if let Some(cfg) = embedding_config
         && let Ok(search_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
-        && let Ok(capture_embedder) = RigOpenAiEmbedder::from_env(cfg)
+        && let Ok(capture_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
     {
         let search_index = SqliteEmbeddingRepository::new(pool.clone());
         let capture_index = SqliteEmbeddingRepository::new(pool.clone());
+        let status_index = SqliteEmbeddingRepository::new(pool.clone());
+        let status_config = EmbeddingStatusConfig {
+            model: cfg.model,
+            dimensions: cfg.dimensions,
+        };
         let search =
             SemanticSearchService::new(search_index, search_embedder, JournalRepository::new(pool));
         journal_service = journal_service.with_search(search);
         journal_service = journal_service.with_capture_embedding(capture_index, capture_embedder);
+        journal_service = journal_service.with_embedding_status_config(status_config);
+        journal_service = journal_service.with_pending_embedding_counter(status_index);
     }
 
     Ok(journal_service)

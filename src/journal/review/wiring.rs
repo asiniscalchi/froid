@@ -54,7 +54,9 @@ pub fn configure_daily_review(
         review_generator,
     );
 
-    Ok(journal_service.with_daily_review_runner(daily_review_service))
+    Ok(journal_service
+        .with_daily_review_runner(daily_review_service)
+        .with_daily_review_prompt_version(config.prompt.version))
 }
 
 #[cfg(test)]
@@ -182,6 +184,41 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.text, "No journal entries found for today.");
+
+        fs::remove_file(prompt_path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn configured_prompt_version_is_exposed_to_status() {
+        let prompt_path = temp_prompt_path("status-configured-version");
+        fs::write(&prompt_path, "Prompt text").unwrap();
+        let pool = setup_pool().await;
+
+        let service = configure_daily_review(
+            JournalService::new(JournalRepository::new(pool.clone())),
+            pool,
+            DailyReviewRuntimeConfig {
+                openai_api_key: Some("test-api-key".to_string()),
+                review: ReviewConfig::default(),
+                prompt: DailyReviewPromptConfig {
+                    path: prompt_path.clone(),
+                    version: "daily-review-v-test".to_string(),
+                },
+            },
+        )
+        .unwrap();
+
+        let response = service
+            .command(&JournalCommandRequest {
+                user_id: "7".to_string(),
+                received_at: Utc::now(),
+                command: JournalCommand::Status,
+            })
+            .await
+            .unwrap();
+
+        assert!(response.text.contains("- Generation: configured"));
+        assert!(response.text.contains("- Prompt: daily-review-v-test"));
 
         fs::remove_file(prompt_path).unwrap();
     }
