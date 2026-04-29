@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
     handler::MessageHandler,
@@ -9,8 +9,14 @@ use crate::{
         command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
         embedding::{Embedder, EmbedderError, Embedding, EmbeddingIndex, EmbeddingRepositoryError},
         responses::{
-            format_entries, help_response, message_saved_response, no_entries_response,
-            no_entries_today_response, recent_usage_response, start_response, stats_response,
+            daily_review_failure_response, daily_review_unavailable_response,
+            daily_review_usage_response, format_daily_review, format_entries, help_response,
+            message_saved_response, no_entries_response, no_entries_today_response,
+            recent_usage_response, start_response, stats_response,
+        },
+        review::{
+            DailyReviewResult,
+            service::{DailyReviewRunner, DailyReviewServiceError},
         },
         search::{
             SearchService, SemanticSearchService, format_search_results, search_empty_response,
@@ -27,6 +33,7 @@ pub struct JournalService {
     repository: JournalRepository,
     search: Option<Arc<dyn SearchService>>,
     capture_embedding: Option<Arc<dyn CaptureEmbeddingService>>,
+    daily_review: Option<Arc<dyn DailyReviewRunner>>,
 }
 
 impl JournalService {
@@ -35,6 +42,7 @@ impl JournalService {
             repository,
             search: None,
             capture_embedding: None,
+            daily_review: None,
         }
     }
 
@@ -55,6 +63,14 @@ impl JournalService {
         self.capture_embedding = Some(Arc::new(ImmediateCaptureEmbeddingService::new(
             index, embedder,
         )));
+        self
+    }
+
+    pub fn with_daily_review_runner<R>(mut self, daily_review: R) -> Self
+    where
+        R: DailyReviewRunner + 'static,
+    {
+        self.daily_review = Some(Arc::new(daily_review));
         self
     }
 
@@ -102,12 +118,55 @@ impl JournalService {
                 self.stats(&request.user_id, request.received_at.date_naive())
                     .await
             }
+            JournalCommand::ReviewToday => Ok(self
+                .review_today(&request.user_id, request.received_at.date_naive())
+                .await),
+            JournalCommand::ReviewUsage => Ok(OutgoingMessage {
+                text: daily_review_usage_response(),
+            }),
             JournalCommand::Search { query } => {
                 Ok(self.search_command(&request.user_id, query).await)
             }
             JournalCommand::SearchUsage => Ok(OutgoingMessage {
                 text: search_usage_response(),
             }),
+        }
+    }
+
+    async fn review_today(&self, user_id: &str, date: chrono::NaiveDate) -> OutgoingMessage {
+        let Some(daily_review) = &self.daily_review else {
+            return OutgoingMessage {
+                text: daily_review_unavailable_response(),
+            };
+        };
+
+        match daily_review.review_day(user_id, date).await {
+            Ok(DailyReviewResult::Existing(review) | DailyReviewResult::Generated(review)) => {
+                OutgoingMessage {
+                    text: format_daily_review(&review),
+                }
+            }
+            Ok(DailyReviewResult::EmptyDay) => OutgoingMessage {
+                text: no_entries_today_response(),
+            },
+            Ok(DailyReviewResult::GenerationFailed(failure)) => {
+                warn!(
+                    user_id = %failure.user_id,
+                    review_date = %failure.review_date,
+                    model = %failure.model,
+                    prompt_version = %failure.prompt_version,
+                    "failed to generate daily review"
+                );
+                OutgoingMessage {
+                    text: daily_review_failure_response(),
+                }
+            }
+            Err(error) => {
+                log_daily_review_service_error(&error);
+                OutgoingMessage {
+                    text: daily_review_failure_response(),
+                }
+            }
         }
     }
 
@@ -175,6 +234,10 @@ impl JournalService {
             text: stats_response(&stats),
         })
     }
+}
+
+fn log_daily_review_service_error(error: &DailyReviewServiceError) {
+    error!(%error, "failed to process daily review command");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,6 +331,9 @@ impl MessageHandler for JournalService {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use chrono::NaiveDate;
     use chrono::{TimeZone, Utc};
     use sqlx::SqlitePool;
 
@@ -280,6 +346,12 @@ mod tests {
                 EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
             },
             repository::JournalRepository,
+            review::{
+                DailyReview, DailyReviewFailure, DailyReviewResult, DailyReviewStatus,
+                generator::fake::FakeReviewGenerator,
+                repository::DailyReviewRepository,
+                service::{DailyReviewRunner, DailyReviewService},
+            },
             search::SemanticSearchService,
         },
         messages::MessageSource,
@@ -290,6 +362,45 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
         JournalService::new(JournalRepository::new(pool))
+    }
+
+    async fn setup_with_pool() -> (JournalService, SqlitePool) {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        (
+            JournalService::new(JournalRepository::new(pool.clone())),
+            pool,
+        )
+    }
+
+    async fn setup_with_daily_review_runner<R>(runner: R) -> JournalService
+    where
+        R: DailyReviewRunner + 'static,
+    {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        JournalService::new(JournalRepository::new(pool)).with_daily_review_runner(runner)
+    }
+
+    async fn setup_with_daily_review_service(
+        generator: FakeReviewGenerator,
+    ) -> (JournalService, DailyReviewRepository, JournalRepository) {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let journal_repo = JournalRepository::new(pool.clone());
+        let daily_review_repo = DailyReviewRepository::new(pool.clone());
+        let daily_review_service = DailyReviewService::new(
+            daily_review_repo.clone(),
+            JournalRepository::new(pool),
+            generator,
+        );
+        let service = JournalService::new(journal_repo.clone())
+            .with_daily_review_runner(daily_review_service);
+
+        (service, daily_review_repo, journal_repo)
     }
 
     async fn setup_with_search(
@@ -341,6 +452,40 @@ mod tests {
     }
 
     const TEST_MODEL: &str = "test-model";
+
+    #[derive(Debug, Clone)]
+    struct FakeDailyReviewRunner {
+        result: Result<DailyReviewResult, DailyReviewServiceError>,
+        calls: Arc<Mutex<Vec<(String, NaiveDate)>>>,
+    }
+
+    impl FakeDailyReviewRunner {
+        fn new(result: Result<DailyReviewResult, DailyReviewServiceError>) -> Self {
+            Self {
+                result,
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn calls(&self) -> Vec<(String, NaiveDate)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DailyReviewRunner for FakeDailyReviewRunner {
+        async fn review_day(
+            &self,
+            user_id: &str,
+            utc_date: NaiveDate,
+        ) -> Result<DailyReviewResult, DailyReviewServiceError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((user_id.to_string(), utc_date));
+            self.result.clone()
+        }
+    }
 
     #[derive(Clone)]
     struct FakeEmbedder {
@@ -405,6 +550,25 @@ mod tests {
             received_at: at(12, 0),
             command,
         }
+    }
+
+    fn daily_review(review_text: &str) -> DailyReview {
+        DailyReview {
+            id: 1,
+            user_id: "7".to_string(),
+            review_date: date(),
+            review_text: Some(review_text.to_string()),
+            model: "test-model".to_string(),
+            prompt_version: "v1".to_string(),
+            status: DailyReviewStatus::Completed,
+            error_message: None,
+            created_at: at(10, 0),
+            updated_at: at(10, 0),
+        }
+    }
+
+    fn date() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
     }
 
     #[tokio::test]
@@ -508,7 +672,237 @@ mod tests {
 
         assert!(outgoing.text.contains("/recent [number]"));
         assert!(outgoing.text.contains("/today"));
+        assert!(outgoing.text.contains("/review today"));
         assert!(outgoing.text.contains("/stats"));
+    }
+
+    #[tokio::test]
+    async fn review_usage_returns_usage_message() {
+        let service = setup().await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::ReviewUsage))
+            .await
+            .unwrap();
+
+        assert_eq!(outgoing.text, "Usage: /review today");
+    }
+
+    #[tokio::test]
+    async fn review_today_returns_unavailable_when_runner_is_not_configured() {
+        let (service, pool) = setup_with_pool().await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+        let review_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM daily_reviews")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outgoing.text,
+            "Daily review generation is not configured yet."
+        );
+        assert_eq!(review_count, 0);
+    }
+
+    #[tokio::test]
+    async fn review_today_returns_existing_review() {
+        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::Existing(daily_review(
+            "stored review",
+        ))));
+        let service = setup_with_daily_review_runner(runner.clone()).await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+
+        assert_eq!(outgoing.text, "Today's review\n\nstored review");
+        assert_eq!(runner.calls(), vec![("7".to_string(), date())]);
+    }
+
+    #[tokio::test]
+    async fn review_today_returns_generated_review() {
+        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::Generated(daily_review(
+            "generated review",
+        ))));
+        let service = setup_with_daily_review_runner(runner).await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+
+        assert_eq!(outgoing.text, "Today's review\n\ngenerated review");
+    }
+
+    #[tokio::test]
+    async fn review_today_returns_empty_day_response() {
+        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::EmptyDay));
+        let service = setup_with_daily_review_runner(runner).await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+
+        assert_eq!(outgoing.text, "No journal entries found for today.");
+    }
+
+    #[tokio::test]
+    async fn review_today_returns_failure_response_for_generation_failure() {
+        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::GenerationFailed(
+            DailyReviewFailure {
+                user_id: "7".to_string(),
+                review_date: date(),
+                model: "test-model".to_string(),
+                prompt_version: "v1".to_string(),
+                error_message: "provider down".to_string(),
+            },
+        )));
+        let service = setup_with_daily_review_runner(runner).await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outgoing.text,
+            "I could not generate today's review right now. Please try again later."
+        );
+    }
+
+    #[tokio::test]
+    async fn review_today_returns_failure_response_for_service_error() {
+        let runner = FakeDailyReviewRunner::new(Err(DailyReviewServiceError::Storage(
+            "database unavailable".to_string(),
+        )));
+        let service = setup_with_daily_review_runner(runner).await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outgoing.text,
+            "I could not generate today's review right now. Please try again later."
+        );
+    }
+
+    #[tokio::test]
+    async fn review_today_command_does_not_store_command_text_as_journal_entry() {
+        let (service, pool) = setup_with_pool().await;
+
+        service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+
+        let entry_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(entry_count, 0);
+    }
+
+    #[tokio::test]
+    async fn review_today_generates_and_persists_through_daily_review_service() {
+        let (service, daily_reviews, journal_entries) =
+            setup_with_daily_review_service(FakeReviewGenerator::succeeding("persisted review"))
+                .await;
+        journal_entries
+            .store(&incoming("1", "entry for review", at(10, 0)))
+            .await
+            .unwrap();
+
+        let outgoing = service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+        let stored = daily_reviews
+            .find_by_user_and_date("7", date())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(outgoing.text, "Today's review\n\npersisted review");
+        assert_eq!(stored.review_text, Some("persisted review".to_string()));
+        assert_eq!(stored.status, DailyReviewStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn review_today_uses_command_received_at_utc_date() {
+        let (service, _daily_reviews, journal_entries) = setup_with_daily_review_service(
+            FakeReviewGenerator::succeeding("requested date review"),
+        )
+        .await;
+        journal_entries
+            .store(&incoming(
+                "1",
+                "previous date",
+                Utc.with_ymd_and_hms(2026, 4, 27, 10, 0, 0).unwrap(),
+            ))
+            .await
+            .unwrap();
+        journal_entries
+            .store(&incoming("2", "requested date", at(10, 0)))
+            .await
+            .unwrap();
+
+        let outgoing = service
+            .command(&JournalCommandRequest {
+                user_id: "7".to_string(),
+                received_at: at(23, 59),
+                command: JournalCommand::ReviewToday,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(outgoing.text, "Today's review\n\nrequested date review");
+    }
+
+    #[tokio::test]
+    async fn review_today_is_isolated_by_user() {
+        let (service, _daily_reviews, journal_entries) =
+            setup_with_daily_review_service(FakeReviewGenerator::new(vec![
+                Ok("user seven review".to_string()),
+                Ok("user eight review".to_string()),
+            ]))
+            .await;
+        journal_entries
+            .store(&incoming("1", "user seven entry", at(10, 0)))
+            .await
+            .unwrap();
+        let other_user = IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: "42".to_string(),
+            source_message_id: "2".to_string(),
+            user_id: "8".to_string(),
+            text: "user eight entry".to_string(),
+            received_at: at(11, 0),
+        };
+        journal_entries.store(&other_user).await.unwrap();
+
+        let user_seven = service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+        let user_eight = service
+            .command(&JournalCommandRequest {
+                user_id: "8".to_string(),
+                received_at: at(12, 0),
+                command: JournalCommand::ReviewToday,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(user_seven.text, "Today's review\n\nuser seven review");
+        assert_eq!(user_eight.text, "Today's review\n\nuser eight review");
     }
 
     #[tokio::test]

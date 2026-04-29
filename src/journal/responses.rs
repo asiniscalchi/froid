@@ -1,4 +1,5 @@
 use super::entry::{JournalEntry, JournalStats};
+use super::review::DailyReview;
 
 pub(super) fn message_saved_response() -> String {
     "Message saved.".to_string()
@@ -12,7 +13,7 @@ pub(super) fn start_response() -> String {
 }
 
 pub(super) fn help_response() -> String {
-    "Commands:\n/recent [number] - show recent entries\n/today - show today's entries\n/stats - show journal stats\n/search <query> - search entries by meaning\n/help - show commands".to_string()
+    "Commands:\n/recent [number] - show recent entries\n/today - show today's entries\n/review today - generate today's review\n/stats - show journal stats\n/search <query> - search entries by meaning\n/help - show commands".to_string()
 }
 
 pub(super) fn recent_usage_response() -> String {
@@ -25,6 +26,25 @@ pub(super) fn no_entries_response() -> String {
 
 pub(super) fn no_entries_today_response() -> String {
     "No journal entries found for today.".to_string()
+}
+
+pub(super) fn daily_review_usage_response() -> String {
+    "Usage: /review today".to_string()
+}
+
+pub(super) fn daily_review_unavailable_response() -> String {
+    "Daily review generation is not configured yet.".to_string()
+}
+
+pub(super) fn daily_review_failure_response() -> String {
+    "I could not generate today's review right now. Please try again later.".to_string()
+}
+
+pub(super) fn format_daily_review(review: &DailyReview) -> String {
+    format!(
+        "Today's review\n\n{}",
+        review.review_text.as_deref().unwrap_or_default()
+    )
 }
 
 pub(super) fn stats_response(stats: &JournalStats) -> String {

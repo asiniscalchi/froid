@@ -45,6 +45,15 @@ pub struct DailyReviewService {
     generator: Arc<dyn ReviewGenerator>,
 }
 
+#[async_trait::async_trait]
+pub trait DailyReviewRunner: Send + Sync {
+    async fn review_day(
+        &self,
+        user_id: &str,
+        utc_date: NaiveDate,
+    ) -> Result<DailyReviewResult, DailyReviewServiceError>;
+}
+
 impl DailyReviewService {
     pub fn new<G>(
         daily_reviews: DailyReviewRepository,
@@ -105,6 +114,17 @@ impl DailyReviewService {
                 }))
             }
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl DailyReviewRunner for DailyReviewService {
+    async fn review_day(
+        &self,
+        user_id: &str,
+        utc_date: NaiveDate,
+    ) -> Result<DailyReviewResult, DailyReviewServiceError> {
+        DailyReviewService::review_day(self, user_id, utc_date).await
     }
 }
 
