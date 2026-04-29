@@ -5,15 +5,23 @@ mod handler;
 mod journal;
 mod messages;
 mod version;
+mod workers;
 
 use std::error::Error;
 
 use adapters::{Adapter, telegram::TelegramAdapter};
 use clap::Parser;
 use cli::{Cli, Command};
-use journal::{repository::JournalRepository, service::JournalService};
+use journal::{
+    embedding::{
+        EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
+    },
+    repository::JournalRepository,
+    service::JournalService,
+};
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
+use workers::embedding::EmbeddingReconciliationWorker;
 
 #[tokio::main]
 async fn main() {
@@ -44,6 +52,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let pool = database::connect_pool(&config.database_url).await?;
 
             sqlx::migrate!().run(&pool).await?;
+
+            if config.embedding_worker.enabled {
+                let embedding_config = EmbeddingConfig::from_env()?;
+                let embedder = RigOpenAiEmbedder::from_env(embedding_config)?;
+                let index = SqliteEmbeddingRepository::new(pool.clone());
+                let backfill_service = EmbeddingBackfillService::new(index, embedder);
+                let worker =
+                    EmbeddingReconciliationWorker::new(backfill_service, config.embedding_worker);
+                tokio::spawn(async move { worker.run_forever().await });
+            }
 
             let journal_service = JournalService::new(JournalRepository::new(pool));
 

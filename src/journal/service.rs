@@ -154,12 +154,14 @@ mod tests {
 
     use super::*;
     use crate::{
+        database,
         journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
         journal::repository::JournalRepository,
         messages::MessageSource,
     };
 
     async fn setup() -> JournalService {
+        database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
         JournalService::new(JournalRepository::new(pool))
