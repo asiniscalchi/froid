@@ -152,6 +152,11 @@ where
         embedding_model: &str,
         limit: u32,
     ) -> Result<BackfillResult, EmbeddingBackfillError> {
+        info!(
+            embedding_model,
+            limit, "starting journal entry embedding backfill"
+        );
+
         let candidates = self
             .index
             .find_entries_missing_embedding(embedding_model, limit)
