@@ -354,6 +354,7 @@ mod tests {
     struct FakeReviewProvider {
         result: Result<String, ReviewProviderError>,
         prompts: Arc<Mutex<Vec<String>>>,
+        models: Arc<Mutex<Vec<String>>>,
     }
 
     impl FakeReviewProvider {
@@ -361,6 +362,7 @@ mod tests {
             Self {
                 result: Ok(review_text.to_string()),
                 prompts: Arc::new(Mutex::new(Vec::new())),
+                models: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -368,11 +370,16 @@ mod tests {
             Self {
                 result: Err(ReviewProviderError::Request(error_message.to_string())),
                 prompts: Arc::new(Mutex::new(Vec::new())),
+                models: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
         fn prompts(&self) -> Vec<String> {
             self.prompts.lock().unwrap().clone()
+        }
+
+        fn models(&self) -> Vec<String> {
+            self.models.lock().unwrap().clone()
         }
     }
 
@@ -380,9 +387,10 @@ mod tests {
     impl ReviewProvider for FakeReviewProvider {
         async fn complete_daily_review(
             &self,
-            _model: &str,
+            model: &str,
             prompt: &str,
         ) -> Result<String, ReviewProviderError> {
+            self.models.lock().unwrap().push(model.to_string());
             self.prompts.lock().unwrap().push(prompt.to_string());
             self.result.clone()
         }
@@ -430,7 +438,7 @@ mod tests {
                 model: "custom-model".to_string(),
                 prompt_version: "custom-prompt".to_string(),
             },
-            provider,
+            provider.clone(),
         );
 
         assert_eq!(generator.model(), "custom-model");
@@ -442,6 +450,7 @@ mod tests {
                 .unwrap(),
             "review text"
         );
+        assert_eq!(provider.models(), vec!["custom-model".to_string()]);
     }
 
     #[tokio::test]
