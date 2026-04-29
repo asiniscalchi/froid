@@ -11,6 +11,7 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
 COPY migrations ./migrations
+COPY prompts ./prompts
 COPY src ./src
 
 RUN cargo build --locked --release
@@ -27,5 +28,6 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=builder /app/target/release/froid /usr/local/bin/froid
+COPY --from=builder /app/prompts ./prompts
 
 ENTRYPOINT ["/usr/local/bin/froid"]
