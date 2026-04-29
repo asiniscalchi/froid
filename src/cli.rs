@@ -13,13 +13,16 @@ pub struct Cli {
     )]
     telegram_bot_token: Option<String>,
 
+    #[arg(long, env = "DATA_DIR", global = true, default_value = "data")]
+    data_dir: String,
+
     #[arg(
         long,
-        env = "DATABASE_PATH",
+        env = "DATABASE_FILE",
         global = true,
-        default_value = "data/froid.sqlite3"
+        default_value = "froid.sqlite3"
     )]
-    database_path: String,
+    database_file: String,
 
     #[arg(long, env = "FROID_EMBEDDING_WORKER_ENABLED", global = true)]
     embedding_worker_enabled: Option<String>,
@@ -75,10 +78,12 @@ impl Cli {
         )
         .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
 
+        let database_path = format!("{}/{}", self.data_dir, self.database_file);
+
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
-            database_path: self.database_path.clone(),
-            database_url: format!("sqlite:{}", self.database_path),
+            database_url: format!("sqlite:{database_path}"),
+            database_path,
             embedding_worker,
         })
     }
@@ -96,16 +101,18 @@ mod tests {
             "froid",
             "--telegram-bot-token",
             "token",
-            "--database-path",
-            "custom.db",
+            "--data-dir",
+            "custom",
+            "--database-file",
+            "app.db",
             "serve",
         ]);
 
         let config = cli.serve_config().unwrap();
 
         assert_eq!(config.telegram_bot_token, "token");
-        assert_eq!(config.database_path, "custom.db");
-        assert_eq!(config.database_url, "sqlite:custom.db");
+        assert_eq!(config.database_path, "custom/app.db");
+        assert_eq!(config.database_url, "sqlite:custom/app.db");
     }
 
     #[test]
@@ -122,7 +129,8 @@ mod tests {
     fn defaults_to_serve_command() {
         let cli = Cli {
             telegram_bot_token: None,
-            database_path: "froid.sqlite3".to_string(),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
@@ -136,7 +144,8 @@ mod tests {
     fn rejects_missing_telegram_bot_token() {
         let cli = Cli {
             telegram_bot_token: None,
-            database_path: "froid.sqlite3".to_string(),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
@@ -157,7 +166,8 @@ mod tests {
     fn rejects_empty_telegram_bot_token() {
         let cli = Cli {
             telegram_bot_token: Some("  ".to_string()),
-            database_path: "froid.sqlite3".to_string(),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
@@ -183,7 +193,8 @@ mod tests {
     fn cli_with_token(token: &str) -> Cli {
         Cli {
             telegram_bot_token: Some(token.to_string()),
-            database_path: "froid.sqlite3".to_string(),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
@@ -213,7 +224,8 @@ mod tests {
     fn serve_config_worker_enabled_when_set_to_true() {
         let config = Cli {
             telegram_bot_token: Some("token".to_string()),
-            database_path: "froid.sqlite3".to_string(),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: Some("true".to_string()),
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
@@ -229,7 +241,8 @@ mod tests {
     fn serve_config_rejects_zero_batch_size() {
         let error = Cli {
             telegram_bot_token: Some("token".to_string()),
-            database_path: "froid.sqlite3".to_string(),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: None,
             embedding_worker_batch_size: Some("0".to_string()),
             embedding_worker_interval_seconds: None,
@@ -250,7 +263,8 @@ mod tests {
     fn serve_config_rejects_zero_interval() {
         let error = Cli {
             telegram_bot_token: Some("token".to_string()),
-            database_path: "froid.sqlite3".to_string(),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: Some("0".to_string()),
