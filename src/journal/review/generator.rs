@@ -6,7 +6,6 @@ use rig::{
     completion::Prompt,
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
-use serde_json::json;
 
 use crate::journal::{
     entry::JournalEntry,
@@ -14,7 +13,6 @@ use crate::journal::{
 };
 
 pub const DEFAULT_REVIEW_MODEL: &str = GPT_5_MINI;
-const GPT_5_MINIMAL_REASONING_EFFORT: &str = "minimal";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewConfig {
@@ -125,13 +123,7 @@ pub(crate) trait ReviewProvider: Send + Sync {
         model: &str,
         instructions: &str,
         prompt: &str,
-        options: &ReviewProviderOptions,
     ) -> Result<String, ReviewProviderError>;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReviewProviderOptions {
-    pub reasoning_effort: Option<&'static str>,
 }
 
 #[derive(Clone)]
@@ -154,19 +146,8 @@ impl ReviewProvider for RigOpenAiReviewProvider {
         model: &str,
         instructions: &str,
         prompt: &str,
-        options: &ReviewProviderOptions,
     ) -> Result<String, ReviewProviderError> {
-        let mut agent = self.client.agent(model).preamble(instructions);
-
-        if let Some(reasoning_effort) = options.reasoning_effort {
-            agent = agent.additional_params(json!({
-                "reasoning": {
-                    "effort": reasoning_effort,
-                },
-            }));
-        }
-
-        let agent = agent.build();
+        let agent = self.client.agent(model).preamble(instructions).build();
 
         agent
             .prompt(prompt)
@@ -228,24 +209,11 @@ impl ReviewGenerator for RigOpenAiReviewGenerator {
         entries: &[JournalEntry],
     ) -> Result<String, ReviewGenerationError> {
         let prompt = build_daily_review_prompt(entries);
-        let options = review_provider_options(&self.config.model);
         self.provider
-            .complete_daily_review(&self.config.model, &self.prompt.text, &prompt, &options)
+            .complete_daily_review(&self.config.model, &self.prompt.text, &prompt)
             .await
             .map_err(|error| ReviewGenerationError::new(error.to_string()))
     }
-}
-
-fn review_provider_options(model: &str) -> ReviewProviderOptions {
-    ReviewProviderOptions {
-        reasoning_effort: gpt_5_minimal_reasoning_model(model)
-            .then_some(GPT_5_MINIMAL_REASONING_EFFORT),
-    }
-}
-
-fn gpt_5_minimal_reasoning_model(model: &str) -> bool {
-    let model = model.trim();
-    model == "gpt-5" || model.starts_with("gpt-5-") || model.starts_with("gpt-5-mini")
 }
 
 fn build_daily_review_prompt(entries: &[JournalEntry]) -> String {
@@ -374,7 +342,6 @@ mod tests {
         instructions: Arc<Mutex<Vec<String>>>,
         prompts: Arc<Mutex<Vec<String>>>,
         models: Arc<Mutex<Vec<String>>>,
-        options: Arc<Mutex<Vec<ReviewProviderOptions>>>,
     }
 
     impl FakeReviewProvider {
@@ -384,7 +351,6 @@ mod tests {
                 instructions: Arc::new(Mutex::new(Vec::new())),
                 prompts: Arc::new(Mutex::new(Vec::new())),
                 models: Arc::new(Mutex::new(Vec::new())),
-                options: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -394,7 +360,6 @@ mod tests {
                 instructions: Arc::new(Mutex::new(Vec::new())),
                 prompts: Arc::new(Mutex::new(Vec::new())),
                 models: Arc::new(Mutex::new(Vec::new())),
-                options: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -409,10 +374,6 @@ mod tests {
         fn models(&self) -> Vec<String> {
             self.models.lock().unwrap().clone()
         }
-
-        fn options(&self) -> Vec<ReviewProviderOptions> {
-            self.options.lock().unwrap().clone()
-        }
     }
 
     #[async_trait]
@@ -422,7 +383,6 @@ mod tests {
             model: &str,
             instructions: &str,
             prompt: &str,
-            options: &ReviewProviderOptions,
         ) -> Result<String, ReviewProviderError> {
             self.models.lock().unwrap().push(model.to_string());
             self.instructions
@@ -430,7 +390,6 @@ mod tests {
                 .unwrap()
                 .push(instructions.to_string());
             self.prompts.lock().unwrap().push(prompt.to_string());
-            self.options.lock().unwrap().push(options.clone());
             self.result.clone()
         }
     }
@@ -501,36 +460,6 @@ mod tests {
         assert_eq!(
             provider.instructions(),
             vec!["injected instructions".to_string()]
-        );
-        assert_eq!(
-            provider.options(),
-            vec![ReviewProviderOptions {
-                reasoning_effort: None,
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn rig_review_generator_uses_minimal_reasoning_for_gpt_5_models() {
-        let provider = FakeReviewProvider::succeeding("review text");
-        let generator = RigOpenAiReviewGenerator::new(
-            ReviewConfig {
-                model: DEFAULT_REVIEW_MODEL.to_string(),
-            },
-            prompt("v1", "injected instructions"),
-            provider.clone(),
-        );
-
-        generator
-            .generate_daily_review(&[entry(28, "wrote a test")])
-            .await
-            .unwrap();
-
-        assert_eq!(
-            provider.options(),
-            vec![ReviewProviderOptions {
-                reasoning_effort: Some(GPT_5_MINIMAL_REASONING_EFFORT),
-            }]
         );
     }
 
