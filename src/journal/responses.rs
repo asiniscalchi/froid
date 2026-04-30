@@ -19,7 +19,7 @@ pub(super) fn start_response() -> String {
 }
 
 pub(super) fn help_response() -> String {
-    "Commands:\n/recent [number] - show recent entries\n/today - show today's entries\n/review [today|YYYY-MM-DD|-N] - generate daily review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
+    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/review [today|YYYY-MM-DD|-N] - generate daily review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
 }
 
 pub(super) fn recent_usage_response() -> String {
@@ -28,6 +28,18 @@ pub(super) fn recent_usage_response() -> String {
 
 pub(super) fn no_entries_response() -> String {
     "No journal entries found.".to_string()
+}
+
+pub(super) fn no_last_entry_response() -> String {
+    "No journal entry found.".to_string()
+}
+
+pub(super) fn no_entry_to_delete_response() -> String {
+    "No journal entry to delete.".to_string()
+}
+
+pub(super) fn deleted_last_entry_response() -> String {
+    "Deleted last entry.".to_string()
 }
 
 pub(super) fn no_entries_today_response() -> String {
@@ -137,4 +149,12 @@ pub(super) fn format_entries(entries: &[JournalEntry]) -> String {
         .map(|e| format!("{} - {}", e.received_at.format("%Y-%m-%d %H:%M"), e.text))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+pub(super) fn format_last_entry(entry: &JournalEntry) -> String {
+    format!(
+        "Last entry:\n\n\"{}\"\n\nReceived at: {}\n\nUse /undo to delete it.",
+        entry.text,
+        entry.received_at.format("%Y-%m-%d %H:%M")
+    )
 }

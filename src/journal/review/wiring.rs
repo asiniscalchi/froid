@@ -77,6 +77,7 @@ mod tests {
             command::{JournalCommand, JournalCommandRequest},
             review::prompt::DEFAULT_REVIEW_PROMPT_PATH,
         },
+        messages::MessageSource,
     };
 
     #[tokio::test]
@@ -98,6 +99,8 @@ mod tests {
 
         let response = service
             .command(&JournalCommandRequest {
+                source: MessageSource::Telegram,
+                source_conversation_id: "42".to_string(),
                 user_id: "7".to_string(),
                 received_at: Utc::now(),
                 command: JournalCommand::ReviewToday,
@@ -176,6 +179,8 @@ mod tests {
 
         let response = service
             .command(&JournalCommandRequest {
+                source: MessageSource::Telegram,
+                source_conversation_id: "42".to_string(),
                 user_id: "7".to_string(),
                 received_at: Utc::now(),
                 command: JournalCommand::ReviewToday,
@@ -210,6 +215,8 @@ mod tests {
 
         let response = service
             .command(&JournalCommandRequest {
+                source: MessageSource::Telegram,
+                source_conversation_id: "42".to_string(),
                 user_id: "7".to_string(),
                 received_at: Utc::now(),
                 command: JournalCommand::Status,

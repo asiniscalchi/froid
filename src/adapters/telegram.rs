@@ -59,6 +59,8 @@ async fn handle_message<H: MessageHandler>(
 
     if let Some(command) = parse_command(text, message.date) {
         let request = JournalCommandRequest {
+            source: MessageSource::Telegram,
+            source_conversation_id: message.chat.id.to_string(),
             user_id: user_id.clone(),
             received_at: message.date,
             command,
@@ -121,6 +123,8 @@ fn parse_command(text: &str, received_at: DateTime<Utc>) -> Option<JournalComman
     match command {
         "/start" => Some(JournalCommand::Start),
         "/help" => Some(JournalCommand::Help),
+        "/last" => Some(JournalCommand::Last),
+        "/undo" => Some(JournalCommand::Undo),
         "/recent" => parse_recent_argument(argument),
         "/today" => Some(JournalCommand::Today),
         "/stats" => Some(JournalCommand::Stats),
@@ -246,6 +250,18 @@ mod tests {
     #[test]
     fn parse_help_command() {
         assert_eq!(cmd("/help"), Some(JournalCommand::Help));
+    }
+
+    #[test]
+    fn parse_last_command() {
+        assert_eq!(cmd("/last"), Some(JournalCommand::Last));
+        assert_eq!(cmd("/last@mybot"), Some(JournalCommand::Last));
+    }
+
+    #[test]
+    fn parse_undo_command() {
+        assert_eq!(cmd("/undo"), Some(JournalCommand::Undo));
+        assert_eq!(cmd("/undo@mybot"), Some(JournalCommand::Undo));
     }
 
     #[test]
