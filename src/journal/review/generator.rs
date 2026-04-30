@@ -147,12 +147,7 @@ impl ReviewProvider for RigOpenAiReviewProvider {
         instructions: &str,
         prompt: &str,
     ) -> Result<String, ReviewProviderError> {
-        let agent = self
-            .client
-            .agent(model)
-            .preamble(instructions)
-            .max_tokens(700)
-            .build();
+        let agent = self.client.agent(model).preamble(instructions).build();
 
         agent
             .prompt(prompt)
