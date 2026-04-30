@@ -35,6 +35,7 @@ pub struct JournalService {
     embedding_status_config: Option<EmbeddingStatusConfig>,
     pending_embedding_counter: Option<Arc<dyn PendingEmbeddingCounter>>,
     daily_review_prompt_version: Option<String>,
+    daily_review_delivery_configured: bool,
 }
 
 impl JournalService {
@@ -49,6 +50,7 @@ impl JournalService {
             embedding_status_config: None,
             pending_embedding_counter: None,
             daily_review_prompt_version: None,
+            daily_review_delivery_configured: false,
         }
     }
 
@@ -95,6 +97,11 @@ impl JournalService {
 
     pub fn with_daily_review_prompt_version(mut self, prompt_version: impl Into<String>) -> Self {
         self.daily_review_prompt_version = Some(prompt_version.into());
+        self
+    }
+
+    pub fn with_daily_review_delivery_configured(mut self) -> Self {
+        self.daily_review_delivery_configured = true;
         self
     }
 
@@ -597,7 +604,7 @@ mod tests {
 
         assert_eq!(
             outgoing.text,
-            "Froid status\n\nJournal:\n- Total entries: 0\n- Entries today UTC: 0\n\nEmbeddings:\n- Semantic search: unavailable\n- Model: unavailable\n- Dimensions: unavailable\n- Pending embeddings: unavailable\n\nDaily review:\n- Generation: not configured\n- Delivery: not implemented\n- Date mode: UTC"
+            "Froid status\n\nJournal:\n- Total entries: 0\n- Entries today: 0\n\nEmbeddings:\n- Semantic search: unavailable\n- Model: unavailable\n- Dimensions: unavailable\n- Pending embeddings: unavailable\n\nDaily review:\n- Generation: not configured\n- Delivery: not configured"
         );
     }
 
@@ -644,7 +651,7 @@ mod tests {
             .unwrap();
 
         assert!(outgoing.text.contains("- Total entries: 2"));
-        assert!(outgoing.text.contains("- Entries today UTC: 1"));
+        assert!(outgoing.text.contains("- Entries today: 1"));
     }
 
     #[tokio::test]
@@ -753,8 +760,22 @@ mod tests {
 
         assert!(outgoing.text.contains("- Generation: configured"));
         assert!(outgoing.text.contains("- Prompt: daily-review-v1"));
-        assert!(outgoing.text.contains("- Delivery: not implemented"));
-        assert!(outgoing.text.contains("- Date mode: UTC"));
+        assert!(outgoing.text.contains("- Delivery: not configured"));
+    }
+
+    #[tokio::test]
+    async fn status_reports_delivery_configured_when_delivery_is_wired() {
+        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::EmptyDay));
+        let service = setup_with_daily_review_runner(runner)
+            .await
+            .with_daily_review_delivery_configured();
+
+        let outgoing = service
+            .command(&command(JournalCommand::Status))
+            .await
+            .unwrap();
+
+        assert!(outgoing.text.contains("- Delivery: configured"));
     }
 
     #[tokio::test]

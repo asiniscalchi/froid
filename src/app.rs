@@ -41,8 +41,10 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let daily_review_config = DailyReviewRuntimeConfig::from_env();
 
     spawn_embedding_worker(&pool, &config, embedding_config.as_ref())?;
-    spawn_daily_review_delivery_worker(&pool, &config, daily_review_config.clone())?;
-    let journal_service = build_journal_service(pool, embedding_config, daily_review_config)?;
+    let delivery_configured =
+        spawn_daily_review_delivery_worker(&pool, &config, daily_review_config.clone())?;
+    let journal_service =
+        build_journal_service(pool, embedding_config, daily_review_config, delivery_configured)?;
 
     TelegramAdapter::new(config.telegram_bot_token, journal_service)
         .run()
@@ -74,14 +76,14 @@ fn spawn_daily_review_delivery_worker(
     pool: &SqlitePool,
     config: &ServeConfig,
     daily_review_config: DailyReviewRuntimeConfig,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<bool, Box<dyn Error>> {
     if !config.daily_review_delivery.enabled {
-        return Ok(());
+        return Ok(false);
     }
 
     let Some(daily_review_service) = build_daily_review_service(pool.clone(), daily_review_config)?
     else {
-        return Ok(());
+        return Ok(false);
     };
 
     let worker = DailyReviewDeliveryWorker::new(
@@ -93,17 +95,22 @@ fn spawn_daily_review_delivery_worker(
     );
     tokio::spawn(async move { worker.run_forever().await });
 
-    Ok(())
+    Ok(true)
 }
 
 fn build_journal_service(
     pool: SqlitePool,
     embedding_config: Option<EmbeddingConfig>,
     daily_review_config: DailyReviewRuntimeConfig,
+    delivery_configured: bool,
 ) -> Result<JournalService, Box<dyn Error>> {
     let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
 
     journal_service = configure_daily_review(journal_service, pool.clone(), daily_review_config)?;
+
+    if delivery_configured {
+        journal_service = journal_service.with_daily_review_delivery_configured();
+    }
 
     if let Some(cfg) = embedding_config
         && let Ok(search_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())

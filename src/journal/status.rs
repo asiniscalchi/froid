@@ -31,7 +31,6 @@ pub struct DailyReviewStatus {
     pub generation: DailyReviewGenerationStatus,
     pub prompt_version: Option<String>,
     pub delivery: DailyReviewDeliveryStatus,
-    pub date_mode: DailyReviewDateMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,10 +41,6 @@ pub enum DailyReviewGenerationStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DailyReviewDeliveryStatus {
-    NotImplemented,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DailyReviewDateMode {
-    Utc,
+    Configured,
+    NotConfigured,
 }

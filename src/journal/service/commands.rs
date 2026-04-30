@@ -17,8 +17,8 @@ use crate::{
             search_unavailable_response, search_usage_response,
         },
         status::{
-            DailyReviewDateMode, DailyReviewDeliveryStatus, DailyReviewGenerationStatus,
-            DailyReviewStatus, EmbeddingStatus, SemanticSearchStatus, StatusReport,
+            DailyReviewDeliveryStatus, DailyReviewGenerationStatus, DailyReviewStatus,
+            EmbeddingStatus, SemanticSearchStatus, StatusReport,
         },
     },
     messages::OutgoingMessage,
@@ -307,11 +307,16 @@ impl JournalService {
             DailyReviewGenerationStatus::NotConfigured
         };
 
+        let delivery = if self.daily_review_delivery_configured {
+            DailyReviewDeliveryStatus::Configured
+        } else {
+            DailyReviewDeliveryStatus::NotConfigured
+        };
+
         DailyReviewStatus {
             generation,
             prompt_version: self.daily_review_prompt_version.clone(),
-            delivery: DailyReviewDeliveryStatus::NotImplemented,
-            date_mode: DailyReviewDateMode::Utc,
+            delivery,
         }
     }
 }

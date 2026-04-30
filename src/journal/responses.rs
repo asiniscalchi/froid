@@ -95,7 +95,7 @@ pub(super) fn stats_response(stats: &JournalStats) -> String {
 
 pub(super) fn status_response(report: &StatusReport) -> String {
     format!(
-        "Froid status\n\nJournal:\n- Total entries: {}\n- Entries today UTC: {}\n\nEmbeddings:\n{}\n\nDaily review:\n{}",
+        "Froid status\n\nJournal:\n- Total entries: {}\n- Entries today: {}\n\nEmbeddings:\n{}\n\nDaily review:\n{}",
         report.journal.total_entries,
         report.journal.entries_today,
         format_embedding_status(&report.embeddings),
@@ -134,7 +134,8 @@ fn format_daily_review_status(status: &DailyReviewStatus) -> String {
         DailyReviewGenerationStatus::NotConfigured => "not configured",
     };
     let delivery = match status.delivery {
-        DailyReviewDeliveryStatus::NotImplemented => "not implemented",
+        DailyReviewDeliveryStatus::Configured => "configured",
+        DailyReviewDeliveryStatus::NotConfigured => "not configured",
     };
 
     let mut lines = vec![format!("- Generation: {generation}")];
@@ -142,7 +143,6 @@ fn format_daily_review_status(status: &DailyReviewStatus) -> String {
         lines.push(format!("- Prompt: {prompt_version}"));
     }
     lines.push(format!("- Delivery: {delivery}"));
-    lines.push("- Date mode: UTC".to_string());
 
     lines.join("\n")
 }
