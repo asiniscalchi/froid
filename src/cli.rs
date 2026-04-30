@@ -1,6 +1,9 @@
 use clap::{Parser, Subcommand};
 
-use crate::{journal::embedding::EmbeddingWorkerConfig, version};
+use crate::{
+    journal::{embedding::EmbeddingWorkerConfig, review::DailyReviewDeliveryWorkerConfig},
+    version,
+};
 
 #[derive(Debug, Parser)]
 #[command(version = version::VERSION, about)]
@@ -33,6 +36,16 @@ pub struct Cli {
     #[arg(long, env = "FROID_EMBEDDING_WORKER_INTERVAL_SECONDS", global = true)]
     embedding_worker_interval_seconds: Option<String>,
 
+    #[arg(long, env = "FROID_DAILY_REVIEW_DELIVERY_ENABLED", global = true)]
+    daily_review_delivery_enabled: Option<String>,
+
+    #[arg(
+        long,
+        env = "FROID_DAILY_REVIEW_DELIVERY_INTERVAL_SECONDS",
+        global = true
+    )]
+    daily_review_delivery_interval_seconds: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -49,6 +62,7 @@ pub struct ServeConfig {
     pub database_path: String,
     pub database_url: String,
     pub embedding_worker: EmbeddingWorkerConfig,
+    pub daily_review_delivery: DailyReviewDeliveryWorkerConfig,
 }
 
 impl Cli {
@@ -78,6 +92,12 @@ impl Cli {
         )
         .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
 
+        let daily_review_delivery = DailyReviewDeliveryWorkerConfig::from_values(
+            self.daily_review_delivery_enabled.clone(),
+            self.daily_review_delivery_interval_seconds.clone(),
+        )
+        .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
+
         let database_path = format!("{}/{}", self.data_dir, self.database_file);
 
         Ok(ServeConfig {
@@ -85,6 +105,7 @@ impl Cli {
             database_url: format!("sqlite:{database_path}"),
             database_path,
             embedding_worker,
+            daily_review_delivery,
         })
     }
 }
@@ -134,6 +155,8 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
             command: None,
         };
 
@@ -149,6 +172,8 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
             command: None,
         };
 
@@ -171,6 +196,8 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
             command: None,
         };
 
@@ -198,6 +225,8 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
             command: None,
         }
     }
@@ -229,6 +258,8 @@ mod tests {
             embedding_worker_enabled: Some("true".to_string()),
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
             command: None,
         }
         .serve_config()
@@ -246,6 +277,8 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: Some("0".to_string()),
             embedding_worker_interval_seconds: None,
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
             command: None,
         }
         .serve_config()
@@ -268,6 +301,8 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: Some("0".to_string()),
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
             command: None,
         }
         .serve_config()
@@ -278,6 +313,66 @@ mod tests {
             error
                 .to_string()
                 .contains("FROID_EMBEDDING_WORKER_INTERVAL_SECONDS")
+        );
+    }
+
+    #[test]
+    fn serve_config_daily_review_delivery_disabled_by_default() {
+        let config = cli_with_token("token").serve_config().unwrap();
+
+        assert!(!config.daily_review_delivery.enabled);
+    }
+
+    #[test]
+    fn serve_config_daily_review_delivery_defaults_to_interval_300s() {
+        let config = cli_with_token("token").serve_config().unwrap();
+
+        assert_eq!(
+            config.daily_review_delivery.interval,
+            std::time::Duration::from_secs(300)
+        );
+    }
+
+    #[test]
+    fn serve_config_daily_review_delivery_enabled_when_set_to_true() {
+        let config = Cli {
+            telegram_bot_token: Some("token".to_string()),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
+            daily_review_delivery_enabled: Some("true".to_string()),
+            daily_review_delivery_interval_seconds: None,
+            command: None,
+        }
+        .serve_config()
+        .unwrap();
+
+        assert!(config.daily_review_delivery.enabled);
+    }
+
+    #[test]
+    fn serve_config_rejects_zero_daily_review_delivery_interval() {
+        let error = Cli {
+            telegram_bot_token: Some("token".to_string()),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: Some("0".to_string()),
+            command: None,
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(
+            error
+                .to_string()
+                .contains("FROID_DAILY_REVIEW_DELIVERY_INTERVAL_SECONDS")
         );
     }
 }
