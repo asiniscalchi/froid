@@ -12,13 +12,16 @@ use crate::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
         },
         repository::JournalRepository,
-        review::{DailyReviewRuntimeConfig, configure_daily_review},
+        review::{DailyReviewRuntimeConfig, build_daily_review_service, configure_daily_review},
         search::SemanticSearchService,
         service::JournalService,
         status::EmbeddingStatusConfig,
     },
     version,
-    workers::embedding::EmbeddingReconciliationWorker,
+    workers::{
+        daily_review::{DailyReviewDeliveryWorker, TelegramDailyReviewSender},
+        embedding::EmbeddingReconciliationWorker,
+    },
 };
 
 pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
@@ -35,9 +38,11 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     sqlx::migrate!().run(&pool).await?;
 
     let embedding_config = EmbeddingConfig::from_env().ok();
+    let daily_review_config = DailyReviewRuntimeConfig::from_env();
 
     spawn_embedding_worker(&pool, &config, embedding_config.as_ref())?;
-    let journal_service = build_journal_service(pool, embedding_config)?;
+    spawn_daily_review_delivery_worker(&pool, &config, daily_review_config.clone())?;
+    let journal_service = build_journal_service(pool, embedding_config, daily_review_config)?;
 
     TelegramAdapter::new(config.telegram_bot_token, journal_service)
         .run()
@@ -65,17 +70,40 @@ fn spawn_embedding_worker(
     Ok(())
 }
 
+fn spawn_daily_review_delivery_worker(
+    pool: &SqlitePool,
+    config: &ServeConfig,
+    daily_review_config: DailyReviewRuntimeConfig,
+) -> Result<(), Box<dyn Error>> {
+    if !config.daily_review_delivery.enabled {
+        return Ok(());
+    }
+
+    let Some(daily_review_service) = build_daily_review_service(pool.clone(), daily_review_config)?
+    else {
+        return Ok(());
+    };
+
+    let worker = DailyReviewDeliveryWorker::new(
+        JournalRepository::new(pool.clone()),
+        crate::journal::review::repository::DailyReviewRepository::new(pool.clone()),
+        daily_review_service,
+        TelegramDailyReviewSender::new(config.telegram_bot_token.clone()),
+        config.daily_review_delivery.clone(),
+    );
+    tokio::spawn(async move { worker.run_forever().await });
+
+    Ok(())
+}
+
 fn build_journal_service(
     pool: SqlitePool,
     embedding_config: Option<EmbeddingConfig>,
+    daily_review_config: DailyReviewRuntimeConfig,
 ) -> Result<JournalService, Box<dyn Error>> {
     let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
 
-    journal_service = configure_daily_review(
-        journal_service,
-        pool.clone(),
-        DailyReviewRuntimeConfig::from_env(),
-    )?;
+    journal_service = configure_daily_review(journal_service, pool.clone(), daily_review_config)?;
 
     if let Some(cfg) = embedding_config
         && let Ok(search_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())

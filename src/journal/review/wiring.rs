@@ -34,12 +34,26 @@ pub fn configure_daily_review(
     pool: SqlitePool,
     config: DailyReviewRuntimeConfig,
 ) -> Result<JournalService, Box<dyn std::error::Error>> {
+    let prompt_version = config.prompt.version.clone();
+    let Some(daily_review_service) = build_daily_review_service(pool, config)? else {
+        return Ok(journal_service);
+    };
+
+    Ok(journal_service
+        .with_daily_review_runner(daily_review_service)
+        .with_daily_review_prompt_version(prompt_version))
+}
+
+pub fn build_daily_review_service(
+    pool: SqlitePool,
+    config: DailyReviewRuntimeConfig,
+) -> Result<Option<DailyReviewService>, Box<dyn std::error::Error>> {
     let Some(openai_api_key) = config
         .openai_api_key
         .filter(|value| !value.trim().is_empty())
     else {
         warn!("daily review generation is not configured");
-        return Ok(journal_service);
+        return Ok(None);
     };
 
     let review_prompt = config.prompt.load()?;
@@ -54,9 +68,7 @@ pub fn configure_daily_review(
         review_generator,
     );
 
-    Ok(journal_service
-        .with_daily_review_runner(daily_review_service)
-        .with_daily_review_prompt_version(config.prompt.version))
+    Ok(Some(daily_review_service))
 }
 
 #[cfg(test)]

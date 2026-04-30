@@ -69,7 +69,7 @@ pub(super) fn format_daily_review(review: &DailyReview) -> String {
     )
 }
 
-pub(super) fn format_daily_review_for_date(review: &DailyReview, date: NaiveDate) -> String {
+pub(crate) fn format_daily_review_for_date(review: &DailyReview, date: NaiveDate) -> String {
     format!(
         "Daily review for {}\n\n{}",
         date.format("%Y-%m-%d"),
