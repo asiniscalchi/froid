@@ -11,6 +11,8 @@ use crate::journal::{
     },
 };
 
+const EMPTY_REVIEW_ERROR: &str = "daily review generator returned an empty review";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DailyReviewServiceError {
     Storage(String),
@@ -82,6 +84,10 @@ impl DailyReviewService {
 
         if let Some(review) = &existing
             && review.status == DailyReviewStatus::Completed
+            && review
+                .review_text
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty())
         {
             return Ok(DailyReviewResult::Existing(review.clone()));
         }
@@ -96,26 +102,51 @@ impl DailyReviewService {
 
         match self.generator.generate_daily_review(&entries).await {
             Ok(review_text) => {
+                let review_text = review_text.trim();
+                if review_text.is_empty() {
+                    return self
+                        .store_failed_review(
+                            user_id,
+                            utc_date,
+                            model,
+                            prompt_version,
+                            EMPTY_REVIEW_ERROR,
+                        )
+                        .await;
+                }
+
                 let review = self
                     .daily_reviews
-                    .upsert_completed(user_id, utc_date, &review_text, model, prompt_version)
+                    .upsert_completed(user_id, utc_date, review_text, model, prompt_version)
                     .await?;
                 Ok(DailyReviewResult::Generated(review))
             }
             Err(error) => {
                 let error_message = error.to_string();
-                self.daily_reviews
-                    .upsert_failed(user_id, utc_date, model, prompt_version, &error_message)
-                    .await?;
-                Ok(DailyReviewResult::GenerationFailed(DailyReviewFailure {
-                    user_id: user_id.to_string(),
-                    review_date: utc_date,
-                    model: model.to_string(),
-                    prompt_version: prompt_version.to_string(),
-                    error_message,
-                }))
+                self.store_failed_review(user_id, utc_date, model, prompt_version, &error_message)
+                    .await
             }
         }
+    }
+
+    async fn store_failed_review(
+        &self,
+        user_id: &str,
+        utc_date: NaiveDate,
+        model: &str,
+        prompt_version: &str,
+        error_message: &str,
+    ) -> Result<DailyReviewResult, DailyReviewServiceError> {
+        self.daily_reviews
+            .upsert_failed(user_id, utc_date, model, prompt_version, error_message)
+            .await?;
+        Ok(DailyReviewResult::GenerationFailed(DailyReviewFailure {
+            user_id: user_id.to_string(),
+            review_date: utc_date,
+            model: model.to_string(),
+            prompt_version: prompt_version.to_string(),
+            error_message: error_message.to_string(),
+        }))
     }
 }
 
