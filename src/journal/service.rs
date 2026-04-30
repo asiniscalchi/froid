@@ -469,6 +469,8 @@ mod tests {
             prompt_version: "v1".to_string(),
             status: DailyReviewStatus::Completed,
             error_message: None,
+            delivered_at: None,
+            delivery_error: None,
             created_at: at(10, 0),
             updated_at: at(10, 0),
         }

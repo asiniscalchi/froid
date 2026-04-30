@@ -22,6 +22,8 @@ pub struct DailyReview {
     pub prompt_version: String,
     pub status: DailyReviewStatus,
     pub error_message: Option<String>,
+    pub delivered_at: Option<DateTime<Utc>>,
+    pub delivery_error: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
