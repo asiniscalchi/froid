@@ -174,44 +174,32 @@ impl JournalService {
     }
 
     async fn review_today(&self, user_id: &str, date: chrono::NaiveDate) -> OutgoingMessage {
-        let Some(daily_review) = &self.daily_review else {
-            return OutgoingMessage {
-                text: daily_review_unavailable_response(),
-            };
-        };
-
-        match daily_review.review_day(user_id, date).await {
-            Ok(DailyReviewResult::Existing(review) | DailyReviewResult::Generated(review)) => {
-                OutgoingMessage {
-                    text: format_daily_review(&review),
-                }
-            }
-            Ok(DailyReviewResult::EmptyDay) => OutgoingMessage {
-                text: no_entries_today_response(),
-            },
-            Ok(DailyReviewResult::GenerationFailed(failure)) => {
-                warn!(
-                    user_id = %failure.user_id,
-                    review_date = %failure.review_date,
-                    model = %failure.model,
-                    prompt_version = %failure.prompt_version,
-                    error = %failure.error_message,
-                    "failed to generate daily review"
-                );
-                OutgoingMessage {
-                    text: daily_review_failure_response(),
-                }
-            }
-            Err(error) => {
-                error!(%error, "failed to process daily review command");
-                OutgoingMessage {
-                    text: daily_review_failure_response(),
-                }
-            }
-        }
+        self.run_review(
+            user_id,
+            date,
+            format_daily_review,
+            no_entries_today_response,
+        )
+        .await
     }
 
     async fn review_date(&self, user_id: &str, date: chrono::NaiveDate) -> OutgoingMessage {
+        self.run_review(
+            user_id,
+            date,
+            |review| format_daily_review_for_date(review, date),
+            || no_entries_for_date_response(date),
+        )
+        .await
+    }
+
+    async fn run_review(
+        &self,
+        user_id: &str,
+        date: chrono::NaiveDate,
+        format_review: impl Fn(&crate::journal::review::DailyReview) -> String,
+        format_empty: impl Fn() -> String,
+    ) -> OutgoingMessage {
         let Some(daily_review) = &self.daily_review else {
             return OutgoingMessage {
                 text: daily_review_unavailable_response(),
@@ -221,11 +209,11 @@ impl JournalService {
         match daily_review.review_day(user_id, date).await {
             Ok(DailyReviewResult::Existing(review) | DailyReviewResult::Generated(review)) => {
                 OutgoingMessage {
-                    text: format_daily_review_for_date(&review, date),
+                    text: format_review(&review),
                 }
             }
             Ok(DailyReviewResult::EmptyDay) => OutgoingMessage {
-                text: no_entries_for_date_response(date),
+                text: format_empty(),
             },
             Ok(DailyReviewResult::GenerationFailed(failure)) => {
                 warn!(
