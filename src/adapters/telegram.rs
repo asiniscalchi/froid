@@ -1,9 +1,13 @@
 use teloxide::{prelude::*, types::Message};
 use tracing::{error, info};
 
+use chrono::{DateTime, NaiveDate, Utc};
+
 use crate::{
     handler::MessageHandler,
-    journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
+    journal::command::{
+        DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest, MAX_REVIEW_OFFSET,
+    },
     messages::{IncomingMessage, MessageSource},
 };
 
@@ -53,7 +57,7 @@ async fn handle_message<H: MessageHandler>(
         .map(|u| u.id.to_string())
         .unwrap_or_else(|| message.chat.id.to_string());
 
-    if let Some(command) = parse_command(text) {
+    if let Some(command) = parse_command(text, message.date) {
         let request = JournalCommandRequest {
             user_id: user_id.clone(),
             received_at: message.date,
@@ -107,7 +111,7 @@ fn incoming_from_text_message(message: &Message, user_id: String) -> IncomingMes
     }
 }
 
-fn parse_command(text: &str) -> Option<JournalCommand> {
+fn parse_command(text: &str, received_at: DateTime<Utc>) -> Option<JournalCommand> {
     let mut parts = text.trim().splitn(2, char::is_whitespace);
     let command = parts.next()?;
     // strip optional @botname suffix
@@ -121,16 +125,44 @@ fn parse_command(text: &str) -> Option<JournalCommand> {
         "/today" => Some(JournalCommand::Today),
         "/stats" => Some(JournalCommand::Stats),
         "/status" => Some(JournalCommand::Status),
-        "/review" => Some(parse_review_argument(argument)),
+        "/review" => Some(parse_review_argument(argument, received_at)),
         "/search" => Some(parse_search_argument(argument)),
         _ => None,
     }
 }
 
-fn parse_review_argument(argument: Option<&str>) -> JournalCommand {
+fn parse_review_argument(argument: Option<&str>, received_at: DateTime<Utc>) -> JournalCommand {
+    let today = received_at.date_naive();
     match argument {
-        Some("today") => JournalCommand::ReviewToday,
-        _ => JournalCommand::ReviewUsage,
+        None | Some("today") => JournalCommand::ReviewToday,
+        Some(arg) if arg.starts_with('-') => parse_review_relative_offset(&arg[1..], today),
+        Some(arg) => parse_review_explicit_date(arg, today),
+    }
+}
+
+fn parse_review_relative_offset(digits: &str, today: NaiveDate) -> JournalCommand {
+    match digits.parse::<u32>() {
+        Ok(0) | Err(_) => JournalCommand::ReviewUsage,
+        Ok(offset) if offset > MAX_REVIEW_OFFSET => JournalCommand::ReviewError {
+            message: format!(
+                "Offset -{offset} exceeds the maximum allowed offset of {MAX_REVIEW_OFFSET} days."
+            ),
+        },
+        Ok(offset) => JournalCommand::ReviewDate {
+            date: today - chrono::Duration::days(i64::from(offset)),
+        },
+    }
+}
+
+fn parse_review_explicit_date(arg: &str, today: NaiveDate) -> JournalCommand {
+    match NaiveDate::parse_from_str(arg, "%Y-%m-%d") {
+        Ok(date) if date > today => JournalCommand::ReviewError {
+            message: format!(
+                "Date {date} is in the future. Only past and present dates are supported."
+            ),
+        },
+        Ok(date) => JournalCommand::ReviewDate { date },
+        Err(_) => JournalCommand::ReviewUsage,
     }
 }
 
@@ -160,10 +192,19 @@ fn parse_recent_argument(argument: Option<&str>) -> Option<JournalCommand> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
     use serde_json::json;
 
     use super::*;
     use crate::messages::MessageSource;
+
+    fn received_at() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 4, 29, 12, 0, 0).unwrap()
+    }
+
+    fn cmd(text: &str) -> Option<JournalCommand> {
+        parse_command(text, received_at())
+    }
 
     #[test]
     fn maps_telegram_text_message_to_internal_message() {
@@ -199,18 +240,18 @@ mod tests {
 
     #[test]
     fn parse_start_command() {
-        assert_eq!(parse_command("/start"), Some(JournalCommand::Start));
+        assert_eq!(cmd("/start"), Some(JournalCommand::Start));
     }
 
     #[test]
     fn parse_help_command() {
-        assert_eq!(parse_command("/help"), Some(JournalCommand::Help));
+        assert_eq!(cmd("/help"), Some(JournalCommand::Help));
     }
 
     #[test]
     fn parse_recent_command_with_no_argument_uses_default_limit() {
         assert_eq!(
-            parse_command("/recent"),
+            cmd("/recent"),
             Some(JournalCommand::Recent {
                 requested_limit: DEFAULT_RECENT_LIMIT
             })
@@ -220,7 +261,7 @@ mod tests {
     #[test]
     fn parse_recent_command_with_explicit_limit() {
         assert_eq!(
-            parse_command("/recent 5"),
+            cmd("/recent 5"),
             Some(JournalCommand::Recent { requested_limit: 5 })
         );
     }
@@ -228,83 +269,167 @@ mod tests {
     #[test]
     fn parse_recent_command_strips_bot_name_suffix() {
         assert_eq!(
-            parse_command("/recent@mybot"),
+            cmd("/recent@mybot"),
             Some(JournalCommand::Recent {
                 requested_limit: DEFAULT_RECENT_LIMIT
             })
         );
         assert_eq!(
-            parse_command("/recent@mybot 3"),
+            cmd("/recent@mybot 3"),
             Some(JournalCommand::Recent { requested_limit: 3 })
         );
     }
 
     #[test]
     fn parse_recent_command_returns_usage_for_invalid_argument() {
-        assert_eq!(
-            parse_command("/recent abc"),
-            Some(JournalCommand::RecentUsage)
-        );
-        assert_eq!(
-            parse_command("/recent 0"),
-            Some(JournalCommand::RecentUsage)
-        );
-        assert_eq!(
-            parse_command("/recent -3"),
-            Some(JournalCommand::RecentUsage)
-        );
+        assert_eq!(cmd("/recent abc"), Some(JournalCommand::RecentUsage));
+        assert_eq!(cmd("/recent 0"), Some(JournalCommand::RecentUsage));
+        assert_eq!(cmd("/recent -3"), Some(JournalCommand::RecentUsage));
     }
 
     #[test]
     fn parse_today_command() {
-        assert_eq!(parse_command("/today"), Some(JournalCommand::Today));
+        assert_eq!(cmd("/today"), Some(JournalCommand::Today));
     }
 
     #[test]
     fn parse_stats_command() {
-        assert_eq!(parse_command("/stats"), Some(JournalCommand::Stats));
+        assert_eq!(cmd("/stats"), Some(JournalCommand::Stats));
     }
 
     #[test]
     fn parse_status_command() {
-        assert_eq!(parse_command("/status"), Some(JournalCommand::Status));
+        assert_eq!(cmd("/status"), Some(JournalCommand::Status));
     }
 
     #[test]
     fn parse_status_command_strips_bot_name_suffix() {
-        assert_eq!(parse_command("/status@mybot"), Some(JournalCommand::Status));
+        assert_eq!(cmd("/status@mybot"), Some(JournalCommand::Status));
+    }
+
+    #[test]
+    fn parse_review_no_argument_returns_today() {
+        assert_eq!(cmd("/review"), Some(JournalCommand::ReviewToday));
+        assert_eq!(cmd("/review "), Some(JournalCommand::ReviewToday));
     }
 
     #[test]
     fn parse_review_today_command() {
-        assert_eq!(
-            parse_command("/review today"),
-            Some(JournalCommand::ReviewToday)
-        );
+        assert_eq!(cmd("/review today"), Some(JournalCommand::ReviewToday));
     }
 
     #[test]
     fn parse_review_today_command_strips_bot_name_suffix() {
         assert_eq!(
-            parse_command("/review@mybot today"),
+            cmd("/review@mybot today"),
             Some(JournalCommand::ReviewToday)
         );
+        assert_eq!(cmd("/review@mybot"), Some(JournalCommand::ReviewToday));
     }
 
     #[test]
-    fn parse_review_command_without_today_returns_usage() {
-        assert_eq!(parse_command("/review"), Some(JournalCommand::ReviewUsage));
-        assert_eq!(parse_command("/review "), Some(JournalCommand::ReviewUsage));
-    }
-
-    #[test]
-    fn parse_review_command_with_unsupported_argument_returns_usage() {
+    fn parse_review_explicit_date_returns_review_date() {
         assert_eq!(
-            parse_command("/review yesterday"),
-            Some(JournalCommand::ReviewUsage)
+            cmd("/review 2026-04-29"),
+            Some(JournalCommand::ReviewDate {
+                date: NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()
+            })
         );
         assert_eq!(
-            parse_command("/review today extra"),
+            cmd("/review 2026-04-28"),
+            Some(JournalCommand::ReviewDate {
+                date: NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_review_explicit_date_strips_bot_name_suffix() {
+        assert_eq!(
+            cmd("/review@mybot 2026-04-28"),
+            Some(JournalCommand::ReviewDate {
+                date: NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_review_future_date_returns_error() {
+        assert_eq!(
+            cmd("/review 2026-04-30"),
+            Some(JournalCommand::ReviewError {
+                message:
+                    "Date 2026-04-30 is in the future. Only past and present dates are supported."
+                        .to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_review_relative_offset_returns_review_date() {
+        assert_eq!(
+            cmd("/review -1"),
+            Some(JournalCommand::ReviewDate {
+                date: NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
+            })
+        );
+        assert_eq!(
+            cmd("/review -7"),
+            Some(JournalCommand::ReviewDate {
+                date: NaiveDate::from_ymd_opt(2026, 4, 22).unwrap()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_review_relative_offset_strips_bot_name_suffix() {
+        assert_eq!(
+            cmd("/review@mybot -1"),
+            Some(JournalCommand::ReviewDate {
+                date: NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_review_zero_offset_returns_usage() {
+        assert_eq!(cmd("/review -0"), Some(JournalCommand::ReviewUsage));
+    }
+
+    #[test]
+    fn parse_review_positive_offset_returns_usage() {
+        assert_eq!(cmd("/review +1"), Some(JournalCommand::ReviewUsage));
+        assert_eq!(cmd("/review 1"), Some(JournalCommand::ReviewUsage));
+    }
+
+    #[test]
+    fn parse_review_offset_exceeding_max_returns_error() {
+        assert_eq!(
+            cmd("/review -366"),
+            Some(JournalCommand::ReviewError {
+                message: "Offset -366 exceeds the maximum allowed offset of 365 days.".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_review_invalid_date_format_returns_usage() {
+        assert_eq!(cmd("/review 04-29"), Some(JournalCommand::ReviewUsage));
+        assert_eq!(cmd("/review 2026-13-01"), Some(JournalCommand::ReviewUsage));
+        assert_eq!(cmd("/review not-a-date"), Some(JournalCommand::ReviewUsage));
+    }
+
+    #[test]
+    fn parse_review_natural_language_returns_usage() {
+        assert_eq!(cmd("/review yesterday"), Some(JournalCommand::ReviewUsage));
+        assert_eq!(cmd("/review monday"), Some(JournalCommand::ReviewUsage));
+        assert_eq!(cmd("/review last week"), Some(JournalCommand::ReviewUsage));
+    }
+
+    #[test]
+    fn parse_review_extra_words_after_today_returns_usage() {
+        assert_eq!(
+            cmd("/review today extra"),
             Some(JournalCommand::ReviewUsage)
         );
     }
@@ -312,7 +437,7 @@ mod tests {
     #[test]
     fn parse_search_command_with_query() {
         assert_eq!(
-            parse_command("/search anxiety before meetings"),
+            cmd("/search anxiety before meetings"),
             Some(JournalCommand::Search {
                 query: "anxiety before meetings".to_string()
             })
@@ -322,7 +447,7 @@ mod tests {
     #[test]
     fn parse_search_command_strips_bot_name_suffix() {
         assert_eq!(
-            parse_command("/search@mybot something"),
+            cmd("/search@mybot something"),
             Some(JournalCommand::Search {
                 query: "something".to_string()
             })
@@ -331,13 +456,13 @@ mod tests {
 
     #[test]
     fn parse_search_command_without_query_returns_usage() {
-        assert_eq!(parse_command("/search"), Some(JournalCommand::SearchUsage));
+        assert_eq!(cmd("/search"), Some(JournalCommand::SearchUsage));
     }
 
     #[test]
     fn parse_search_command_treats_all_words_after_command_as_query() {
         assert_eq!(
-            parse_command("/search word1 word2 word3"),
+            cmd("/search word1 word2 word3"),
             Some(JournalCommand::Search {
                 query: "word1 word2 word3".to_string()
             })
@@ -345,9 +470,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_recent_command_returns_none_for_non_command() {
-        assert_eq!(parse_command("hello"), None);
-        assert_eq!(parse_command("/other"), None);
+    fn parse_returns_none_for_non_command() {
+        assert_eq!(cmd("hello"), None);
+        assert_eq!(cmd("/other"), None);
     }
 
     fn telegram_message(value: serde_json::Value) -> Message {
