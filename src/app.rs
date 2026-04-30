@@ -43,8 +43,12 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     spawn_embedding_worker(&pool, &config, embedding_config.as_ref())?;
     let delivery_configured =
         spawn_daily_review_delivery_worker(&pool, &config, daily_review_config.clone())?;
-    let journal_service =
-        build_journal_service(pool, embedding_config, daily_review_config, delivery_configured)?;
+    let journal_service = build_journal_service(
+        pool,
+        embedding_config,
+        daily_review_config,
+        delivery_configured,
+    )?;
 
     TelegramAdapter::new(config.telegram_bot_token, journal_service)
         .run()
