@@ -1,3 +1,5 @@
+use chrono::NaiveDate;
+
 use super::entry::{JournalEntry, JournalStats};
 use super::review::DailyReview;
 use super::status::{
@@ -17,7 +19,7 @@ pub(super) fn start_response() -> String {
 }
 
 pub(super) fn help_response() -> String {
-    "Commands:\n/recent [number] - show recent entries\n/today - show today's entries\n/review today - generate today's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
+    "Commands:\n/recent [number] - show recent entries\n/today - show today's entries\n/review [today|YYYY-MM-DD|-N] - generate daily review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
 }
 
 pub(super) fn recent_usage_response() -> String {
@@ -33,7 +35,7 @@ pub(super) fn no_entries_today_response() -> String {
 }
 
 pub(super) fn daily_review_usage_response() -> String {
-    "Usage: /review today".to_string()
+    "Usage: /review [today|YYYY-MM-DD|-N]\n\nExamples:\n/review\n/review today\n/review 2026-04-29\n/review -1\n/review -7".to_string()
 }
 
 pub(super) fn daily_review_unavailable_response() -> String {
@@ -49,6 +51,18 @@ pub(super) fn format_daily_review(review: &DailyReview) -> String {
         "Today's review\n\n{}",
         review.review_text.as_deref().unwrap_or_default()
     )
+}
+
+pub(super) fn format_daily_review_for_date(review: &DailyReview, date: NaiveDate) -> String {
+    format!(
+        "Daily review for {}\n\n{}",
+        date.format("%Y-%m-%d"),
+        review.review_text.as_deref().unwrap_or_default()
+    )
+}
+
+pub(super) fn no_entries_for_date_response(date: NaiveDate) -> String {
+    format!("No journal entries found for {}.", date.format("%Y-%m-%d"))
 }
 
 pub(super) fn stats_response(stats: &JournalStats) -> String {
