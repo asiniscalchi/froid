@@ -22,6 +22,10 @@ pub(super) fn help_response() -> String {
     "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/review [today|YYYY-MM-DD|-N] - generate daily review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
 }
 
+pub(super) fn unknown_command_response(command: &str) -> String {
+    format!("Unknown command: {command}\n\n{}", help_response())
+}
+
 pub(super) fn recent_usage_response() -> String {
     "Usage: /recent [number]\n\nExamples:\n/recent\n/recent 5".to_string()
 }
