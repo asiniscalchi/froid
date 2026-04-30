@@ -151,7 +151,6 @@ impl ReviewProvider for RigOpenAiReviewProvider {
             .client
             .agent(model)
             .preamble(instructions)
-            .temperature(0.2)
             .max_tokens(700)
             .build();
 
