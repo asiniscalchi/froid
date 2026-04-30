@@ -271,8 +271,10 @@ mod tests {
         journal::{
             repository::JournalRepository,
             review::{
-                generator::fake::FakeReviewGenerator, repository::DailyReviewRepository,
-                service::DailyReviewService,
+                DailyReviewResult,
+                generator::fake::FakeReviewGenerator,
+                repository::DailyReviewRepository,
+                service::{DailyReviewService, DailyReviewServiceError},
             },
         },
         messages::IncomingMessage,
@@ -353,8 +355,76 @@ mod tests {
         (worker, daily_reviews, journal_entries, sender)
     }
 
+    #[derive(Clone)]
+    struct FakeRunner {
+        result: Result<DailyReviewResult, DailyReviewServiceError>,
+    }
+
+    impl FakeRunner {
+        fn returning(result: Result<DailyReviewResult, DailyReviewServiceError>) -> Self {
+            Self { result }
+        }
+    }
+
+    #[async_trait]
+    impl DailyReviewRunner for FakeRunner {
+        async fn review_day(
+            &self,
+            _user_id: &str,
+            _utc_date: NaiveDate,
+        ) -> Result<DailyReviewResult, DailyReviewServiceError> {
+            self.result.clone()
+        }
+    }
+
+    async fn setup_with_fake_runner(
+        runner_result: Result<DailyReviewResult, DailyReviewServiceError>,
+        sender: FakeSender,
+    ) -> (
+        DailyReviewDeliveryWorker<FakeRunner, FakeSender>,
+        DailyReviewRepository,
+        JournalRepository,
+        FakeSender,
+    ) {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+
+        let journal_entries = JournalRepository::new(pool.clone());
+        let daily_reviews = DailyReviewRepository::new(pool.clone());
+        let runner = FakeRunner::returning(runner_result);
+        let worker = DailyReviewDeliveryWorker::new(
+            journal_entries.clone(),
+            daily_reviews.clone(),
+            runner,
+            sender.clone(),
+            DailyReviewDeliveryWorkerConfig {
+                enabled: true,
+                interval: std::time::Duration::from_secs(300),
+            },
+        );
+
+        (worker, daily_reviews, journal_entries, sender)
+    }
+
     fn date() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
+    }
+
+    fn entry_for(
+        user_id: &str,
+        conversation_id: &str,
+        message_id: &str,
+        text: &str,
+    ) -> IncomingMessage {
+        IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: conversation_id.to_string(),
+            source_message_id: message_id.to_string(),
+            user_id: user_id.to_string(),
+            text: text.to_string(),
+            received_at: Utc.with_ymd_and_hms(2026, 4, 28, 12, 0, 0).unwrap(),
+        }
     }
 
     fn at_date(source_message_id: &str, text: &str) -> IncomingMessage {
@@ -468,6 +538,162 @@ mod tests {
         assert_eq!(
             review.delivery_error,
             Some("telegram unavailable".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn run_once_returns_empty_result_when_no_entries() {
+        let (worker, _, _, _) = setup(
+            FakeReviewGenerator::succeeding("irrelevant"),
+            FakeSender::succeeding(),
+        )
+        .await;
+
+        let result = worker.run_once_for_date(date()).await.unwrap();
+
+        assert_eq!(
+            result,
+            DailyReviewDeliveryResult {
+                attempted: 0,
+                delivered: 0,
+                skipped: 0,
+                failed: 0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn run_once_skips_when_runner_returns_empty_day() {
+        let sender = FakeSender::succeeding();
+        let (worker, _, journal_entries, sender) =
+            setup_with_fake_runner(Ok(DailyReviewResult::EmptyDay), sender).await;
+        journal_entries
+            .store(&at_date("1", "an entry"))
+            .await
+            .unwrap();
+
+        let result = worker.run_once_for_date(date()).await.unwrap();
+
+        assert_eq!(
+            result,
+            DailyReviewDeliveryResult {
+                attempted: 1,
+                delivered: 0,
+                skipped: 1,
+                failed: 0,
+            }
+        );
+        assert!(sender.sent().is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_once_counts_as_failed_when_generation_fails() {
+        let sender = FakeSender::succeeding();
+        let (worker, _, journal_entries, sender) =
+            setup(FakeReviewGenerator::failing("generator error"), sender).await;
+        journal_entries
+            .store(&at_date("1", "an entry"))
+            .await
+            .unwrap();
+
+        let result = worker.run_once_for_date(date()).await.unwrap();
+
+        assert_eq!(
+            result,
+            DailyReviewDeliveryResult {
+                attempted: 1,
+                delivered: 0,
+                skipped: 0,
+                failed: 1,
+            }
+        );
+        assert!(sender.sent().is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_once_records_runner_error_as_delivery_failure() {
+        let sender = FakeSender::succeeding();
+        let (worker, daily_reviews, journal_entries, _) = setup_with_fake_runner(
+            Err(DailyReviewServiceError::Storage("db error".to_string())),
+            sender,
+        )
+        .await;
+        journal_entries
+            .store(&at_date("1", "an entry"))
+            .await
+            .unwrap();
+        daily_reviews
+            .upsert_completed("7", date(), "existing review", "model", "v1")
+            .await
+            .unwrap();
+
+        let result = worker.run_once_for_date(date()).await.unwrap();
+
+        assert_eq!(
+            result,
+            DailyReviewDeliveryResult {
+                attempted: 1,
+                delivered: 0,
+                skipped: 0,
+                failed: 1,
+            }
+        );
+        let review = daily_reviews
+            .find_by_user_and_date("7", date())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(review.delivery_error, Some("db error".to_string()));
+        assert_eq!(review.delivered_at, None);
+    }
+
+    #[tokio::test]
+    async fn run_once_delivers_to_multiple_conversations() {
+        let sender = FakeSender::succeeding();
+        let (worker, daily_reviews, journal_entries, sender) =
+            setup(FakeReviewGenerator::succeeding("review text"), sender).await;
+        journal_entries
+            .store(&entry_for("7", "42", "1", "first"))
+            .await
+            .unwrap();
+        journal_entries
+            .store(&entry_for("8", "99", "2", "second"))
+            .await
+            .unwrap();
+
+        let result = worker.run_once_for_date(date()).await.unwrap();
+
+        assert_eq!(
+            result,
+            DailyReviewDeliveryResult {
+                attempted: 2,
+                delivered: 2,
+                skipped: 0,
+                failed: 0,
+            }
+        );
+        let sent = sender.sent();
+        assert_eq!(sent.len(), 2);
+        let chat_ids: Vec<&str> = sent.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(chat_ids.contains(&"42"));
+        assert!(chat_ids.contains(&"99"));
+        assert!(
+            daily_reviews
+                .find_by_user_and_date("7", date())
+                .await
+                .unwrap()
+                .unwrap()
+                .delivered_at
+                .is_some()
+        );
+        assert!(
+            daily_reviews
+                .find_by_user_and_date("8", date())
+                .await
+                .unwrap()
+                .unwrap()
+                .delivered_at
+                .is_some()
         );
     }
 }
