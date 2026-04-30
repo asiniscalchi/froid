@@ -1,3 +1,4 @@
+mod delivery_config;
 pub mod generator;
 pub mod prompt;
 pub mod repository;
@@ -6,9 +7,10 @@ pub mod wiring;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
+pub use delivery_config::DailyReviewDeliveryWorkerConfig;
 pub use generator::{ReviewConfig, RigOpenAiReviewGenerator};
 pub use prompt::{DailyReviewPrompt, DailyReviewPromptConfig, DailyReviewPromptError};
-pub use wiring::{DailyReviewRuntimeConfig, configure_daily_review};
+pub use wiring::{DailyReviewRuntimeConfig, build_daily_review_service, configure_daily_review};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyReview {
@@ -20,6 +22,8 @@ pub struct DailyReview {
     pub prompt_version: String,
     pub status: DailyReviewStatus,
     pub error_message: Option<String>,
+    pub delivered_at: Option<DateTime<Utc>>,
+    pub delivery_error: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

@@ -6,6 +6,12 @@ use crate::messages::MessageSource;
 
 use super::entry::{JournalEntry, JournalStats, StoredJournalEntry};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalConversation {
+    pub user_id: String,
+    pub source_conversation_id: String,
+}
+
 fn map_entry(row: SqliteRow) -> JournalEntry {
     JournalEntry {
         text: row.get("raw_text"),
@@ -178,6 +184,39 @@ impl JournalRepository {
         .await?;
 
         Ok(rows.into_iter().map(map_entry).collect())
+    }
+
+    pub async fn conversations_with_entries_for_date(
+        &self,
+        source: &MessageSource,
+        date: NaiveDate,
+    ) -> Result<Vec<JournalConversation>, sqlx::Error> {
+        let start = Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap());
+        let end = start + Duration::days(1);
+
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT user_id, source_conversation_id
+            FROM journal_entries
+            WHERE source = ?
+              AND received_at >= ?
+              AND received_at < ?
+            ORDER BY user_id ASC, source_conversation_id ASC
+            "#,
+        )
+        .bind(source.to_string())
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| JournalConversation {
+                user_id: row.get("user_id"),
+                source_conversation_id: row.get("source_conversation_id"),
+            })
+            .collect())
     }
 
     pub async fn fetch_by_ids(
@@ -531,6 +570,57 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].text, "first");
         assert_eq!(entries[1].text, "second");
+    }
+
+    #[tokio::test]
+    async fn conversations_with_entries_for_date_returns_distinct_source_conversations() {
+        let repo = setup().await;
+
+        repo.store(&incoming_for_conversation("42", "1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming_for_conversation("42", "2", "second", at(11, 0)))
+            .await
+            .unwrap();
+        repo.store(&IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: "99".to_string(),
+            source_message_id: "3".to_string(),
+            user_id: "8".to_string(),
+            text: "other user".to_string(),
+            received_at: at(12, 0),
+        })
+        .await
+        .unwrap();
+        repo.store(&IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: "100".to_string(),
+            source_message_id: "4".to_string(),
+            user_id: "9".to_string(),
+            text: "tomorrow".to_string(),
+            received_at: Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
+        })
+        .await
+        .unwrap();
+
+        let conversations = repo
+            .conversations_with_entries_for_date(&MessageSource::Telegram, date())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            conversations,
+            vec![
+                JournalConversation {
+                    user_id: "7".to_string(),
+                    source_conversation_id: "42".to_string(),
+                },
+                JournalConversation {
+                    user_id: "8".to_string(),
+                    source_conversation_id: "99".to_string(),
+                },
+            ]
+        );
     }
 
     async fn stored_id(repo: &JournalRepository, source_message_id: &str) -> i64 {
