@@ -85,7 +85,6 @@ impl DailyReviewRepository {
                 status = 'completed',
                 error_message = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE daily_reviews.status = 'failed'
             "#,
         )
         .bind(user_id)
@@ -280,15 +279,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_review_is_not_overwritten() {
+    async fn upsert_completed_overwrites_existing_completed_row() {
         let repo = setup().await;
 
         let original = repo
             .upsert_completed("user-1", date(), "original", "test-model", "v1")
             .await
             .unwrap();
-        let after_completed = repo
+        let updated = repo
             .upsert_completed("user-1", date(), "new review", "new-model", "v2")
+            .await
+            .unwrap();
+
+        assert_eq!(updated.id, original.id);
+        assert_eq!(updated.created_at, original.created_at);
+        assert_eq!(updated.review_text, Some("new review".to_string()));
+        assert_eq!(updated.model, "new-model");
+        assert_eq!(updated.prompt_version, "v2");
+        assert_eq!(updated.status, DailyReviewStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn upsert_failed_does_not_overwrite_completed_review() {
+        let repo = setup().await;
+
+        let original = repo
+            .upsert_completed("user-1", date(), "original", "test-model", "v1")
             .await
             .unwrap();
         let after_failed = repo
@@ -296,7 +312,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(after_completed, original);
         assert_eq!(after_failed, original);
     }
 

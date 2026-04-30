@@ -1,5 +1,7 @@
 use std::{error::Error, fmt, sync::Arc};
 
+use tracing::warn;
+
 use chrono::NaiveDate;
 
 use crate::journal::{
@@ -75,13 +77,22 @@ impl DailyReviewService {
         user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<DailyReviewResult, DailyReviewServiceError> {
-        if let Some(review) = self
+        let existing = self
             .daily_reviews
             .find_by_user_and_date(user_id, utc_date)
-            .await?
+            .await?;
+
+        if let Some(review) = &existing
             && review.status == DailyReviewStatus::Completed
         {
-            return Ok(DailyReviewResult::Existing(review));
+            let latest_entry_at = self
+                .journal_entries
+                .latest_entry_received_at_for_user_date(user_id, utc_date)
+                .await?;
+            let is_fresh = latest_entry_at.is_none_or(|at| at <= review.updated_at);
+            if is_fresh {
+                return Ok(DailyReviewResult::Existing(review.clone()));
+            }
         }
 
         let entries = self.journal_entries.fetch_today(user_id, utc_date).await?;
@@ -91,6 +102,9 @@ impl DailyReviewService {
 
         let model = self.generator.model();
         let prompt_version = self.generator.prompt_version();
+        let has_existing_completed = existing
+            .as_ref()
+            .is_some_and(|r| r.status == DailyReviewStatus::Completed);
 
         match self.generator.generate_daily_review(&entries).await {
             Ok(review_text) => {
@@ -102,9 +116,20 @@ impl DailyReviewService {
             }
             Err(error) => {
                 let error_message = error.to_string();
-                self.daily_reviews
-                    .upsert_failed(user_id, utc_date, model, prompt_version, &error_message)
-                    .await?;
+                if has_existing_completed {
+                    warn!(
+                        user_id = user_id,
+                        review_date = %utc_date,
+                        model = model,
+                        prompt_version = prompt_version,
+                        error = %error_message,
+                        "stale review regeneration failed, preserving existing completed review"
+                    );
+                } else {
+                    self.daily_reviews
+                        .upsert_failed(user_id, utc_date, model, prompt_version, &error_message)
+                        .await?;
+                }
                 Ok(DailyReviewResult::GenerationFailed(DailyReviewFailure {
                     user_id: user_id.to_string(),
                     review_date: utc_date,
@@ -442,6 +467,272 @@ mod tests {
         let error = service.review_day("user-1", date()).await.unwrap_err();
 
         assert!(matches!(error, DailyReviewServiceError::Storage(_)));
+    }
+
+    fn at(h: u32, m: u32) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 4, 28, h, m, 0).unwrap()
+    }
+
+    // Backdates the updated_at of the daily_review row for user-1 / date() so that
+    // entries with received_at after the backdated time will be detected as stale.
+    async fn backdate_review_updated_at(journal_entries: &JournalRepository, updated_at: &str) {
+        sqlx::query(
+            "UPDATE daily_reviews SET updated_at = ? WHERE user_id = 'user-1' AND review_date = '2026-04-28'",
+        )
+        .bind(updated_at)
+        .execute(journal_entries.pool())
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn fresh_completed_review_is_returned_without_calling_generator() {
+        let (service, daily_reviews, journal_entries, generator) =
+            setup(FakeReviewGenerator::succeeding("new review")).await;
+        journal_entries
+            .store(&incoming("user-1", "1", "early entry", at(9, 0)))
+            .await
+            .unwrap();
+        let existing = daily_reviews
+            .upsert_completed("user-1", date(), "existing review", "model", "v1")
+            .await
+            .unwrap();
+        // Review updated_at is wall-clock now; entry received_at is 2026-04-28 09:00.
+        // Since entry is older than review, review is fresh.
+
+        let result = service.review_day("user-1", date()).await.unwrap();
+
+        assert_eq!(result, DailyReviewResult::Existing(existing));
+        assert_eq!(generator.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_completed_review_is_regenerated_when_newer_entry_exists() {
+        let (service, daily_reviews, journal_entries, generator) =
+            setup(FakeReviewGenerator::succeeding("regenerated review")).await;
+        journal_entries
+            .store(&incoming("user-1", "1", "early entry", at(9, 0)))
+            .await
+            .unwrap();
+        let before_regen = daily_reviews
+            .upsert_completed("user-1", date(), "old review", "model", "v1")
+            .await
+            .unwrap();
+        // Backdate review so a new same-day entry at 11:00 looks newer.
+        backdate_review_updated_at(&journal_entries, "2026-04-28T09:30:00.000Z").await;
+        let existing = daily_reviews
+            .find_by_user_and_date("user-1", date())
+            .await
+            .unwrap()
+            .unwrap();
+        journal_entries
+            .store(&incoming("user-1", "2", "new entry", at(11, 0)))
+            .await
+            .unwrap();
+
+        let result = service.review_day("user-1", date()).await.unwrap();
+
+        assert!(
+            matches!(result, DailyReviewResult::Generated(ref r) if r.review_text == Some("regenerated review".to_string()))
+        );
+        assert_eq!(generator.calls(), 1);
+        let stored = daily_reviews
+            .find_by_user_and_date("user-1", date())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.id, before_regen.id);
+        assert_eq!(stored.created_at, before_regen.created_at);
+        assert!(stored.updated_at > existing.updated_at);
+        assert_eq!(stored.review_text, Some("regenerated review".to_string()));
+        assert_eq!(stored.status, DailyReviewStatus::Completed);
+        assert_eq!(stored.error_message, None);
+    }
+
+    #[tokio::test]
+    async fn stale_review_regeneration_updates_model_and_prompt_version() {
+        let (service, daily_reviews, journal_entries, _) =
+            setup(FakeReviewGenerator::succeeding("regen")).await;
+        journal_entries
+            .store(&incoming("user-1", "1", "early entry", at(9, 0)))
+            .await
+            .unwrap();
+        daily_reviews
+            .upsert_completed("user-1", date(), "old review", "old-model", "old-v")
+            .await
+            .unwrap();
+        backdate_review_updated_at(&journal_entries, "2026-04-28T09:30:00.000Z").await;
+        journal_entries
+            .store(&incoming("user-1", "2", "new entry", at(11, 0)))
+            .await
+            .unwrap();
+
+        service.review_day("user-1", date()).await.unwrap();
+
+        let stored = daily_reviews
+            .find_by_user_and_date("user-1", date())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.model, "fake-review-model");
+        assert_eq!(stored.prompt_version, "fake-prompt-v1");
+    }
+
+    #[tokio::test]
+    async fn stale_review_regeneration_failure_preserves_existing_completed_review() {
+        let (service, daily_reviews, journal_entries, generator) =
+            setup(FakeReviewGenerator::failing("provider down")).await;
+        journal_entries
+            .store(&incoming("user-1", "1", "early entry", at(9, 0)))
+            .await
+            .unwrap();
+        daily_reviews
+            .upsert_completed("user-1", date(), "old review", "model", "v1")
+            .await
+            .unwrap();
+        backdate_review_updated_at(&journal_entries, "2026-04-28T09:30:00.000Z").await;
+        let existing = daily_reviews
+            .find_by_user_and_date("user-1", date())
+            .await
+            .unwrap()
+            .unwrap();
+        journal_entries
+            .store(&incoming("user-1", "2", "new entry", at(11, 0)))
+            .await
+            .unwrap();
+
+        let result = service.review_day("user-1", date()).await.unwrap();
+
+        assert!(matches!(result, DailyReviewResult::GenerationFailed(_)));
+        assert_eq!(generator.calls(), 1);
+        let stored = daily_reviews
+            .find_by_user_and_date("user-1", date())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, existing);
+    }
+
+    #[tokio::test]
+    async fn stale_review_regeneration_failure_does_not_change_row_to_failed() {
+        let (service, daily_reviews, journal_entries, _) =
+            setup(FakeReviewGenerator::failing("provider down")).await;
+        journal_entries
+            .store(&incoming("user-1", "1", "early entry", at(9, 0)))
+            .await
+            .unwrap();
+        daily_reviews
+            .upsert_completed("user-1", date(), "old review", "model", "v1")
+            .await
+            .unwrap();
+        backdate_review_updated_at(&journal_entries, "2026-04-28T09:30:00.000Z").await;
+        journal_entries
+            .store(&incoming("user-1", "2", "new entry", at(11, 0)))
+            .await
+            .unwrap();
+
+        service.review_day("user-1", date()).await.unwrap();
+
+        let stored = daily_reviews
+            .find_by_user_and_date("user-1", date())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, DailyReviewStatus::Completed);
+        assert_eq!(stored.review_text, Some("old review".to_string()));
+        assert_eq!(stored.error_message, None);
+    }
+
+    #[tokio::test]
+    async fn stale_review_regeneration_failure_returns_generation_failed_result() {
+        let (service, daily_reviews, journal_entries, _) =
+            setup(FakeReviewGenerator::failing("provider down")).await;
+        journal_entries
+            .store(&incoming("user-1", "1", "early entry", at(9, 0)))
+            .await
+            .unwrap();
+        daily_reviews
+            .upsert_completed("user-1", date(), "old review", "model", "v1")
+            .await
+            .unwrap();
+        backdate_review_updated_at(&journal_entries, "2026-04-28T09:30:00.000Z").await;
+        journal_entries
+            .store(&incoming("user-1", "2", "new entry", at(11, 0)))
+            .await
+            .unwrap();
+
+        let result = service.review_day("user-1", date()).await.unwrap();
+
+        assert!(matches!(
+            result,
+            DailyReviewResult::GenerationFailed(DailyReviewFailure {
+                ref error_message,
+                ..
+            }) if error_message == "provider down"
+        ));
+    }
+
+    #[tokio::test]
+    async fn freshness_check_is_scoped_by_user() {
+        let (service, daily_reviews, journal_entries, generator) =
+            setup(FakeReviewGenerator::succeeding("regen")).await;
+        journal_entries
+            .store(&incoming("user-1", "1", "user one early", at(9, 0)))
+            .await
+            .unwrap();
+        daily_reviews
+            .upsert_completed("user-1", date(), "user one review", "model", "v1")
+            .await
+            .unwrap();
+        // user-1's review is fresh (wall-clock updated_at > entry received_at).
+        // user-2 has a new entry after their review — user-2's staleness must not affect user-1.
+        journal_entries
+            .store(&incoming("user-2", "2", "user two entry", at(9, 0)))
+            .await
+            .unwrap();
+        daily_reviews
+            .upsert_completed("user-2", date(), "user two review", "model", "v1")
+            .await
+            .unwrap();
+        journal_entries
+            .store(&incoming("user-2", "3", "user two new entry", at(11, 0)))
+            .await
+            .unwrap();
+
+        let result_user_one = service.review_day("user-1", date()).await.unwrap();
+
+        assert!(matches!(result_user_one, DailyReviewResult::Existing(_)));
+        assert_eq!(generator.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn freshness_check_uses_only_entries_from_requested_date() {
+        let (service, daily_reviews, journal_entries, generator) =
+            setup(FakeReviewGenerator::succeeding("regen")).await;
+        journal_entries
+            .store(&incoming("user-1", "1", "today entry", at(9, 0)))
+            .await
+            .unwrap();
+        daily_reviews
+            .upsert_completed("user-1", date(), "today review", "model", "v1")
+            .await
+            .unwrap();
+        backdate_review_updated_at(&journal_entries, "2026-04-28T09:30:00.000Z").await;
+        // Next-day entry must not cause staleness for date() = 2026-04-28.
+        journal_entries
+            .store(&incoming(
+                "user-1",
+                "2",
+                "next day entry",
+                Utc.with_ymd_and_hms(2026, 4, 29, 10, 0, 0).unwrap(),
+            ))
+            .await
+            .unwrap();
+
+        let result = service.review_day("user-1", date()).await.unwrap();
+
+        assert!(matches!(result, DailyReviewResult::Existing(_)));
+        assert_eq!(generator.calls(), 0);
     }
 
     struct PoolClosingGenerator {

@@ -1,4 +1,4 @@
-use chrono::{Duration, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
 use crate::messages::IncomingMessage;
@@ -104,6 +104,30 @@ impl JournalRepository {
         .await?;
 
         Ok(rows.into_iter().map(map_entry).collect())
+    }
+
+    pub async fn latest_entry_received_at_for_user_date(
+        &self,
+        user_id: &str,
+        date: NaiveDate,
+    ) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+        let start = Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap());
+        let end = start + Duration::days(1);
+
+        sqlx::query_scalar(
+            r#"
+            SELECT MAX(received_at)
+            FROM journal_entries
+            WHERE user_id = ?
+              AND received_at >= ?
+              AND received_at < ?
+            "#,
+        )
+        .bind(user_id)
+        .bind(start)
+        .bind(end)
+        .fetch_one(&self.pool)
+        .await
     }
 
     pub async fn fetch_by_ids(
@@ -452,5 +476,81 @@ mod tests {
         assert_eq!(stats.total_entries, 0);
         assert_eq!(stats.entries_today, 0);
         assert_eq!(stats.latest_received_at, None);
+    }
+
+    #[tokio::test]
+    async fn latest_entry_received_at_returns_none_when_no_entries_exist() {
+        let repo = setup().await;
+
+        let result = repo
+            .latest_entry_received_at_for_user_date("7", date())
+            .await
+            .unwrap();
+
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn latest_entry_received_at_returns_max_received_at_for_user_and_date() {
+        let repo = setup().await;
+        repo.store(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second", at(11, 0)))
+            .await
+            .unwrap();
+
+        let result = repo
+            .latest_entry_received_at_for_user_date("7", date())
+            .await
+            .unwrap();
+
+        assert_eq!(result, Some(at(11, 0)));
+    }
+
+    #[tokio::test]
+    async fn latest_entry_received_at_is_scoped_by_user() {
+        let repo = setup().await;
+        repo.store(&incoming("1", "user seven", at(10, 0)))
+            .await
+            .unwrap();
+        let other_user = IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: "99".to_string(),
+            source_message_id: "2".to_string(),
+            user_id: "other".to_string(),
+            text: "other user".to_string(),
+            received_at: at(15, 0),
+        };
+        repo.store(&other_user).await.unwrap();
+
+        let result = repo
+            .latest_entry_received_at_for_user_date("7", date())
+            .await
+            .unwrap();
+
+        assert_eq!(result, Some(at(10, 0)));
+    }
+
+    #[tokio::test]
+    async fn latest_entry_received_at_is_scoped_by_date() {
+        let repo = setup().await;
+        repo.store(&incoming("1", "today", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming(
+            "2",
+            "tomorrow",
+            Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
+        ))
+        .await
+        .unwrap();
+
+        let result = repo
+            .latest_entry_received_at_for_user_date("7", date())
+            .await
+            .unwrap();
+
+        assert_eq!(result, Some(at(10, 0)));
     }
 }
