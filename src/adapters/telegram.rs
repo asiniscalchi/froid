@@ -1,4 +1,9 @@
-use teloxide::{prelude::*, types::Message};
+use teloxide::{
+    payloads::SetMessageReactionSetters,
+    prelude::*,
+    sugar::bot::BotMessagesExt,
+    types::{Message, ReactionType},
+};
 use tracing::{error, info};
 
 use chrono::{DateTime, NaiveDate, Utc};
@@ -89,17 +94,26 @@ async fn handle_message<H: MessageHandler>(
         "received Telegram text message"
     );
 
-    let response_text = match handler.process(&incoming).await {
-        Ok(outgoing) => outgoing.text,
+    match handler.process(&incoming).await {
+        Ok(_) => {
+            bot.set_reaction(&message)
+                .reaction([saved_reaction()])
+                .await?;
+        }
         Err(err) => {
             error!(%err, "failed to store journal entry");
-            "Something went wrong. Please try again.".to_string()
+            bot.send_message(message.chat.id, "Something went wrong. Please try again.")
+                .await?;
         }
     };
 
-    bot.send_message(message.chat.id, response_text).await?;
-
     Ok(())
+}
+
+fn saved_reaction() -> ReactionType {
+    ReactionType::Emoji {
+        emoji: "✍".to_string(),
+    }
 }
 
 fn incoming_from_text_message(message: &Message, user_id: String) -> IncomingMessage {
@@ -242,6 +256,16 @@ mod tests {
         assert_eq!(
             incoming.received_at,
             chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn saved_reaction_uses_writing_hand() {
+        assert_eq!(
+            saved_reaction(),
+            ReactionType::Emoji {
+                emoji: "✍".to_string()
+            }
         );
     }
 
