@@ -131,6 +131,9 @@ fn parse_command(text: &str, received_at: DateTime<Utc>) -> Option<JournalComman
         "/status" => Some(JournalCommand::Status),
         "/review" => Some(parse_review_argument(argument, received_at)),
         "/search" => Some(parse_search_argument(argument)),
+        _ if command.starts_with('/') => Some(JournalCommand::Unknown {
+            command: command.to_string(),
+        }),
         _ => None,
     }
 }
@@ -488,7 +491,28 @@ mod tests {
     #[test]
     fn parse_returns_none_for_non_command() {
         assert_eq!(cmd("hello"), None);
-        assert_eq!(cmd("/other"), None);
+    }
+
+    #[test]
+    fn parse_unknown_slash_prefixed_message_as_command() {
+        assert_eq!(
+            cmd("/other"),
+            Some(JournalCommand::Unknown {
+                command: "/other".to_string()
+            })
+        );
+        assert_eq!(
+            cmd("/other@mybot"),
+            Some(JournalCommand::Unknown {
+                command: "/other".to_string()
+            })
+        );
+        assert_eq!(
+            cmd("   /other with text"),
+            Some(JournalCommand::Unknown {
+                command: "/other".to_string()
+            })
+        );
     }
 
     fn telegram_message(value: serde_json::Value) -> Message {

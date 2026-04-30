@@ -18,6 +18,7 @@ use crate::{
             message_saved_response, no_entries_for_date_response, no_entries_response,
             no_entries_today_response, no_entry_to_delete_response, no_last_entry_response,
             recent_usage_response, start_response, stats_response, status_response,
+            unknown_command_response,
         },
         review::{DailyReview, DailyReviewResult, service::DailyReviewRunner},
         search::{
@@ -172,6 +173,9 @@ impl JournalService {
             }
             JournalCommand::SearchUsage => Ok(OutgoingMessage {
                 text: search_usage_response(),
+            }),
+            JournalCommand::Unknown { command } => Ok(OutgoingMessage {
+                text: unknown_command_response(command),
             }),
         }
     }
@@ -1906,6 +1910,39 @@ mod tests {
             .unwrap();
 
         assert!(outgoing.text.contains("Usage: /search <query>"));
+    }
+
+    #[tokio::test]
+    async fn unknown_command_returns_help_response() {
+        let service = setup().await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::Unknown {
+                command: "/other".to_string(),
+            }))
+            .await
+            .unwrap();
+
+        assert!(outgoing.text.starts_with("Unknown command: /other"));
+        assert!(outgoing.text.contains("/help - show commands"));
+    }
+
+    #[tokio::test]
+    async fn unknown_command_does_not_store_command_text_as_journal_entry() {
+        let (service, pool) = setup_with_pool().await;
+
+        service
+            .command(&command(JournalCommand::Unknown {
+                command: "/other".to_string(),
+            }))
+            .await
+            .unwrap();
+
+        let entry_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(entry_count, 0);
     }
 
     #[tokio::test]

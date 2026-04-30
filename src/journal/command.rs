@@ -32,4 +32,5 @@ pub enum JournalCommand {
     ReviewError { message: String },
     Search { query: String },
     SearchUsage,
+    Unknown { command: String },
 }
