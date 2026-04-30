@@ -23,14 +23,16 @@ impl JournalRepository {
         Self { pool }
     }
 
+    pub(crate) fn clone_pool(&self) -> SqlitePool {
+        self.pool.clone()
+    }
+
     #[cfg(test)]
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
 
     pub async fn store(&self, message: &IncomingMessage) -> Result<Option<i64>, sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-
         let result = sqlx::query(
             r#"
             INSERT OR IGNORE INTO journal_entries
@@ -44,20 +46,10 @@ impl JournalRepository {
         .bind(&message.source_message_id)
         .bind(&message.text)
         .bind(message.received_at)
-        .execute(&mut *tx)
+        .execute(&self.pool)
         .await?;
 
-        let journal_entry_id = if result.rows_affected() == 0 {
-            None
-        } else {
-            delete_daily_review(&mut tx, &message.user_id, message.received_at.date_naive())
-                .await?;
-            Some(result.last_insert_rowid())
-        };
-
-        tx.commit().await?;
-
-        Ok(journal_entry_id)
+        Ok((result.rows_affected() != 0).then(|| result.last_insert_rowid()))
     }
 
     pub async fn fetch_recent(
@@ -148,30 +140,6 @@ impl JournalRepository {
 
         sqlx::query(
             r#"
-            DELETE FROM journal_entry_embedding_vec
-            WHERE rowid IN (
-                SELECT id
-                FROM journal_entry_embedding_metadata
-                WHERE journal_entry_id = ?
-            )
-            "#,
-        )
-        .bind(entry.id)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            r#"
-            DELETE FROM journal_entry_embedding_metadata
-            WHERE journal_entry_id = ?
-            "#,
-        )
-        .bind(entry.id)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            r#"
             DELETE FROM journal_entries
             WHERE id = ?
             "#,
@@ -179,8 +147,6 @@ impl JournalRepository {
         .bind(entry.id)
         .execute(&mut *tx)
         .await?;
-
-        delete_daily_review(&mut tx, user_id, entry.entry.received_at.date_naive()).await?;
 
         tx.commit().await?;
 
@@ -274,36 +240,14 @@ impl JournalRepository {
     }
 }
 
-async fn delete_daily_review(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    user_id: &str,
-    date: NaiveDate,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"
-        DELETE FROM daily_reviews
-        WHERE user_id = ? AND review_date = ?
-        "#,
-    )
-    .bind(user_id)
-    .bind(date.to_string())
-    .execute(&mut **tx)
-    .await?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};
     use sqlx::SqlitePool;
 
     use super::*;
+    use crate::database;
     use crate::messages::MessageSource;
-    use crate::{
-        database,
-        journal::embedding::{Embedding, SqliteEmbeddingRepository},
-    };
 
     async fn setup() -> JournalRepository {
         database::register_sqlite_vec_extension();
@@ -401,31 +345,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(count, 2);
-    }
-
-    #[tokio::test]
-    async fn store_invalidates_daily_review_for_entry_date() {
-        let repo = setup().await;
-        sqlx::query(
-            r#"
-            INSERT INTO daily_reviews
-                (user_id, review_date, review_text, model, prompt_version, status)
-            VALUES ('7', '2026-04-28', 'persisted review', 'model', 'v1', 'completed')
-            "#,
-        )
-        .execute(repo.pool())
-        .await
-        .unwrap();
-
-        repo.store(&incoming("1", "new entry", at(10, 0)))
-            .await
-            .unwrap();
-
-        let review_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM daily_reviews")
-            .fetch_one(repo.pool())
-            .await
-            .unwrap();
-        assert_eq!(review_count, 0);
     }
 
     #[tokio::test]
@@ -557,67 +476,6 @@ mod tests {
 
         assert_eq!(deleted.entry.text, "current");
         assert_eq!(other.entry.text, "other");
-    }
-
-    #[tokio::test]
-    async fn delete_last_for_conversation_deletes_daily_review_for_entry_date() {
-        let repo = setup().await;
-        repo.store(&incoming("1", "reviewed entry", at(10, 0)))
-            .await
-            .unwrap();
-        sqlx::query(
-            r#"
-            INSERT INTO daily_reviews
-                (user_id, review_date, review_text, model, prompt_version, status)
-            VALUES ('7', '2026-04-28', 'persisted review', 'model', 'v1', 'completed')
-            "#,
-        )
-        .execute(repo.pool())
-        .await
-        .unwrap();
-
-        repo.delete_last_for_conversation("7", &MessageSource::Telegram, "42")
-            .await
-            .unwrap();
-
-        let review_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM daily_reviews")
-            .fetch_one(repo.pool())
-            .await
-            .unwrap();
-        assert_eq!(review_count, 0);
-    }
-
-    #[tokio::test]
-    async fn delete_last_for_conversation_removes_embedding_rows() {
-        let repo = setup().await;
-        let embedding_repo = SqliteEmbeddingRepository::new(repo.pool().clone());
-        let entry_id = repo
-            .store(&incoming("1", "embedded entry", at(10, 0)))
-            .await
-            .unwrap()
-            .unwrap();
-        let embedding = Embedding::new(vec![0.1; 1536], 1536).unwrap();
-        embedding_repo
-            .store_embedding(entry_id, "test-model", 1536, &embedding)
-            .await
-            .unwrap();
-
-        repo.delete_last_for_conversation("7", &MessageSource::Telegram, "42")
-            .await
-            .unwrap();
-
-        let metadata_count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_embedding_metadata")
-                .fetch_one(repo.pool())
-                .await
-                .unwrap();
-        let vector_count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_embedding_vec")
-                .fetch_one(repo.pool())
-                .await
-                .unwrap();
-        assert_eq!(metadata_count, 0);
-        assert_eq!(vector_count, 0);
     }
 
     #[tokio::test]

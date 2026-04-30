@@ -7,3 +7,4 @@ pub mod review;
 pub mod search;
 pub mod service;
 pub mod status;
+pub mod store;
