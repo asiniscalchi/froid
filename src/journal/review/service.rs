@@ -254,6 +254,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn blank_generated_review_is_persisted_as_failure() {
+        let (service, daily_reviews, journal_entries, generator) =
+            setup(FakeReviewGenerator::succeeding("   \n\t")).await;
+        journal_entries
+            .store(&at_date(28, "1", "first entry"))
+            .await
+            .unwrap();
+
+        let result = service.review_day("user-1", date()).await.unwrap();
+
+        assert_eq!(
+            result,
+            DailyReviewResult::GenerationFailed(DailyReviewFailure {
+                user_id: "user-1".to_string(),
+                review_date: date(),
+                model: "fake-review-model".to_string(),
+                prompt_version: "fake-prompt-v1".to_string(),
+                error_message: "daily review generator returned an empty review".to_string(),
+            })
+        );
+        assert_eq!(generator.calls(), 1);
+
+        let stored = daily_reviews
+            .find_by_user_and_date("user-1", date())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, DailyReviewStatus::Failed);
+        assert_eq!(stored.review_text, None);
+        assert_eq!(
+            stored.error_message,
+            Some("daily review generator returned an empty review".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn blank_existing_completed_review_is_regenerated() {
+        let (service, daily_reviews, journal_entries, generator) =
+            setup(FakeReviewGenerator::succeeding("regenerated review")).await;
+        journal_entries
+            .store(&at_date(28, "1", "first entry"))
+            .await
+            .unwrap();
+        let existing = daily_reviews
+            .upsert_completed("user-1", date(), "", "model", "v1")
+            .await
+            .unwrap();
+
+        let review = generated_review(service.review_day("user-1", date()).await.unwrap());
+
+        assert_eq!(generator.calls(), 1);
+        assert_eq!(review.id, existing.id);
+        assert_eq!(review.review_text, Some("regenerated review".to_string()));
+        assert_eq!(review.status, DailyReviewStatus::Completed);
+    }
+
+    #[tokio::test]
     async fn empty_day_returns_empty_without_calling_generator() {
         let (service, _daily_reviews, _journal_entries, generator) =
             setup(FakeReviewGenerator::succeeding("generated review")).await;
