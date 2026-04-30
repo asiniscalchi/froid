@@ -18,7 +18,7 @@ use crate::{
             no_entries_response, no_entries_today_response, recent_usage_response, start_response,
             stats_response, status_response,
         },
-        review::{DailyReviewResult, service::DailyReviewRunner},
+        review::{DailyReview, DailyReviewResult, service::DailyReviewRunner},
         search::{
             SearchService, SemanticSearchService, format_search_results, search_empty_response,
             search_error_response, search_unavailable_response, search_usage_response,
@@ -178,7 +178,7 @@ impl JournalService {
             user_id,
             date,
             format_daily_review,
-            no_entries_today_response,
+            no_entries_today_response(),
         )
         .await
     }
@@ -188,7 +188,7 @@ impl JournalService {
             user_id,
             date,
             |review| format_daily_review_for_date(review, date),
-            || no_entries_for_date_response(date),
+            no_entries_for_date_response(date),
         )
         .await
     }
@@ -197,8 +197,8 @@ impl JournalService {
         &self,
         user_id: &str,
         date: chrono::NaiveDate,
-        format_review: impl Fn(&crate::journal::review::DailyReview) -> String,
-        format_empty: impl Fn() -> String,
+        format_review: impl Fn(&DailyReview) -> String,
+        empty_text: String,
     ) -> OutgoingMessage {
         let Some(daily_review) = &self.daily_review else {
             return OutgoingMessage {
@@ -212,9 +212,7 @@ impl JournalService {
                     text: format_review(&review),
                 }
             }
-            Ok(DailyReviewResult::EmptyDay) => OutgoingMessage {
-                text: format_empty(),
-            },
+            Ok(DailyReviewResult::EmptyDay) => OutgoingMessage { text: empty_text },
             Ok(DailyReviewResult::GenerationFailed(failure)) => {
                 warn!(
                     user_id = %failure.user_id,
