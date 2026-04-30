@@ -1,7 +1,8 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
 pub const DEFAULT_RECENT_LIMIT: u32 = 10;
 pub const MAX_RECENT_LIMIT: u32 = 50;
+pub const MAX_REVIEW_OFFSET: u32 = 365;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalCommandRequest {
@@ -20,7 +21,9 @@ pub enum JournalCommand {
     Stats,
     Status,
     ReviewToday,
+    ReviewDate { date: NaiveDate },
     ReviewUsage,
+    ReviewError { message: String },
     Search { query: String },
     SearchUsage,
 }
