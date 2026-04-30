@@ -7,6 +7,12 @@ pub struct JournalEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredJournalEntry {
+    pub id: i64,
+    pub entry: JournalEntry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalStats {
     pub total_entries: i64,
     pub entries_today: i64,

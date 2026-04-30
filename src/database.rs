@@ -30,7 +30,8 @@ pub async fn connect_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error>
 fn sqlite_connect_options(database_url: &str) -> Result<SqliteConnectOptions, sqlx::Error> {
     Ok(database_url
         .parse::<SqliteConnectOptions>()?
-        .create_if_missing(true))
+        .create_if_missing(true)
+        .foreign_keys(true))
 }
 
 #[cfg(test)]

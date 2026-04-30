@@ -13,10 +13,11 @@ use crate::{
         },
         responses::{
             daily_review_failure_response, daily_review_unavailable_response,
-            daily_review_usage_response, format_daily_review, format_daily_review_for_date,
-            format_entries, help_response, message_saved_response, no_entries_for_date_response,
-            no_entries_response, no_entries_today_response, recent_usage_response, start_response,
-            stats_response, status_response,
+            daily_review_usage_response, deleted_last_entry_response, format_daily_review,
+            format_daily_review_for_date, format_entries, format_last_entry, help_response,
+            message_saved_response, no_entries_for_date_response, no_entries_response,
+            no_entries_today_response, no_entry_to_delete_response, no_last_entry_response,
+            recent_usage_response, start_response, stats_response, status_response,
         },
         review::{DailyReview, DailyReviewResult, service::DailyReviewRunner},
         search::{
@@ -134,6 +135,8 @@ impl JournalService {
             JournalCommand::Help => Ok(OutgoingMessage {
                 text: help_response(),
             }),
+            JournalCommand::Last => self.last(request).await,
+            JournalCommand::Undo => self.undo(request).await,
             JournalCommand::Recent { requested_limit } => {
                 self.recent(&request.user_id, *requested_limit).await
             }
@@ -253,6 +256,46 @@ impl JournalService {
                 text: search_error_response(&e),
             },
         }
+    }
+
+    async fn last(&self, request: &JournalCommandRequest) -> Result<OutgoingMessage, sqlx::Error> {
+        let Some(entry) = self
+            .repository
+            .fetch_last_for_conversation(
+                &request.user_id,
+                &request.source,
+                &request.source_conversation_id,
+            )
+            .await?
+        else {
+            return Ok(OutgoingMessage {
+                text: no_last_entry_response(),
+            });
+        };
+
+        Ok(OutgoingMessage {
+            text: format_last_entry(&entry.entry),
+        })
+    }
+
+    async fn undo(&self, request: &JournalCommandRequest) -> Result<OutgoingMessage, sqlx::Error> {
+        let Some(_) = self
+            .repository
+            .delete_last_for_conversation(
+                &request.user_id,
+                &request.source,
+                &request.source_conversation_id,
+            )
+            .await?
+        else {
+            return Ok(OutgoingMessage {
+                text: no_entry_to_delete_response(),
+            });
+        };
+
+        Ok(OutgoingMessage {
+            text: deleted_last_entry_response(),
+        })
     }
 
     async fn recent(&self, user_id: &str, limit: u32) -> Result<OutgoingMessage, sqlx::Error> {
@@ -673,9 +716,18 @@ mod tests {
         text: &str,
         received_at: chrono::DateTime<Utc>,
     ) -> IncomingMessage {
+        incoming_for_conversation("42", source_message_id, text, received_at)
+    }
+
+    fn incoming_for_conversation(
+        source_conversation_id: &str,
+        source_message_id: &str,
+        text: &str,
+        received_at: chrono::DateTime<Utc>,
+    ) -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
-            source_conversation_id: "42".to_string(),
+            source_conversation_id: source_conversation_id.to_string(),
             source_message_id: source_message_id.to_string(),
             user_id: "7".to_string(),
             text: text.to_string(),
@@ -689,6 +741,8 @@ mod tests {
 
     fn command(command: JournalCommand) -> JournalCommandRequest {
         JournalCommandRequest {
+            source: MessageSource::Telegram,
+            source_conversation_id: "42".to_string(),
             user_id: "7".to_string(),
             received_at: at(12, 0),
             command,
@@ -868,6 +922,8 @@ mod tests {
 
         let outgoing = service
             .command(&JournalCommandRequest {
+                source: MessageSource::Telegram,
+                source_conversation_id: "42".to_string(),
                 user_id: "7".to_string(),
                 received_at: Utc.with_ymd_and_hms(2026, 4, 29, 12, 0, 0).unwrap(),
                 command: JournalCommand::Status,
@@ -1181,6 +1237,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn undo_invalidates_cached_review_for_deleted_entry_date() {
+        let (service, daily_reviews, journal_entries) =
+            setup_with_daily_review_service(FakeReviewGenerator::succeeding("cached review")).await;
+        journal_entries
+            .store(&incoming("1", "entry for review", at(10, 0)))
+            .await
+            .unwrap();
+        service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+
+        let undo = service
+            .command(&command(JournalCommand::Undo))
+            .await
+            .unwrap();
+        let review = service
+            .command(&command(JournalCommand::ReviewToday))
+            .await
+            .unwrap();
+        let cached = daily_reviews
+            .find_by_user_and_date("7", date())
+            .await
+            .unwrap();
+
+        assert_eq!(undo.text, "Deleted last entry.");
+        assert_eq!(review.text, "No journal entries found for today.");
+        assert!(cached.is_none());
+    }
+
+    #[tokio::test]
     async fn review_today_uses_command_received_at_utc_date() {
         let (service, _daily_reviews, journal_entries) = setup_with_daily_review_service(
             FakeReviewGenerator::succeeding("requested date review"),
@@ -1201,6 +1288,8 @@ mod tests {
 
         let outgoing = service
             .command(&JournalCommandRequest {
+                source: MessageSource::Telegram,
+                source_conversation_id: "42".to_string(),
                 user_id: "7".to_string(),
                 received_at: at(23, 59),
                 command: JournalCommand::ReviewToday,
@@ -1239,6 +1328,8 @@ mod tests {
             .unwrap();
         let user_eight = service
             .command(&JournalCommandRequest {
+                source: MessageSource::Telegram,
+                source_conversation_id: "42".to_string(),
                 user_id: "8".to_string(),
                 received_at: at(12, 0),
                 command: JournalCommand::ReviewToday,
@@ -1384,6 +1475,8 @@ mod tests {
 
         let outgoing = service
             .command(&JournalCommandRequest {
+                source: MessageSource::Telegram,
+                source_conversation_id: "42".to_string(),
                 user_id: "7".to_string(),
                 received_at: at(23, 59),
                 command: JournalCommand::ReviewDate {
@@ -1434,6 +1527,8 @@ mod tests {
             .unwrap();
         let user_eight = service
             .command(&JournalCommandRequest {
+                source: MessageSource::Telegram,
+                source_conversation_id: "42".to_string(),
                 user_id: "8".to_string(),
                 received_at: at(12, 0),
                 command: JournalCommand::ReviewDate {
@@ -1500,6 +1595,133 @@ mod tests {
         assert_eq!(
             outgoing.text,
             "Usage: /recent [number]\n\nExamples:\n/recent\n/recent 5"
+        );
+    }
+
+    #[tokio::test]
+    async fn last_returns_empty_response_when_no_entry_in_conversation() {
+        let service = setup().await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::Last))
+            .await
+            .unwrap();
+
+        assert_eq!(outgoing.text, "No journal entry found.");
+    }
+
+    #[tokio::test]
+    async fn last_formats_latest_entry_for_current_conversation() {
+        let service = setup().await;
+        service
+            .process(&incoming_for_conversation(
+                "42",
+                "1",
+                "current old",
+                at(10, 0),
+            ))
+            .await
+            .unwrap();
+        service
+            .process(&incoming_for_conversation(
+                "99",
+                "2",
+                "other newer",
+                at(12, 0),
+            ))
+            .await
+            .unwrap();
+        service
+            .process(&incoming_for_conversation(
+                "42",
+                "3",
+                "current new",
+                at(11, 0),
+            ))
+            .await
+            .unwrap();
+
+        let outgoing = service
+            .command(&command(JournalCommand::Last))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outgoing.text,
+            "Last entry:\n\n\"current new\"\n\nReceived at: 2026-04-28 11:00\n\nUse /undo to delete it."
+        );
+    }
+
+    #[tokio::test]
+    async fn undo_returns_empty_response_when_no_entry_in_conversation() {
+        let service = setup().await;
+
+        let outgoing = service
+            .command(&command(JournalCommand::Undo))
+            .await
+            .unwrap();
+
+        assert_eq!(outgoing.text, "No journal entry to delete.");
+    }
+
+    #[tokio::test]
+    async fn undo_deletes_latest_entry_for_current_conversation() {
+        let service = setup().await;
+        service
+            .process(&incoming_for_conversation(
+                "42",
+                "1",
+                "current old",
+                at(10, 0),
+            ))
+            .await
+            .unwrap();
+        service
+            .process(&incoming_for_conversation(
+                "99",
+                "2",
+                "other newer",
+                at(12, 0),
+            ))
+            .await
+            .unwrap();
+        service
+            .process(&incoming_for_conversation(
+                "42",
+                "3",
+                "current new",
+                at(11, 0),
+            ))
+            .await
+            .unwrap();
+
+        let undo = service
+            .command(&command(JournalCommand::Undo))
+            .await
+            .unwrap();
+        let last_current = service
+            .command(&command(JournalCommand::Last))
+            .await
+            .unwrap();
+        let last_other = service
+            .command(&JournalCommandRequest {
+                source: MessageSource::Telegram,
+                source_conversation_id: "99".to_string(),
+                user_id: "7".to_string(),
+                received_at: at(12, 0),
+                command: JournalCommand::Last,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(undo.text, "Deleted last entry.");
+        assert_eq!(
+            last_current.text,
+            "Last entry:\n\n\"current old\"\n\nReceived at: 2026-04-28 10:00\n\nUse /undo to delete it."
+        );
+        assert_eq!(
+            last_other.text,
+            "Last entry:\n\n\"other newer\"\n\nReceived at: 2026-04-28 12:00\n\nUse /undo to delete it."
         );
     }
 

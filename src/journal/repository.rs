@@ -2,8 +2,9 @@ use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
 use crate::messages::IncomingMessage;
+use crate::messages::MessageSource;
 
-use super::entry::{JournalEntry, JournalStats};
+use super::entry::{JournalEntry, JournalStats, StoredJournalEntry};
 
 fn map_entry(row: SqliteRow) -> JournalEntry {
     JournalEntry {
@@ -77,6 +78,120 @@ impl JournalRepository {
         .await?;
 
         Ok(rows.into_iter().map(map_entry).collect())
+    }
+
+    pub async fn fetch_last_for_conversation(
+        &self,
+        user_id: &str,
+        source: &MessageSource,
+        source_conversation_id: &str,
+    ) -> Result<Option<StoredJournalEntry>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, raw_text, received_at
+            FROM journal_entries
+            WHERE user_id = ?
+              AND source = ?
+              AND source_conversation_id = ?
+            ORDER BY received_at DESC, id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(user_id)
+        .bind(source.to_string())
+        .bind(source_conversation_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|row| StoredJournalEntry {
+            id: row.get("id"),
+            entry: map_entry(row),
+        }))
+    }
+
+    pub async fn delete_last_for_conversation(
+        &self,
+        user_id: &str,
+        source: &MessageSource,
+        source_conversation_id: &str,
+    ) -> Result<Option<StoredJournalEntry>, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT id, raw_text, received_at
+            FROM journal_entries
+            WHERE user_id = ?
+              AND source = ?
+              AND source_conversation_id = ?
+            ORDER BY received_at DESC, id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(user_id)
+        .bind(source.to_string())
+        .bind(source_conversation_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+
+        let entry = StoredJournalEntry {
+            id: row.get("id"),
+            entry: map_entry(row),
+        };
+
+        sqlx::query(
+            r#"
+            DELETE FROM journal_entry_embedding_vec
+            WHERE rowid IN (
+                SELECT id
+                FROM journal_entry_embedding_metadata
+                WHERE journal_entry_id = ?
+            )
+            "#,
+        )
+        .bind(entry.id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM journal_entry_embedding_metadata
+            WHERE journal_entry_id = ?
+            "#,
+        )
+        .bind(entry.id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM journal_entries
+            WHERE id = ?
+            "#,
+        )
+        .bind(entry.id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM daily_reviews
+            WHERE user_id = ? AND review_date = ?
+            "#,
+        )
+        .bind(user_id)
+        .bind(entry.entry.received_at.date_naive().to_string())
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(Some(entry))
     }
 
     pub async fn fetch_today(
@@ -196,8 +311,11 @@ mod tests {
     use sqlx::SqlitePool;
 
     use super::*;
-    use crate::database;
     use crate::messages::MessageSource;
+    use crate::{
+        database,
+        journal::embedding::{Embedding, SqliteEmbeddingRepository},
+    };
 
     async fn setup() -> JournalRepository {
         database::register_sqlite_vec_extension();
@@ -211,9 +329,18 @@ mod tests {
         text: &str,
         received_at: chrono::DateTime<Utc>,
     ) -> IncomingMessage {
+        incoming_for_conversation("42", source_message_id, text, received_at)
+    }
+
+    fn incoming_for_conversation(
+        source_conversation_id: &str,
+        source_message_id: &str,
+        text: &str,
+        received_at: chrono::DateTime<Utc>,
+    ) -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
-            source_conversation_id: "42".to_string(),
+            source_conversation_id: source_conversation_id.to_string(),
             source_message_id: source_message_id.to_string(),
             user_id: "7".to_string(),
             text: text.to_string(),
@@ -308,6 +435,176 @@ mod tests {
         assert_eq!(entries[0].text, "third");
         assert_eq!(entries[1].text, "second");
         assert_eq!(entries[2].text, "first");
+    }
+
+    #[tokio::test]
+    async fn fetch_last_for_conversation_returns_latest_entry_for_current_conversation() {
+        let repo = setup().await;
+        repo.store(&incoming_for_conversation(
+            "42",
+            "1",
+            "current old",
+            at(10, 0),
+        ))
+        .await
+        .unwrap();
+        repo.store(&incoming_for_conversation(
+            "42",
+            "2",
+            "current new",
+            at(11, 0),
+        ))
+        .await
+        .unwrap();
+        repo.store(&incoming_for_conversation(
+            "99",
+            "3",
+            "other conversation",
+            at(12, 0),
+        ))
+        .await
+        .unwrap();
+
+        let entry = repo
+            .fetch_last_for_conversation("7", &MessageSource::Telegram, "42")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(entry.entry.text, "current new");
+    }
+
+    #[tokio::test]
+    async fn fetch_last_for_conversation_breaks_timestamp_ties_by_id() {
+        let repo = setup().await;
+        repo.store(&incoming("1", "first inserted", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second inserted", at(10, 0)))
+            .await
+            .unwrap();
+
+        let entry = repo
+            .fetch_last_for_conversation("7", &MessageSource::Telegram, "42")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(entry.entry.text, "second inserted");
+    }
+
+    #[tokio::test]
+    async fn delete_last_for_conversation_deletes_same_entry_selected_by_fetch_last() {
+        let repo = setup().await;
+        repo.store(&incoming("1", "first inserted", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second inserted", at(10, 0)))
+            .await
+            .unwrap();
+
+        let fetched = repo
+            .fetch_last_for_conversation("7", &MessageSource::Telegram, "42")
+            .await
+            .unwrap()
+            .unwrap();
+        let deleted = repo
+            .delete_last_for_conversation("7", &MessageSource::Telegram, "42")
+            .await
+            .unwrap()
+            .unwrap();
+        let remaining = repo.fetch_recent("7", 10).await.unwrap();
+
+        assert_eq!(deleted.id, fetched.id);
+        assert_eq!(deleted.entry.text, "second inserted");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].text, "first inserted");
+    }
+
+    #[tokio::test]
+    async fn delete_last_for_conversation_does_not_delete_other_conversations() {
+        let repo = setup().await;
+        repo.store(&incoming_for_conversation("42", "1", "current", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming_for_conversation("99", "2", "other", at(11, 0)))
+            .await
+            .unwrap();
+
+        let deleted = repo
+            .delete_last_for_conversation("7", &MessageSource::Telegram, "42")
+            .await
+            .unwrap()
+            .unwrap();
+        let other = repo
+            .fetch_last_for_conversation("7", &MessageSource::Telegram, "99")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(deleted.entry.text, "current");
+        assert_eq!(other.entry.text, "other");
+    }
+
+    #[tokio::test]
+    async fn delete_last_for_conversation_invalidates_cached_review_for_entry_date() {
+        let repo = setup().await;
+        repo.store(&incoming("1", "reviewed entry", at(10, 0)))
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO daily_reviews
+                (user_id, review_date, review_text, model, prompt_version, status)
+            VALUES ('7', '2026-04-28', 'cached review', 'model', 'v1', 'completed')
+            "#,
+        )
+        .execute(repo.pool())
+        .await
+        .unwrap();
+
+        repo.delete_last_for_conversation("7", &MessageSource::Telegram, "42")
+            .await
+            .unwrap();
+
+        let review_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM daily_reviews")
+            .fetch_one(repo.pool())
+            .await
+            .unwrap();
+        assert_eq!(review_count, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_last_for_conversation_removes_embedding_rows() {
+        let repo = setup().await;
+        let embedding_repo = SqliteEmbeddingRepository::new(repo.pool().clone());
+        let entry_id = repo
+            .store(&incoming("1", "embedded entry", at(10, 0)))
+            .await
+            .unwrap()
+            .unwrap();
+        let embedding = Embedding::new(vec![0.1; 1536], 1536).unwrap();
+        embedding_repo
+            .store_embedding(entry_id, "test-model", 1536, &embedding)
+            .await
+            .unwrap();
+
+        repo.delete_last_for_conversation("7", &MessageSource::Telegram, "42")
+            .await
+            .unwrap();
+
+        let metadata_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_embedding_metadata")
+                .fetch_one(repo.pool())
+                .await
+                .unwrap();
+        let vector_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_embedding_vec")
+                .fetch_one(repo.pool())
+                .await
+                .unwrap();
+        assert_eq!(metadata_count, 0);
+        assert_eq!(vector_count, 0);
     }
 
     #[tokio::test]
