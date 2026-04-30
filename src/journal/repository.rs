@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
+use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
 use crate::messages::IncomingMessage;
@@ -50,6 +50,8 @@ impl JournalRepository {
         let journal_entry_id = if result.rows_affected() == 0 {
             None
         } else {
+            delete_daily_review(&mut tx, &message.user_id, message.received_at.date_naive())
+                .await?;
             Some(result.last_insert_rowid())
         };
 
@@ -178,16 +180,7 @@ impl JournalRepository {
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query(
-            r#"
-            DELETE FROM daily_reviews
-            WHERE user_id = ? AND review_date = ?
-            "#,
-        )
-        .bind(user_id)
-        .bind(entry.entry.received_at.date_naive().to_string())
-        .execute(&mut *tx)
-        .await?;
+        delete_daily_review(&mut tx, user_id, entry.entry.received_at.date_naive()).await?;
 
         tx.commit().await?;
 
@@ -219,30 +212,6 @@ impl JournalRepository {
         .await?;
 
         Ok(rows.into_iter().map(map_entry).collect())
-    }
-
-    pub async fn latest_entry_received_at_for_user_date(
-        &self,
-        user_id: &str,
-        date: NaiveDate,
-    ) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
-        let start = Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap());
-        let end = start + Duration::days(1);
-
-        sqlx::query_scalar(
-            r#"
-            SELECT MAX(received_at)
-            FROM journal_entries
-            WHERE user_id = ?
-              AND received_at >= ?
-              AND received_at < ?
-            "#,
-        )
-        .bind(user_id)
-        .bind(start)
-        .bind(end)
-        .fetch_one(&self.pool)
-        .await
     }
 
     pub async fn fetch_by_ids(
@@ -303,6 +272,25 @@ impl JournalRepository {
             latest_received_at: row.get("latest_received_at"),
         })
     }
+}
+
+async fn delete_daily_review(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    user_id: &str,
+    date: NaiveDate,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        DELETE FROM daily_reviews
+        WHERE user_id = ? AND review_date = ?
+        "#,
+    )
+    .bind(user_id)
+    .bind(date.to_string())
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -413,6 +401,31 @@ mod tests {
             .unwrap();
 
         assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn store_invalidates_daily_review_for_entry_date() {
+        let repo = setup().await;
+        sqlx::query(
+            r#"
+            INSERT INTO daily_reviews
+                (user_id, review_date, review_text, model, prompt_version, status)
+            VALUES ('7', '2026-04-28', 'persisted review', 'model', 'v1', 'completed')
+            "#,
+        )
+        .execute(repo.pool())
+        .await
+        .unwrap();
+
+        repo.store(&incoming("1", "new entry", at(10, 0)))
+            .await
+            .unwrap();
+
+        let review_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM daily_reviews")
+            .fetch_one(repo.pool())
+            .await
+            .unwrap();
+        assert_eq!(review_count, 0);
     }
 
     #[tokio::test]
@@ -547,7 +560,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_last_for_conversation_invalidates_cached_review_for_entry_date() {
+    async fn delete_last_for_conversation_deletes_daily_review_for_entry_date() {
         let repo = setup().await;
         repo.store(&incoming("1", "reviewed entry", at(10, 0)))
             .await
@@ -556,7 +569,7 @@ mod tests {
             r#"
             INSERT INTO daily_reviews
                 (user_id, review_date, review_text, model, prompt_version, status)
-            VALUES ('7', '2026-04-28', 'cached review', 'model', 'v1', 'completed')
+            VALUES ('7', '2026-04-28', 'persisted review', 'model', 'v1', 'completed')
             "#,
         )
         .execute(repo.pool())
@@ -773,81 +786,5 @@ mod tests {
         assert_eq!(stats.total_entries, 0);
         assert_eq!(stats.entries_today, 0);
         assert_eq!(stats.latest_received_at, None);
-    }
-
-    #[tokio::test]
-    async fn latest_entry_received_at_returns_none_when_no_entries_exist() {
-        let repo = setup().await;
-
-        let result = repo
-            .latest_entry_received_at_for_user_date("7", date())
-            .await
-            .unwrap();
-
-        assert_eq!(result, None);
-    }
-
-    #[tokio::test]
-    async fn latest_entry_received_at_returns_max_received_at_for_user_and_date() {
-        let repo = setup().await;
-        repo.store(&incoming("1", "first", at(10, 0)))
-            .await
-            .unwrap();
-        repo.store(&incoming("2", "second", at(11, 0)))
-            .await
-            .unwrap();
-
-        let result = repo
-            .latest_entry_received_at_for_user_date("7", date())
-            .await
-            .unwrap();
-
-        assert_eq!(result, Some(at(11, 0)));
-    }
-
-    #[tokio::test]
-    async fn latest_entry_received_at_is_scoped_by_user() {
-        let repo = setup().await;
-        repo.store(&incoming("1", "user seven", at(10, 0)))
-            .await
-            .unwrap();
-        let other_user = IncomingMessage {
-            source: MessageSource::Telegram,
-            source_conversation_id: "99".to_string(),
-            source_message_id: "2".to_string(),
-            user_id: "other".to_string(),
-            text: "other user".to_string(),
-            received_at: at(15, 0),
-        };
-        repo.store(&other_user).await.unwrap();
-
-        let result = repo
-            .latest_entry_received_at_for_user_date("7", date())
-            .await
-            .unwrap();
-
-        assert_eq!(result, Some(at(10, 0)));
-    }
-
-    #[tokio::test]
-    async fn latest_entry_received_at_is_scoped_by_date() {
-        let repo = setup().await;
-        repo.store(&incoming("1", "today", at(10, 0)))
-            .await
-            .unwrap();
-        repo.store(&incoming(
-            "2",
-            "tomorrow",
-            Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
-        ))
-        .await
-        .unwrap();
-
-        let result = repo
-            .latest_entry_received_at_for_user_date("7", date())
-            .await
-            .unwrap();
-
-        assert_eq!(result, Some(at(10, 0)));
     }
 }

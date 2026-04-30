@@ -1237,9 +1237,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn undo_invalidates_cached_review_for_deleted_entry_date() {
+    async fn undo_deletes_daily_review_for_deleted_entry_date() {
         let (service, daily_reviews, journal_entries) =
-            setup_with_daily_review_service(FakeReviewGenerator::succeeding("cached review")).await;
+            setup_with_daily_review_service(FakeReviewGenerator::succeeding("persisted review"))
+                .await;
         journal_entries
             .store(&incoming("1", "entry for review", at(10, 0)))
             .await
@@ -1257,14 +1258,14 @@ mod tests {
             .command(&command(JournalCommand::ReviewToday))
             .await
             .unwrap();
-        let cached = daily_reviews
+        let persisted_review = daily_reviews
             .find_by_user_and_date("7", date())
             .await
             .unwrap();
 
         assert_eq!(undo.text, "Deleted last entry.");
         assert_eq!(review.text, "No journal entries found for today.");
-        assert!(cached.is_none());
+        assert!(persisted_review.is_none());
     }
 
     #[tokio::test]
