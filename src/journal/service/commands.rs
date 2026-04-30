@@ -186,7 +186,7 @@ impl JournalService {
 
     async fn undo(&self, request: &JournalCommandRequest) -> Result<OutgoingMessage, sqlx::Error> {
         let Some(_) = self
-            .repository
+            .store
             .delete_last_for_conversation(
                 &request.user_id,
                 &request.source,

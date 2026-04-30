@@ -15,6 +15,7 @@ use crate::{
         review::service::DailyReviewRunner,
         search::{SearchService, SemanticSearchService},
         status::EmbeddingStatusConfig,
+        store::JournalEntryStore,
     },
     messages::{IncomingMessage, OutgoingMessage},
 };
@@ -27,6 +28,7 @@ mod commands;
 #[derive(Clone)]
 pub struct JournalService {
     repository: JournalRepository,
+    store: JournalEntryStore,
     search: Option<Arc<dyn SearchService>>,
     capture_embedding: Option<Arc<dyn CaptureEmbeddingService>>,
     daily_review: Option<Arc<dyn DailyReviewRunner>>,
@@ -37,8 +39,10 @@ pub struct JournalService {
 
 impl JournalService {
     pub fn new(repository: JournalRepository) -> Self {
+        let store = JournalEntryStore::new(repository.clone_pool());
         Self {
             repository,
+            store,
             search: None,
             capture_embedding: None,
             daily_review: None,
@@ -95,7 +99,7 @@ impl JournalService {
     }
 
     pub async fn process(&self, message: &IncomingMessage) -> Result<OutgoingMessage, sqlx::Error> {
-        if let Some(journal_entry_id) = self.repository.store(message).await?
+        if let Some(journal_entry_id) = self.store.store(message).await?
             && let Some(capture_embedding) = &self.capture_embedding
             && let Err(error) = capture_embedding
                 .embed_entry(journal_entry_id, &message.text)
