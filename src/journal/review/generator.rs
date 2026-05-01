@@ -7,10 +7,7 @@ use rig::{
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::{
-    entry::JournalEntry,
-    review::{DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction},
-};
+use crate::journal::review::{DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction};
 
 pub const DEFAULT_REVIEW_MODEL: &str = GPT_5_MINI;
 

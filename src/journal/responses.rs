@@ -169,3 +169,44 @@ pub(super) fn format_last_entry(entry: &JournalEntry) -> String {
         entry.received_at.format("%Y-%m-%d %H:%M")
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::journal::entry::{JournalEntry, StoredJournalEntry};
+    use chrono::{TimeZone, Utc};
+
+    fn entry(day: u32, text: &str) -> JournalEntry {
+        JournalEntry {
+            text: text.to_string(),
+            received_at: Utc.with_ymd_and_hms(2026, 4, day, 10, 0, 0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn format_entries_works_with_journal_entries() {
+        let entries = vec![entry(28, "first"), entry(28, "second")];
+        let formatted = format_entries(&entries);
+
+        assert!(formatted.contains("2026-04-28 10:00 - first"));
+        assert!(formatted.contains("2026-04-28 10:00 - second"));
+    }
+
+    #[test]
+    fn format_entries_works_with_stored_journal_entries() {
+        let entries = vec![
+            StoredJournalEntry {
+                id: 1,
+                entry: entry(28, "first"),
+            },
+            StoredJournalEntry {
+                id: 2,
+                entry: entry(28, "second"),
+            },
+        ];
+        let formatted = format_entries(&entries);
+
+        assert!(formatted.contains("2026-04-28 10:00 - first"));
+        assert!(formatted.contains("2026-04-28 10:00 - second"));
+    }
+}
