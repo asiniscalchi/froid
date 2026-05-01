@@ -1,5 +1,5 @@
-use tracing::{info, warn};
 use std::{error::Error, fmt};
+use tracing::{info, warn};
 
 use async_trait::async_trait;
 

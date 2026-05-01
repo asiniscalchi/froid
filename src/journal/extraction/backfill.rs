@@ -84,7 +84,10 @@ where
             }
         }
 
-        result.remaining = self.repository.count_entries_missing_or_failed_extraction().await?;
+        result.remaining = self
+            .repository
+            .count_entries_missing_or_failed_extraction()
+            .await?;
 
         Ok(result)
     }
