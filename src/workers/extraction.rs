@@ -45,6 +45,7 @@ where
                     info!(
                         attempted = result.attempted,
                         errored = result.errored,
+                        remaining = result.remaining,
                         "extraction reconciliation cycle completed"
                     );
                 }
@@ -155,6 +156,7 @@ mod tests {
             ExtractionBackfillResult {
                 attempted: 0,
                 errored: 0,
+                remaining: 0,
             }
         );
     }
