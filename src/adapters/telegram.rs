@@ -120,7 +120,7 @@ fn saved_reaction() -> ReactionType {
 
 fn extraction_completed_reaction() -> ReactionType {
     ReactionType::Emoji {
-        emoji: "👀".to_string(),
+        emoji: "✅".to_string(),
     }
 }
 
@@ -285,11 +285,11 @@ mod tests {
     }
 
     #[test]
-    fn extraction_completed_reaction_uses_eyes() {
+    fn extraction_completed_reaction_uses_check_mark() {
         assert_eq!(
             telegram_reaction(OutgoingReaction::JournalEntryExtracted),
             ReactionType::Emoji {
-                emoji: "👀".to_string()
+                emoji: "✅".to_string()
             }
         );
     }
