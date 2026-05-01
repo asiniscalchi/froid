@@ -7,24 +7,24 @@ use rig::{
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::extraction::EntryExtractionPrompt;
+use crate::journal::extraction::JournalEntryExtractionPrompt;
 
-pub const DEFAULT_ENTRY_EXTRACTION_MODEL: &str = GPT_5_MINI;
+pub const DEFAULT_JOURNAL_ENTRY_EXTRACTION_MODEL: &str = GPT_5_MINI;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryExtractionConfig {
+pub struct JournalEntryExtractionConfig {
     pub model: String,
 }
 
-impl Default for EntryExtractionConfig {
+impl Default for JournalEntryExtractionConfig {
     fn default() -> Self {
         Self {
-            model: DEFAULT_ENTRY_EXTRACTION_MODEL.to_string(),
+            model: DEFAULT_JOURNAL_ENTRY_EXTRACTION_MODEL.to_string(),
         }
     }
 }
 
-impl EntryExtractionConfig {
+impl JournalEntryExtractionConfig {
     pub fn from_env() -> Self {
         Self::from_values(env::var("FROID_ENTRY_EXTRACTION_MODEL").ok())
     }
@@ -40,11 +40,11 @@ impl EntryExtractionConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryExtractionGenerationError {
+pub struct JournalEntryExtractionGenerationError {
     message: String,
 }
 
-impl EntryExtractionGenerationError {
+impl JournalEntryExtractionGenerationError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -52,32 +52,32 @@ impl EntryExtractionGenerationError {
     }
 }
 
-impl fmt::Display for EntryExtractionGenerationError {
+impl fmt::Display for JournalEntryExtractionGenerationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.message)
     }
 }
 
-impl Error for EntryExtractionGenerationError {}
+impl Error for JournalEntryExtractionGenerationError {}
 
 #[async_trait]
-pub trait EntryExtractionGenerator: Send + Sync {
+pub trait JournalEntryExtractionGenerator: Send + Sync {
     fn model(&self) -> &str;
     fn prompt_version(&self) -> &str;
 
     async fn generate_entry_extraction(
         &self,
         note: &str,
-    ) -> Result<String, EntryExtractionGenerationError>;
+    ) -> Result<String, JournalEntryExtractionGenerationError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RigOpenAiEntryExtractionGeneratorError {
+pub enum RigOpenAiJournalEntryExtractionGeneratorError {
     MissingOpenAiApiKey,
     Client(String),
 }
 
-impl fmt::Display for RigOpenAiEntryExtractionGeneratorError {
+impl fmt::Display for RigOpenAiJournalEntryExtractionGeneratorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingOpenAiApiKey => write!(f, "OPENAI_API_KEY is required"),
@@ -89,14 +89,14 @@ impl fmt::Display for RigOpenAiEntryExtractionGeneratorError {
     }
 }
 
-impl Error for RigOpenAiEntryExtractionGeneratorError {}
+impl Error for RigOpenAiJournalEntryExtractionGeneratorError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EntryExtractionProviderError {
+pub enum JournalEntryExtractionProviderError {
     Request(String),
 }
 
-impl fmt::Display for EntryExtractionProviderError {
+impl fmt::Display for JournalEntryExtractionProviderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Request(message) => write!(f, "{message}"),
@@ -104,65 +104,66 @@ impl fmt::Display for EntryExtractionProviderError {
     }
 }
 
-impl Error for EntryExtractionProviderError {}
+impl Error for JournalEntryExtractionProviderError {}
 
 #[async_trait]
-pub(crate) trait EntryExtractionProvider: Send + Sync {
+pub(crate) trait JournalEntryExtractionProvider: Send + Sync {
     async fn complete_entry_extraction(
         &self,
         model: &str,
         instructions: &str,
         prompt: &str,
-    ) -> Result<String, EntryExtractionProviderError>;
+    ) -> Result<String, JournalEntryExtractionProviderError>;
 }
 
 #[derive(Clone)]
-struct RigOpenAiEntryExtractionProvider {
+struct RigOpenAiJournalEntryExtractionProvider {
     client: OpenAiClient,
 }
 
-impl RigOpenAiEntryExtractionProvider {
-    fn new(api_key: &str) -> Result<Self, RigOpenAiEntryExtractionGeneratorError> {
-        let client = OpenAiClient::new(api_key)
-            .map_err(|error| RigOpenAiEntryExtractionGeneratorError::Client(error.to_string()))?;
+impl RigOpenAiJournalEntryExtractionProvider {
+    fn new(api_key: &str) -> Result<Self, RigOpenAiJournalEntryExtractionGeneratorError> {
+        let client = OpenAiClient::new(api_key).map_err(|error| {
+            RigOpenAiJournalEntryExtractionGeneratorError::Client(error.to_string())
+        })?;
         Ok(Self { client })
     }
 }
 
 #[async_trait]
-impl EntryExtractionProvider for RigOpenAiEntryExtractionProvider {
+impl JournalEntryExtractionProvider for RigOpenAiJournalEntryExtractionProvider {
     async fn complete_entry_extraction(
         &self,
         model: &str,
         instructions: &str,
         prompt: &str,
-    ) -> Result<String, EntryExtractionProviderError> {
+    ) -> Result<String, JournalEntryExtractionProviderError> {
         let agent = self.client.agent(model).preamble(instructions).build();
 
         agent
             .prompt(prompt)
             .await
-            .map_err(|error| EntryExtractionProviderError::Request(error.to_string()))
+            .map_err(|error| JournalEntryExtractionProviderError::Request(error.to_string()))
     }
 }
 
 #[derive(Clone)]
-pub struct RigOpenAiEntryExtractionGenerator {
-    config: EntryExtractionConfig,
-    prompt: EntryExtractionPrompt,
-    provider: Arc<dyn EntryExtractionProvider>,
+pub struct RigOpenAiJournalEntryExtractionGenerator {
+    config: JournalEntryExtractionConfig,
+    prompt: JournalEntryExtractionPrompt,
+    provider: Arc<dyn JournalEntryExtractionProvider>,
 }
 
-impl RigOpenAiEntryExtractionGenerator {
+impl RigOpenAiJournalEntryExtractionGenerator {
     pub fn from_optional_api_key(
-        config: EntryExtractionConfig,
-        prompt: EntryExtractionPrompt,
+        config: JournalEntryExtractionConfig,
+        prompt: JournalEntryExtractionPrompt,
         api_key: Option<String>,
-    ) -> Result<Self, RigOpenAiEntryExtractionGeneratorError> {
+    ) -> Result<Self, RigOpenAiJournalEntryExtractionGeneratorError> {
         let api_key = api_key
             .filter(|value| !value.trim().is_empty())
-            .ok_or(RigOpenAiEntryExtractionGeneratorError::MissingOpenAiApiKey)?;
-        let provider = RigOpenAiEntryExtractionProvider::new(&api_key)?;
+            .ok_or(RigOpenAiJournalEntryExtractionGeneratorError::MissingOpenAiApiKey)?;
+        let provider = RigOpenAiJournalEntryExtractionProvider::new(&api_key)?;
 
         Ok(Self {
             config,
@@ -173,12 +174,12 @@ impl RigOpenAiEntryExtractionGenerator {
 
     #[cfg(test)]
     pub(crate) fn new<P>(
-        config: EntryExtractionConfig,
-        prompt: EntryExtractionPrompt,
+        config: JournalEntryExtractionConfig,
+        prompt: JournalEntryExtractionPrompt,
         provider: P,
     ) -> Self
     where
-        P: EntryExtractionProvider + 'static,
+        P: JournalEntryExtractionProvider + 'static,
     {
         Self {
             config,
@@ -189,7 +190,7 @@ impl RigOpenAiEntryExtractionGenerator {
 }
 
 #[async_trait]
-impl EntryExtractionGenerator for RigOpenAiEntryExtractionGenerator {
+impl JournalEntryExtractionGenerator for RigOpenAiJournalEntryExtractionGenerator {
     fn model(&self) -> &str {
         &self.config.model
     }
@@ -201,12 +202,12 @@ impl EntryExtractionGenerator for RigOpenAiEntryExtractionGenerator {
     async fn generate_entry_extraction(
         &self,
         note: &str,
-    ) -> Result<String, EntryExtractionGenerationError> {
+    ) -> Result<String, JournalEntryExtractionGenerationError> {
         let prompt = build_entry_extraction_prompt(note);
         self.provider
             .complete_entry_extraction(&self.config.model, &self.prompt.text, &prompt)
             .await
-            .map_err(|error| EntryExtractionGenerationError::new(error.to_string()))
+            .map_err(|error| JournalEntryExtractionGenerationError::new(error.to_string()))
     }
 }
 
@@ -229,7 +230,7 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeProvider {
-        result: Result<String, EntryExtractionProviderError>,
+        result: Result<String, JournalEntryExtractionProviderError>,
         calls: Arc<Mutex<Vec<(String, String, String)>>>,
     }
 
@@ -247,13 +248,13 @@ mod tests {
     }
 
     #[async_trait]
-    impl EntryExtractionProvider for FakeProvider {
+    impl JournalEntryExtractionProvider for FakeProvider {
         async fn complete_entry_extraction(
             &self,
             model: &str,
             instructions: &str,
             prompt: &str,
-        ) -> Result<String, EntryExtractionProviderError> {
+        ) -> Result<String, JournalEntryExtractionProviderError> {
             self.calls.lock().unwrap().push((
                 model.to_string(),
                 instructions.to_string(),
@@ -268,11 +269,11 @@ mod tests {
         let provider = FakeProvider::succeeding(
             r#"{"summary":"Saved","domains":[],"emotions":[],"behaviors":[],"needs":[],"possible_patterns":[]}"#,
         );
-        let generator = RigOpenAiEntryExtractionGenerator::new(
-            EntryExtractionConfig {
+        let generator = RigOpenAiJournalEntryExtractionGenerator::new(
+            JournalEntryExtractionConfig {
                 model: "custom-model".to_string(),
             },
-            EntryExtractionPrompt {
+            JournalEntryExtractionPrompt {
                 version: "entry_extraction_test".to_string(),
                 text: "System instructions".to_string(),
             },
@@ -296,14 +297,14 @@ mod tests {
 
     #[tokio::test]
     async fn generator_maps_provider_failure() {
-        let generator = RigOpenAiEntryExtractionGenerator::new(
-            EntryExtractionConfig::default(),
-            EntryExtractionPrompt {
+        let generator = RigOpenAiJournalEntryExtractionGenerator::new(
+            JournalEntryExtractionConfig::default(),
+            JournalEntryExtractionPrompt {
                 version: "entry_extraction_test".to_string(),
                 text: "System instructions".to_string(),
             },
             FakeProvider {
-                result: Err(EntryExtractionProviderError::Request(
+                result: Err(JournalEntryExtractionProviderError::Request(
                     "provider down".to_string(),
                 )),
                 calls: Arc::new(Mutex::new(Vec::new())),
@@ -320,23 +321,23 @@ mod tests {
 
     #[test]
     fn extraction_config_uses_default_model() {
-        let config = EntryExtractionConfig::from_values(None);
+        let config = JournalEntryExtractionConfig::from_values(None);
 
-        assert_eq!(config.model, DEFAULT_ENTRY_EXTRACTION_MODEL);
+        assert_eq!(config.model, DEFAULT_JOURNAL_ENTRY_EXTRACTION_MODEL);
     }
 
     #[test]
     fn extraction_config_accepts_model_override() {
-        let config = EntryExtractionConfig::from_values(Some("custom-model".to_string()));
+        let config = JournalEntryExtractionConfig::from_values(Some("custom-model".to_string()));
 
         assert_eq!(config.model, "custom-model");
     }
 
     #[test]
     fn real_openai_generator_requires_api_key() {
-        let result = RigOpenAiEntryExtractionGenerator::from_optional_api_key(
-            EntryExtractionConfig::default(),
-            EntryExtractionPrompt {
+        let result = RigOpenAiJournalEntryExtractionGenerator::from_optional_api_key(
+            JournalEntryExtractionConfig::default(),
+            JournalEntryExtractionPrompt {
                 version: "entry_extraction_test".to_string(),
                 text: "System instructions".to_string(),
             },
@@ -345,7 +346,7 @@ mod tests {
 
         assert_eq!(
             result.err(),
-            Some(RigOpenAiEntryExtractionGeneratorError::MissingOpenAiApiKey)
+            Some(RigOpenAiJournalEntryExtractionGeneratorError::MissingOpenAiApiKey)
         );
     }
 }

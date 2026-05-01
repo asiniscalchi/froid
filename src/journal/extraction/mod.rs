@@ -8,11 +8,11 @@ pub(crate) mod wiring;
 use chrono::{DateTime, Utc};
 
 pub use generator::{
-    EntryExtractionConfig, EntryExtractionGenerationError, EntryExtractionGenerator,
-    RigOpenAiEntryExtractionGenerator,
+    JournalEntryExtractionConfig, JournalEntryExtractionGenerationError,
+    JournalEntryExtractionGenerator, RigOpenAiJournalEntryExtractionGenerator,
 };
-pub use prompt::{EntryExtractionPrompt, EntryExtractionPromptConfig};
-pub use wiring::{EntryExtractionRuntimeConfig, configure_entry_extraction};
+pub use prompt::{JournalEntryExtractionPrompt, JournalEntryExtractionPromptConfig};
+pub use wiring::{JournalEntryExtractionRuntimeConfig, configure_journal_entry_extraction};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JournalEntryExtractionStatus {

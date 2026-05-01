@@ -12,11 +12,11 @@ const REQUIRED_TOP_LEVEL_FIELDS: [&str; 6] = [
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryExtractionValidationError {
+pub struct JournalEntryExtractionValidationError {
     message: String,
 }
 
-impl EntryExtractionValidationError {
+impl JournalEntryExtractionValidationError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -24,26 +24,30 @@ impl EntryExtractionValidationError {
     }
 }
 
-impl fmt::Display for EntryExtractionValidationError {
+impl fmt::Display for JournalEntryExtractionValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.message)
     }
 }
 
-impl Error for EntryExtractionValidationError {}
+impl Error for JournalEntryExtractionValidationError {}
 
-pub fn validate_extraction_json(raw: &str) -> Result<String, EntryExtractionValidationError> {
+pub fn validate_extraction_json(
+    raw: &str,
+) -> Result<String, JournalEntryExtractionValidationError> {
     let value: Value = serde_json::from_str(raw).map_err(|error| {
-        EntryExtractionValidationError::new(format!("extraction output is not valid JSON: {error}"))
+        JournalEntryExtractionValidationError::new(format!(
+            "extraction output is not valid JSON: {error}"
+        ))
     })?;
 
     let object = value.as_object().ok_or_else(|| {
-        EntryExtractionValidationError::new("extraction output must be an object")
+        JournalEntryExtractionValidationError::new("extraction output must be an object")
     })?;
 
     for field in REQUIRED_TOP_LEVEL_FIELDS {
         if !object.contains_key(field) {
-            return Err(EntryExtractionValidationError::new(format!(
+            return Err(JournalEntryExtractionValidationError::new(format!(
                 "extraction output is missing required field: {field}"
             )));
         }
@@ -57,11 +61,13 @@ pub fn validate_extraction_json(raw: &str) -> Result<String, EntryExtractionVali
     validate_possible_patterns(object.get("possible_patterns"))?;
 
     serde_json::to_string(&value).map_err(|error| {
-        EntryExtractionValidationError::new(format!("failed to serialize extraction JSON: {error}"))
+        JournalEntryExtractionValidationError::new(format!(
+            "failed to serialize extraction JSON: {error}"
+        ))
     })
 }
 
-fn validate_emotions(value: Option<&Value>) -> Result<(), EntryExtractionValidationError> {
+fn validate_emotions(value: Option<&Value>) -> Result<(), JournalEntryExtractionValidationError> {
     for (index, item) in require_array(value, "emotions")?.iter().enumerate() {
         require_object(item, &format!("emotions[{index}]"))?;
         require_string(item.get("label"), &format!("emotions[{index}].label"))?;
@@ -77,7 +83,7 @@ fn validate_emotions(value: Option<&Value>) -> Result<(), EntryExtractionValidat
     Ok(())
 }
 
-fn validate_behaviors(value: Option<&Value>) -> Result<(), EntryExtractionValidationError> {
+fn validate_behaviors(value: Option<&Value>) -> Result<(), JournalEntryExtractionValidationError> {
     for (index, item) in require_array(value, "behaviors")?.iter().enumerate() {
         require_object(item, &format!("behaviors[{index}]"))?;
         require_string(item.get("label"), &format!("behaviors[{index}].label"))?;
@@ -94,7 +100,7 @@ fn validate_behaviors(value: Option<&Value>) -> Result<(), EntryExtractionValida
     Ok(())
 }
 
-fn validate_needs(value: Option<&Value>) -> Result<(), EntryExtractionValidationError> {
+fn validate_needs(value: Option<&Value>) -> Result<(), JournalEntryExtractionValidationError> {
     for (index, item) in require_array(value, "needs")?.iter().enumerate() {
         require_object(item, &format!("needs[{index}]"))?;
         require_string(item.get("label"), &format!("needs[{index}].label"))?;
@@ -111,10 +117,12 @@ fn validate_needs(value: Option<&Value>) -> Result<(), EntryExtractionValidation
     Ok(())
 }
 
-fn validate_possible_patterns(value: Option<&Value>) -> Result<(), EntryExtractionValidationError> {
+fn validate_possible_patterns(
+    value: Option<&Value>,
+) -> Result<(), JournalEntryExtractionValidationError> {
     let patterns = require_array(value, "possible_patterns")?;
     if patterns.len() > 3 {
-        return Err(EntryExtractionValidationError::new(
+        return Err(JournalEntryExtractionValidationError::new(
             "possible_patterns must contain at most 3 items",
         ));
     }
@@ -136,35 +144,37 @@ fn validate_possible_patterns(value: Option<&Value>) -> Result<(), EntryExtracti
 fn require_object<'a>(
     value: &'a Value,
     path: &str,
-) -> Result<&'a serde_json::Map<String, Value>, EntryExtractionValidationError> {
-    value
-        .as_object()
-        .ok_or_else(|| EntryExtractionValidationError::new(format!("{path} must be an object")))
+) -> Result<&'a serde_json::Map<String, Value>, JournalEntryExtractionValidationError> {
+    value.as_object().ok_or_else(|| {
+        JournalEntryExtractionValidationError::new(format!("{path} must be an object"))
+    })
 }
 
 fn require_array<'a>(
     value: Option<&'a Value>,
     path: &str,
-) -> Result<&'a Vec<Value>, EntryExtractionValidationError> {
-    value
-        .and_then(Value::as_array)
-        .ok_or_else(|| EntryExtractionValidationError::new(format!("{path} must be an array")))
+) -> Result<&'a Vec<Value>, JournalEntryExtractionValidationError> {
+    value.and_then(Value::as_array).ok_or_else(|| {
+        JournalEntryExtractionValidationError::new(format!("{path} must be an array"))
+    })
 }
 
-fn require_string(value: Option<&Value>, path: &str) -> Result<(), EntryExtractionValidationError> {
-    value
-        .and_then(Value::as_str)
-        .map(|_| ())
-        .ok_or_else(|| EntryExtractionValidationError::new(format!("{path} must be a string")))
+fn require_string(
+    value: Option<&Value>,
+    path: &str,
+) -> Result<(), JournalEntryExtractionValidationError> {
+    value.and_then(Value::as_str).map(|_| ()).ok_or_else(|| {
+        JournalEntryExtractionValidationError::new(format!("{path} must be a string"))
+    })
 }
 
 fn require_string_array(
     value: Option<&Value>,
     path: &str,
-) -> Result<(), EntryExtractionValidationError> {
+) -> Result<(), JournalEntryExtractionValidationError> {
     for (index, item) in require_array(value, path)?.iter().enumerate() {
         if !item.is_string() {
-            return Err(EntryExtractionValidationError::new(format!(
+            return Err(JournalEntryExtractionValidationError::new(format!(
                 "{path}[{index}] must be a string"
             )));
         }
@@ -175,15 +185,15 @@ fn require_string_array(
 fn require_number_0_to_1(
     value: Option<&Value>,
     path: &str,
-) -> Result<(), EntryExtractionValidationError> {
+) -> Result<(), JournalEntryExtractionValidationError> {
     let Some(number) = value.and_then(Value::as_f64) else {
-        return Err(EntryExtractionValidationError::new(format!(
+        return Err(JournalEntryExtractionValidationError::new(format!(
             "{path} must be a number"
         )));
     };
 
     if !(0.0..=1.0).contains(&number) {
-        return Err(EntryExtractionValidationError::new(format!(
+        return Err(JournalEntryExtractionValidationError::new(format!(
             "{path} must be between 0 and 1"
         )));
     }
@@ -195,15 +205,15 @@ fn require_enum(
     value: Option<&Value>,
     path: &str,
     allowed: &[&str],
-) -> Result<(), EntryExtractionValidationError> {
+) -> Result<(), JournalEntryExtractionValidationError> {
     let Some(value) = value.and_then(Value::as_str) else {
-        return Err(EntryExtractionValidationError::new(format!(
+        return Err(JournalEntryExtractionValidationError::new(format!(
             "{path} must be a string"
         )));
     };
 
     if !allowed.contains(&value) {
-        return Err(EntryExtractionValidationError::new(format!(
+        return Err(JournalEntryExtractionValidationError::new(format!(
             "{path} must be one of: {}",
             allowed.join(", ")
         )));
@@ -227,7 +237,7 @@ mod tests {
         })
     }
 
-    fn validate(value: Value) -> Result<String, EntryExtractionValidationError> {
+    fn validate(value: Value) -> Result<String, JournalEntryExtractionValidationError> {
         validate_extraction_json(&value.to_string())
     }
 

@@ -1,30 +1,30 @@
 use std::{env, error::Error, fmt, fs, path::PathBuf};
 
-pub const DEFAULT_ENTRY_EXTRACTION_PROMPT_PATH: &str = "prompts/entry_extraction_v1.md";
-pub const DEFAULT_ENTRY_EXTRACTION_PROMPT_VERSION: &str = "entry_extraction_v1";
+pub const DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_PATH: &str = "prompts/entry_extraction_v1.md";
+pub const DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_VERSION: &str = "entry_extraction_v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryExtractionPrompt {
+pub struct JournalEntryExtractionPrompt {
     pub version: String,
     pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryExtractionPromptConfig {
+pub struct JournalEntryExtractionPromptConfig {
     pub path: PathBuf,
     pub version: String,
 }
 
-impl Default for EntryExtractionPromptConfig {
+impl Default for JournalEntryExtractionPromptConfig {
     fn default() -> Self {
         Self {
-            path: PathBuf::from(DEFAULT_ENTRY_EXTRACTION_PROMPT_PATH),
-            version: DEFAULT_ENTRY_EXTRACTION_PROMPT_VERSION.to_string(),
+            path: PathBuf::from(DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_PATH),
+            version: DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_VERSION.to_string(),
         }
     }
 }
 
-impl EntryExtractionPromptConfig {
+impl JournalEntryExtractionPromptConfig {
     pub fn from_env() -> Self {
         Self::from_values(
             env::var("FROID_ENTRY_EXTRACTION_PROMPT_PATH").ok(),
@@ -45,21 +45,21 @@ impl EntryExtractionPromptConfig {
         }
     }
 
-    pub fn load(&self) -> Result<EntryExtractionPrompt, EntryExtractionPromptError> {
+    pub fn load(&self) -> Result<JournalEntryExtractionPrompt, JournalEntryExtractionPromptError> {
         let text = fs::read_to_string(&self.path).map_err(|source| {
-            EntryExtractionPromptError::ReadFailed {
+            JournalEntryExtractionPromptError::ReadFailed {
                 path: self.path.clone(),
                 message: source.to_string(),
             }
         })?;
 
         if text.trim().is_empty() {
-            return Err(EntryExtractionPromptError::Empty {
+            return Err(JournalEntryExtractionPromptError::Empty {
                 path: self.path.clone(),
             });
         }
 
-        Ok(EntryExtractionPrompt {
+        Ok(JournalEntryExtractionPrompt {
             version: self.version.clone(),
             text,
         })
@@ -67,12 +67,12 @@ impl EntryExtractionPromptConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EntryExtractionPromptError {
+pub enum JournalEntryExtractionPromptError {
     ReadFailed { path: PathBuf, message: String },
     Empty { path: PathBuf },
 }
 
-impl fmt::Display for EntryExtractionPromptError {
+impl fmt::Display for JournalEntryExtractionPromptError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ReadFailed { path, message } => {
@@ -93,4 +93,4 @@ impl fmt::Display for EntryExtractionPromptError {
     }
 }
 
-impl Error for EntryExtractionPromptError {}
+impl Error for JournalEntryExtractionPromptError {}
