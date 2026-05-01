@@ -3,7 +3,9 @@ use std::{error::Error, fmt};
 use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
-use super::{JournalEntryExtraction, JournalEntryExtractionStatus};
+use super::{
+    JournalEntryExtraction, JournalEntryExtractionCandidate, JournalEntryExtractionStatus,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JournalEntryExtractionRepositoryError {
@@ -141,6 +143,50 @@ impl JournalEntryExtractionRepository {
 
         Ok(())
     }
+
+    pub async fn find_entries_missing_or_failed_extraction(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<JournalEntryExtractionCandidate>, JournalEntryExtractionRepositoryError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT j.id, j.raw_text
+            FROM journal_entries j
+            LEFT JOIN journal_entry_extractions e ON e.journal_entry_id = j.id
+            WHERE e.id IS NULL OR e.status = 'failed'
+            ORDER BY j.received_at ASC, j.id ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| JournalEntryExtractionCandidate {
+                journal_entry_id: row.get("id"),
+                raw_text: row.get("raw_text"),
+            })
+            .collect())
+    }
+
+    pub async fn delete_failed_if_present(
+        &self,
+        journal_entry_id: i64,
+    ) -> Result<bool, JournalEntryExtractionRepositoryError> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM journal_entry_extractions
+            WHERE journal_entry_id = ? AND status = 'failed'
+            "#,
+        )
+        .bind(journal_entry_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() != 0)
+    }
 }
 
 fn row_to_extraction(
@@ -169,6 +215,7 @@ fn row_to_extraction(
 
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone;
     use sqlx::SqlitePool;
 
     use super::*;
@@ -294,5 +341,178 @@ mod tests {
 
         let extraction = repo.find_by_journal_entry_id(entry_id).await.unwrap();
         assert!(extraction.is_none());
+    }
+
+    async fn insert_entry_at(
+        pool: &SqlitePool,
+        source_message_id: &str,
+        text: &str,
+        h: u32,
+    ) -> i64 {
+        let received_at = chrono::Utc.with_ymd_and_hms(2026, 1, 1, h, 0, 0).unwrap();
+        let message = IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: "42".to_string(),
+            source_message_id: source_message_id.to_string(),
+            user_id: "7".to_string(),
+            text: text.to_string(),
+            received_at,
+        };
+        crate::journal::repository::JournalRepository::new(pool.clone())
+            .store(&message)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn find_candidates_returns_entries_with_no_extraction_oldest_first() {
+        let (repo, pool) = setup().await;
+        let first = insert_entry_at(&pool, "1", "first", 10).await;
+        let second = insert_entry_at(&pool, "2", "second", 11).await;
+        let third = insert_entry_at(&pool, "3", "third", 12).await;
+
+        repo.insert_pending_if_absent(second, "model-a", "v1")
+            .await
+            .unwrap();
+
+        let candidates = repo
+            .find_entries_missing_or_failed_extraction(10)
+            .await
+            .unwrap();
+
+        let ids: Vec<i64> = candidates.iter().map(|c| c.journal_entry_id).collect();
+        assert_eq!(ids, vec![first, third]);
+    }
+
+    #[tokio::test]
+    async fn find_candidates_includes_failed_entries() {
+        let (repo, pool) = setup().await;
+        let entry_id = insert_entry_at(&pool, "1", "first", 10).await;
+        repo.insert_pending_if_absent(entry_id, "model-a", "v1")
+            .await
+            .unwrap();
+        repo.mark_failed(entry_id, "model-a", "v1", "provider down")
+            .await
+            .unwrap();
+
+        let candidates = repo
+            .find_entries_missing_or_failed_extraction(10)
+            .await
+            .unwrap();
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].journal_entry_id, entry_id);
+        assert_eq!(candidates[0].raw_text, "first");
+    }
+
+    #[tokio::test]
+    async fn find_candidates_excludes_completed_and_pending_entries() {
+        let (repo, pool) = setup().await;
+        let pending_id = insert_entry_at(&pool, "1", "pending", 10).await;
+        let completed_id = insert_entry_at(&pool, "2", "completed", 11).await;
+        repo.insert_pending_if_absent(pending_id, "model-a", "v1")
+            .await
+            .unwrap();
+        repo.insert_pending_if_absent(completed_id, "model-a", "v1")
+            .await
+            .unwrap();
+        repo.mark_completed(
+            completed_id,
+            r#"{"summary":"ok","domains":[],"emotions":[],"behaviors":[],"needs":[],"possible_patterns":[]}"#,
+            "model-a",
+            "v1",
+        )
+        .await
+        .unwrap();
+
+        let candidates = repo
+            .find_entries_missing_or_failed_extraction(10)
+            .await
+            .unwrap();
+
+        assert!(candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_candidates_respects_limit() {
+        let (repo, pool) = setup().await;
+        insert_entry_at(&pool, "1", "first", 10).await;
+        insert_entry_at(&pool, "2", "second", 11).await;
+        insert_entry_at(&pool, "3", "third", 12).await;
+
+        let candidates = repo
+            .find_entries_missing_or_failed_extraction(2)
+            .await
+            .unwrap();
+
+        assert_eq!(candidates.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn delete_failed_removes_failed_row_and_returns_true() {
+        let (repo, pool) = setup().await;
+        let entry_id = insert_entry(&pool).await;
+        repo.insert_pending_if_absent(entry_id, "model-a", "v1")
+            .await
+            .unwrap();
+        repo.mark_failed(entry_id, "model-a", "v1", "oops")
+            .await
+            .unwrap();
+
+        let deleted = repo.delete_failed_if_present(entry_id).await.unwrap();
+
+        let extraction = repo.find_by_journal_entry_id(entry_id).await.unwrap();
+        assert!(deleted);
+        assert!(extraction.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_failed_is_noop_when_no_failed_row_exists() {
+        let (repo, pool) = setup().await;
+        let entry_id = insert_entry(&pool).await;
+
+        let deleted = repo.delete_failed_if_present(entry_id).await.unwrap();
+
+        assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn delete_failed_does_not_remove_pending_or_completed_rows() {
+        let (repo, pool) = setup().await;
+        let pending_id = insert_entry_at(&pool, "1", "pending", 10).await;
+        let completed_id = insert_entry_at(&pool, "2", "completed", 11).await;
+        repo.insert_pending_if_absent(pending_id, "model-a", "v1")
+            .await
+            .unwrap();
+        repo.insert_pending_if_absent(completed_id, "model-a", "v1")
+            .await
+            .unwrap();
+        repo.mark_completed(
+            completed_id,
+            r#"{"summary":"ok","domains":[],"emotions":[],"behaviors":[],"needs":[],"possible_patterns":[]}"#,
+            "model-a",
+            "v1",
+        )
+        .await
+        .unwrap();
+
+        let pending_deleted = repo.delete_failed_if_present(pending_id).await.unwrap();
+        let completed_deleted = repo.delete_failed_if_present(completed_id).await.unwrap();
+
+        assert!(!pending_deleted);
+        assert!(!completed_deleted);
+        assert!(
+            repo.find_by_journal_entry_id(pending_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            repo.find_by_journal_entry_id(completed_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 }

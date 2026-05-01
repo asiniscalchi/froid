@@ -1,7 +1,10 @@
 use clap::{Parser, Subcommand};
 
 use crate::{
-    journal::{embedding::EmbeddingWorkerConfig, review::DailyReviewDeliveryWorkerConfig},
+    journal::{
+        embedding::EmbeddingWorkerConfig, extraction::ExtractionWorkerConfig,
+        review::DailyReviewDeliveryWorkerConfig,
+    },
     version,
 };
 
@@ -36,6 +39,15 @@ pub struct Cli {
     #[arg(long, env = "FROID_EMBEDDING_WORKER_INTERVAL_SECONDS", global = true)]
     embedding_worker_interval_seconds: Option<String>,
 
+    #[arg(long, env = "FROID_EXTRACTION_WORKER_ENABLED", global = true)]
+    extraction_worker_enabled: Option<String>,
+
+    #[arg(long, env = "FROID_EXTRACTION_WORKER_BATCH_SIZE", global = true)]
+    extraction_worker_batch_size: Option<String>,
+
+    #[arg(long, env = "FROID_EXTRACTION_WORKER_INTERVAL_SECONDS", global = true)]
+    extraction_worker_interval_seconds: Option<String>,
+
     #[arg(long, env = "FROID_DAILY_REVIEW_DELIVERY_ENABLED", global = true)]
     daily_review_delivery_enabled: Option<String>,
 
@@ -62,6 +74,7 @@ pub struct ServeConfig {
     pub database_path: String,
     pub database_url: String,
     pub embedding_worker: EmbeddingWorkerConfig,
+    pub extraction_worker: ExtractionWorkerConfig,
     pub daily_review_delivery: DailyReviewDeliveryWorkerConfig,
 }
 
@@ -92,6 +105,13 @@ impl Cli {
         )
         .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
 
+        let extraction_worker = ExtractionWorkerConfig::from_values(
+            self.extraction_worker_enabled.clone(),
+            self.extraction_worker_batch_size.clone(),
+            self.extraction_worker_interval_seconds.clone(),
+        )
+        .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
+
         let daily_review_delivery = DailyReviewDeliveryWorkerConfig::from_values(
             self.daily_review_delivery_enabled.clone(),
             self.daily_review_delivery_interval_seconds.clone(),
@@ -105,6 +125,7 @@ impl Cli {
             database_url: format!("sqlite:{database_path}"),
             database_path,
             embedding_worker,
+            extraction_worker,
             daily_review_delivery,
         })
     }
@@ -155,6 +176,9 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: None,
             daily_review_delivery_interval_seconds: None,
             command: None,
@@ -172,6 +196,9 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: None,
             daily_review_delivery_interval_seconds: None,
             command: None,
@@ -196,6 +223,9 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: None,
             daily_review_delivery_interval_seconds: None,
             command: None,
@@ -225,6 +255,9 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: None,
             daily_review_delivery_interval_seconds: None,
             command: None,
@@ -258,6 +291,9 @@ mod tests {
             embedding_worker_enabled: Some("true".to_string()),
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: None,
             daily_review_delivery_interval_seconds: None,
             command: None,
@@ -277,6 +313,9 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: Some("0".to_string()),
             embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: None,
             daily_review_delivery_interval_seconds: None,
             command: None,
@@ -301,6 +340,9 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: Some("0".to_string()),
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: None,
             daily_review_delivery_interval_seconds: None,
             command: None,
@@ -342,6 +384,9 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: Some("true".to_string()),
             daily_review_delivery_interval_seconds: None,
             command: None,
@@ -361,6 +406,9 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: None,
             daily_review_delivery_interval_seconds: Some("0".to_string()),
             command: None,
@@ -373,6 +421,100 @@ mod tests {
             error
                 .to_string()
                 .contains("FROID_DAILY_REVIEW_DELIVERY_INTERVAL_SECONDS")
+        );
+    }
+
+    #[test]
+    fn serve_config_extraction_worker_disabled_by_default() {
+        let config = cli_with_token("token").serve_config().unwrap();
+
+        assert!(!config.extraction_worker.enabled);
+    }
+
+    #[test]
+    fn serve_config_extraction_worker_defaults_to_batch_size_20_and_interval_300s() {
+        let config = cli_with_token("token").serve_config().unwrap();
+
+        assert_eq!(config.extraction_worker.batch_size, 20);
+        assert_eq!(
+            config.extraction_worker.interval,
+            std::time::Duration::from_secs(300)
+        );
+    }
+
+    #[test]
+    fn serve_config_extraction_worker_enabled_when_set_to_true() {
+        let config = Cli {
+            telegram_bot_token: Some("token".to_string()),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: Some("true".to_string()),
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
+            command: None,
+        }
+        .serve_config()
+        .unwrap();
+
+        assert!(config.extraction_worker.enabled);
+    }
+
+    #[test]
+    fn serve_config_rejects_zero_extraction_worker_batch_size() {
+        let error = Cli {
+            telegram_bot_token: Some("token".to_string()),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: Some("0".to_string()),
+            extraction_worker_interval_seconds: None,
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
+            command: None,
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(
+            error
+                .to_string()
+                .contains("FROID_EXTRACTION_WORKER_BATCH_SIZE")
+        );
+    }
+
+    #[test]
+    fn serve_config_rejects_zero_extraction_worker_interval() {
+        let error = Cli {
+            telegram_bot_token: Some("token".to_string()),
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: Some("0".to_string()),
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
+            command: None,
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(
+            error
+                .to_string()
+                .contains("FROID_EXTRACTION_WORKER_INTERVAL_SECONDS")
         );
     }
 }

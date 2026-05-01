@@ -484,6 +484,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl JournalEntryExtractionRunner for FakeJournalEntryExtractionRunner {
+        fn model(&self) -> &str {
+            "test-extraction-model"
+        }
+
+        fn prompt_version(&self) -> &str {
+            "entry_extraction_v1"
+        }
+
         async fn extract_entry(
             &self,
             journal_entry_id: i64,

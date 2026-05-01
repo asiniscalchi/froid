@@ -3,6 +3,8 @@ use std::error::Error;
 use sqlx::SqlitePool;
 use tracing::info;
 
+use tracing::warn;
+
 use crate::{
     adapters::{Adapter, telegram::TelegramAdapter},
     cli::ServeConfig,
@@ -11,7 +13,11 @@ use crate::{
         embedding::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
         },
-        extraction::{JournalEntryExtractionRuntimeConfig, configure_journal_entry_extraction},
+        extraction::{
+            ExtractionBackfillService, JournalEntryExtractionRuntimeConfig,
+            configure_journal_entry_extraction, repository::JournalEntryExtractionRepository,
+            service::JournalEntryExtractionService,
+        },
         repository::JournalRepository,
         review::{DailyReviewRuntimeConfig, build_daily_review_service, configure_daily_review},
         search::SemanticSearchService,
@@ -22,6 +28,7 @@ use crate::{
     workers::{
         daily_review::{DailyReviewDeliveryWorker, TelegramDailyReviewSender},
         embedding::EmbeddingReconciliationWorker,
+        extraction::ExtractionReconciliationWorker,
     },
 };
 
@@ -43,6 +50,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let entry_extraction_config = JournalEntryExtractionRuntimeConfig::from_env();
 
     spawn_embedding_worker(&pool, &config, embedding_config.as_ref())?;
+    spawn_extraction_worker(&pool, &config, &entry_extraction_config)?;
     let delivery_configured =
         spawn_daily_review_delivery_worker(&pool, &config, daily_review_config.clone())?;
     let journal_service = build_journal_service(
@@ -75,6 +83,39 @@ fn spawn_embedding_worker(
             EmbeddingReconciliationWorker::new(backfill_service, config.embedding_worker.clone());
         tokio::spawn(async move { worker.run_forever().await });
     }
+
+    Ok(())
+}
+
+fn spawn_extraction_worker(
+    pool: &SqlitePool,
+    config: &ServeConfig,
+    entry_extraction_config: &JournalEntryExtractionRuntimeConfig,
+) -> Result<(), Box<dyn Error>> {
+    if !config.extraction_worker.enabled {
+        return Ok(());
+    }
+
+    let Some(openai_api_key) = entry_extraction_config
+        .openai_api_key
+        .as_ref()
+        .filter(|v| !v.trim().is_empty())
+    else {
+        warn!("extraction reconciliation worker is enabled but OPENAI_API_KEY is not configured");
+        return Ok(());
+    };
+
+    let prompt = entry_extraction_config.prompt.load()?;
+    let generator = crate::journal::extraction::RigOpenAiJournalEntryExtractionGenerator::from_optional_api_key(
+        entry_extraction_config.extraction.clone(),
+        prompt,
+        Some(openai_api_key.clone()),
+    )?;
+    let repository = JournalEntryExtractionRepository::new(pool.clone());
+    let runner = JournalEntryExtractionService::new(repository.clone(), generator);
+    let backfill = ExtractionBackfillService::new(repository, runner);
+    let worker = ExtractionReconciliationWorker::new(backfill, config.extraction_worker.clone());
+    tokio::spawn(async move { worker.run_forever().await });
 
     Ok(())
 }
