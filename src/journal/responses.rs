@@ -19,7 +19,7 @@ pub(super) fn start_response() -> String {
 }
 
 pub(super) fn help_response() -> String {
-    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/review [today|YYYY-MM-DD|-N] - generate daily review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
+    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/review [today|YYYY-MM-DD|-N] - show daily review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
 }
 
 pub(super) fn unknown_command_response(command: &str) -> String {
@@ -58,8 +58,12 @@ pub(super) fn daily_review_unavailable_response() -> String {
     "Daily review generation is not configured yet.".to_string()
 }
 
-pub(super) fn daily_review_failure_response() -> String {
-    "I could not generate today's review right now. Please try again later.".to_string()
+pub(super) fn daily_review_not_available_response() -> String {
+    "No review available for today yet.".to_string()
+}
+
+pub(super) fn daily_review_not_available_for_date_response(date: NaiveDate) -> String {
+    format!("No review available for {} yet.", date.format("%Y-%m-%d"))
 }
 
 pub(super) fn format_daily_review(review: &DailyReview) -> String {
@@ -75,10 +79,6 @@ pub(crate) fn format_daily_review_for_date(review: &DailyReview, date: NaiveDate
         date.format("%Y-%m-%d"),
         review.review_text.as_deref().unwrap_or_default()
     )
-}
-
-pub(super) fn no_entries_for_date_response(date: NaiveDate) -> String {
-    format!("No journal entries found for {}.", date.format("%Y-%m-%d"))
 }
 
 pub(super) fn stats_response(stats: &JournalStats) -> String {

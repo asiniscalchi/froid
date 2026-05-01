@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use crate::journal::{
     repository::JournalRepository,
     review::{
-        DailyReviewFailure, DailyReviewResult, DailyReviewStatus,
+        DailyReview, DailyReviewFailure, DailyReviewResult, DailyReviewStatus,
         generator::ReviewGenerator,
         repository::{DailyReviewRepository, DailyReviewRepositoryError},
     },
@@ -54,6 +54,12 @@ pub trait DailyReviewRunner: Send + Sync {
         user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<DailyReviewResult, DailyReviewServiceError>;
+
+    async fn fetch_review(
+        &self,
+        user_id: &str,
+        utc_date: NaiveDate,
+    ) -> Result<Option<DailyReview>, DailyReviewServiceError>;
 }
 
 impl DailyReviewService {
@@ -129,6 +135,23 @@ impl DailyReviewService {
         }
     }
 
+    pub async fn fetch_review(
+        &self,
+        user_id: &str,
+        utc_date: NaiveDate,
+    ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
+        let review = self
+            .daily_reviews
+            .find_by_user_and_date(user_id, utc_date)
+            .await?;
+        Ok(review.filter(|r| {
+            r.status == DailyReviewStatus::Completed
+                && r.review_text
+                    .as_deref()
+                    .is_some_and(|t| !t.trim().is_empty())
+        }))
+    }
+
     async fn store_failed_review(
         &self,
         user_id: &str,
@@ -158,6 +181,14 @@ impl DailyReviewRunner for DailyReviewService {
         utc_date: NaiveDate,
     ) -> Result<DailyReviewResult, DailyReviewServiceError> {
         DailyReviewService::review_day(self, user_id, utc_date).await
+    }
+
+    async fn fetch_review(
+        &self,
+        user_id: &str,
+        utc_date: NaiveDate,
+    ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
+        DailyReviewService::fetch_review(self, user_id, utc_date).await
     }
 }
 
@@ -509,6 +540,44 @@ mod tests {
         assert_eq!(second.review_date, next_date);
         assert_eq!(first.review_text, Some("first day review".to_string()));
         assert_eq!(second.review_text, Some("second day review".to_string()));
+    }
+
+    #[tokio::test]
+    async fn fetch_review_returns_completed_review() {
+        let (service, daily_reviews, _journal_entries, _generator) =
+            setup(FakeReviewGenerator::succeeding("any")).await;
+        daily_reviews
+            .upsert_completed("user-1", date(), "review text", "model", "v1")
+            .await
+            .unwrap();
+
+        let result = service.fetch_review("user-1", date()).await.unwrap();
+
+        assert_eq!(result.unwrap().review_text, Some("review text".to_string()));
+    }
+
+    #[tokio::test]
+    async fn fetch_review_returns_none_when_no_review_exists() {
+        let (service, _daily_reviews, _journal_entries, _generator) =
+            setup(FakeReviewGenerator::succeeding("any")).await;
+
+        let result = service.fetch_review("user-1", date()).await.unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_review_returns_none_for_failed_review() {
+        let (service, daily_reviews, _journal_entries, _generator) =
+            setup(FakeReviewGenerator::succeeding("any")).await;
+        daily_reviews
+            .upsert_failed("user-1", date(), "model", "v1", "provider down")
+            .await
+            .unwrap();
+
+        let result = service.fetch_review("user-1", date()).await.unwrap();
+
+        assert!(result.is_none());
     }
 
     #[tokio::test]

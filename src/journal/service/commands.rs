@@ -4,14 +4,15 @@ use crate::{
     journal::{
         command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
         responses::{
-            daily_review_failure_response, daily_review_unavailable_response,
-            daily_review_usage_response, deleted_last_entry_response, format_daily_review,
-            format_daily_review_for_date, format_entries, format_last_entry, help_response,
-            no_entries_for_date_response, no_entries_response, no_entries_today_response,
-            no_entry_to_delete_response, no_last_entry_response, recent_usage_response,
-            start_response, stats_response, status_response, unknown_command_response,
+            daily_review_not_available_for_date_response, daily_review_not_available_response,
+            daily_review_unavailable_response, daily_review_usage_response,
+            deleted_last_entry_response, format_daily_review, format_daily_review_for_date,
+            format_entries, format_last_entry, help_response, no_entries_response,
+            no_entries_today_response, no_entry_to_delete_response, no_last_entry_response,
+            recent_usage_response, start_response, stats_response, status_response,
+            unknown_command_response,
         },
-        review::{DailyReview, DailyReviewResult},
+        review::DailyReview,
         search::{
             format_search_results, search_empty_response, search_error_response,
             search_unavailable_response, search_usage_response,
@@ -87,7 +88,7 @@ impl JournalService {
             user_id,
             date,
             format_daily_review,
-            no_entries_today_response(),
+            daily_review_not_available_response(),
         )
         .await
     }
@@ -97,7 +98,7 @@ impl JournalService {
             user_id,
             date,
             |review| format_daily_review_for_date(review, date),
-            no_entries_for_date_response(date),
+            daily_review_not_available_for_date_response(date),
         )
         .await
     }
@@ -107,7 +108,7 @@ impl JournalService {
         user_id: &str,
         date: chrono::NaiveDate,
         format_review: impl Fn(&DailyReview) -> String,
-        empty_text: String,
+        not_found_text: String,
     ) -> OutgoingMessage {
         let Some(daily_review) = &self.daily_review else {
             return OutgoingMessage {
@@ -115,30 +116,17 @@ impl JournalService {
             };
         };
 
-        match daily_review.review_day(user_id, date).await {
-            Ok(DailyReviewResult::Existing(review) | DailyReviewResult::Generated(review)) => {
-                OutgoingMessage {
-                    text: format_review(&review),
-                }
-            }
-            Ok(DailyReviewResult::EmptyDay) => OutgoingMessage { text: empty_text },
-            Ok(DailyReviewResult::GenerationFailed(failure)) => {
-                warn!(
-                    user_id = %failure.user_id,
-                    review_date = %failure.review_date,
-                    model = %failure.model,
-                    prompt_version = %failure.prompt_version,
-                    error = %failure.error_message,
-                    "failed to generate daily review"
-                );
-                OutgoingMessage {
-                    text: daily_review_failure_response(),
-                }
-            }
+        match daily_review.fetch_review(user_id, date).await {
+            Ok(Some(review)) => OutgoingMessage {
+                text: format_review(&review),
+            },
+            Ok(None) => OutgoingMessage {
+                text: not_found_text,
+            },
             Err(error) => {
-                error!(%error, "failed to process daily review command");
+                error!(%error, "failed to fetch daily review");
                 OutgoingMessage {
-                    text: daily_review_failure_response(),
+                    text: not_found_text,
                 }
             }
         }

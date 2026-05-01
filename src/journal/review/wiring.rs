@@ -200,7 +200,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.text, "No journal entries found for today.");
+        assert_eq!(response.text, "No review available for today yet.");
 
         fs::remove_file(prompt_path).unwrap();
     }

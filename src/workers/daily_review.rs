@@ -271,7 +271,7 @@ mod tests {
         journal::{
             repository::JournalRepository,
             review::{
-                DailyReviewResult,
+                DailyReview, DailyReviewResult,
                 generator::fake::FakeReviewGenerator,
                 repository::DailyReviewRepository,
                 service::{DailyReviewService, DailyReviewServiceError},
@@ -374,6 +374,14 @@ mod tests {
             _utc_date: NaiveDate,
         ) -> Result<DailyReviewResult, DailyReviewServiceError> {
             self.result.clone()
+        }
+
+        async fn fetch_review(
+            &self,
+            _user_id: &str,
+            _utc_date: NaiveDate,
+        ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
+            Ok(None)
         }
     }
 

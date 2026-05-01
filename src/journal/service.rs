@@ -234,7 +234,7 @@ mod tests {
             },
             repository::JournalRepository,
             review::{
-                DailyReview, DailyReviewFailure, DailyReviewResult, DailyReviewStatus,
+                DailyReview, DailyReviewResult, DailyReviewStatus,
                 generator::fake::FakeReviewGenerator,
                 repository::DailyReviewRepository,
                 service::{DailyReviewRunner, DailyReviewService, DailyReviewServiceError},
@@ -342,14 +342,20 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct FakeDailyReviewRunner {
-        result: Result<DailyReviewResult, DailyReviewServiceError>,
+        fetch_result: Result<Option<DailyReview>, DailyReviewServiceError>,
         calls: Arc<Mutex<Vec<(String, NaiveDate)>>>,
     }
 
     impl FakeDailyReviewRunner {
-        fn new(result: Result<DailyReviewResult, DailyReviewServiceError>) -> Self {
+        fn new() -> Self {
+            Self::with_fetch_result(Ok(None))
+        }
+
+        fn with_fetch_result(
+            fetch_result: Result<Option<DailyReview>, DailyReviewServiceError>,
+        ) -> Self {
             Self {
-                result,
+                fetch_result,
                 calls: Arc::new(Mutex::new(Vec::new())),
             }
         }
@@ -363,14 +369,22 @@ mod tests {
     impl DailyReviewRunner for FakeDailyReviewRunner {
         async fn review_day(
             &self,
+            _user_id: &str,
+            _utc_date: NaiveDate,
+        ) -> Result<DailyReviewResult, DailyReviewServiceError> {
+            Ok(DailyReviewResult::EmptyDay)
+        }
+
+        async fn fetch_review(
+            &self,
             user_id: &str,
             utc_date: NaiveDate,
-        ) -> Result<DailyReviewResult, DailyReviewServiceError> {
+        ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
             self.calls
                 .lock()
                 .unwrap()
                 .push((user_id.to_string(), utc_date));
-            self.result.clone()
+            self.fetch_result.clone()
         }
     }
 
@@ -588,7 +602,11 @@ mod tests {
 
         assert!(outgoing.text.contains("/recent [number]"));
         assert!(outgoing.text.contains("/today"));
-        assert!(outgoing.text.contains("/review [today|YYYY-MM-DD|-N]"));
+        assert!(
+            outgoing
+                .text
+                .contains("/review [today|YYYY-MM-DD|-N] - show daily review")
+        );
         assert!(outgoing.text.contains("/stats"));
         assert!(outgoing.text.contains("/status"));
     }
@@ -748,7 +766,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_reports_daily_review_prompt_when_configured() {
-        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::EmptyDay));
+        let runner = FakeDailyReviewRunner::new();
         let service = setup_with_daily_review_runner(runner)
             .await
             .with_daily_review_prompt_version("daily-review-v1");
@@ -765,7 +783,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_reports_delivery_configured_when_delivery_is_wired() {
-        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::EmptyDay));
+        let runner = FakeDailyReviewRunner::new();
         let service = setup_with_daily_review_runner(runner)
             .await
             .with_daily_review_delivery_configured();
@@ -844,9 +862,8 @@ mod tests {
 
     #[tokio::test]
     async fn review_today_returns_existing_review() {
-        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::Existing(daily_review(
-            "stored review",
-        ))));
+        let runner =
+            FakeDailyReviewRunner::with_fetch_result(Ok(Some(daily_review("stored review"))));
         let service = setup_with_daily_review_runner(runner.clone()).await;
 
         let outgoing = service
@@ -859,10 +876,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_today_returns_generated_review() {
-        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::Generated(daily_review(
-            "generated review",
-        ))));
+    async fn review_today_returns_not_available_when_no_review_exists() {
+        let runner = FakeDailyReviewRunner::with_fetch_result(Ok(None));
         let service = setup_with_daily_review_runner(runner).await;
 
         let outgoing = service
@@ -870,12 +885,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(outgoing.text, "Today's review\n\ngenerated review");
+        assert_eq!(outgoing.text, "No review available for today yet.");
     }
 
     #[tokio::test]
-    async fn review_today_returns_empty_day_response() {
-        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::EmptyDay));
+    async fn review_today_returns_not_available_on_fetch_error() {
+        let runner = FakeDailyReviewRunner::with_fetch_result(Err(
+            DailyReviewServiceError::Storage("database unavailable".to_string()),
+        ));
         let service = setup_with_daily_review_runner(runner).await;
 
         let outgoing = service
@@ -883,49 +900,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(outgoing.text, "No journal entries found for today.");
-    }
-
-    #[tokio::test]
-    async fn review_today_returns_failure_response_for_generation_failure() {
-        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::GenerationFailed(
-            DailyReviewFailure {
-                user_id: "7".to_string(),
-                review_date: date(),
-                model: "test-model".to_string(),
-                prompt_version: "v1".to_string(),
-                error_message: "provider down".to_string(),
-            },
-        )));
-        let service = setup_with_daily_review_runner(runner).await;
-
-        let outgoing = service
-            .command(&command(JournalCommand::ReviewToday))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            outgoing.text,
-            "I could not generate today's review right now. Please try again later."
-        );
-    }
-
-    #[tokio::test]
-    async fn review_today_returns_failure_response_for_service_error() {
-        let runner = FakeDailyReviewRunner::new(Err(DailyReviewServiceError::Storage(
-            "database unavailable".to_string(),
-        )));
-        let service = setup_with_daily_review_runner(runner).await;
-
-        let outgoing = service
-            .command(&command(JournalCommand::ReviewToday))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            outgoing.text,
-            "I could not generate today's review right now. Please try again later."
-        );
+        assert_eq!(outgoing.text, "No review available for today yet.");
     }
 
     #[tokio::test]
@@ -945,41 +920,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_today_generates_and_persists_through_daily_review_service() {
-        let (service, daily_reviews, journal_entries) =
-            setup_with_daily_review_service(FakeReviewGenerator::succeeding("persisted review"))
-                .await;
-        journal_entries
-            .store(&incoming("1", "entry for review", at(10, 0)))
-            .await
-            .unwrap();
-
-        let outgoing = service
-            .command(&command(JournalCommand::ReviewToday))
-            .await
-            .unwrap();
-        let stored = daily_reviews
-            .find_by_user_and_date("7", date())
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(outgoing.text, "Today's review\n\npersisted review");
-        assert_eq!(stored.review_text, Some("persisted review".to_string()));
-        assert_eq!(stored.status, DailyReviewStatus::Completed);
-    }
-
-    #[tokio::test]
     async fn undo_deletes_daily_review_for_deleted_entry_date() {
         let (service, daily_reviews, journal_entries) =
-            setup_with_daily_review_service(FakeReviewGenerator::succeeding("persisted review"))
-                .await;
+            setup_with_daily_review_service(FakeReviewGenerator::succeeding("any")).await;
         journal_entries
             .store(&incoming("1", "entry for review", at(10, 0)))
             .await
             .unwrap();
-        service
-            .command(&command(JournalCommand::ReviewToday))
+        daily_reviews
+            .upsert_completed("7", date(), "persisted review", "model", "v1")
             .await
             .unwrap();
 
@@ -997,82 +946,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(undo.text, "Deleted last entry.");
-        assert_eq!(review.text, "No journal entries found for today.");
+        assert_eq!(review.text, "No review available for today yet.");
         assert!(persisted_review.is_none());
-    }
-
-    #[tokio::test]
-    async fn review_today_uses_command_received_at_utc_date() {
-        let (service, _daily_reviews, journal_entries) = setup_with_daily_review_service(
-            FakeReviewGenerator::succeeding("requested date review"),
-        )
-        .await;
-        journal_entries
-            .store(&incoming(
-                "1",
-                "previous date",
-                Utc.with_ymd_and_hms(2026, 4, 27, 10, 0, 0).unwrap(),
-            ))
-            .await
-            .unwrap();
-        journal_entries
-            .store(&incoming("2", "requested date", at(10, 0)))
-            .await
-            .unwrap();
-
-        let outgoing = service
-            .command(&JournalCommandRequest {
-                source: MessageSource::Telegram,
-                source_conversation_id: "42".to_string(),
-                user_id: "7".to_string(),
-                received_at: at(23, 59),
-                command: JournalCommand::ReviewToday,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(outgoing.text, "Today's review\n\nrequested date review");
-    }
-
-    #[tokio::test]
-    async fn review_today_is_isolated_by_user() {
-        let (service, _daily_reviews, journal_entries) =
-            setup_with_daily_review_service(FakeReviewGenerator::new(vec![
-                Ok("user seven review".to_string()),
-                Ok("user eight review".to_string()),
-            ]))
-            .await;
-        journal_entries
-            .store(&incoming("1", "user seven entry", at(10, 0)))
-            .await
-            .unwrap();
-        let other_user = IncomingMessage {
-            source: MessageSource::Telegram,
-            source_conversation_id: "42".to_string(),
-            source_message_id: "2".to_string(),
-            user_id: "8".to_string(),
-            text: "user eight entry".to_string(),
-            received_at: at(11, 0),
-        };
-        journal_entries.store(&other_user).await.unwrap();
-
-        let user_seven = service
-            .command(&command(JournalCommand::ReviewToday))
-            .await
-            .unwrap();
-        let user_eight = service
-            .command(&JournalCommandRequest {
-                source: MessageSource::Telegram,
-                source_conversation_id: "42".to_string(),
-                user_id: "8".to_string(),
-                received_at: at(12, 0),
-                command: JournalCommand::ReviewToday,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(user_seven.text, "Today's review\n\nuser seven review");
-        assert_eq!(user_eight.text, "Today's review\n\nuser eight review");
     }
 
     #[tokio::test]
@@ -1097,9 +972,8 @@ mod tests {
 
     #[tokio::test]
     async fn review_date_returns_existing_review() {
-        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::Existing(daily_review(
-            "stored review",
-        ))));
+        let runner =
+            FakeDailyReviewRunner::with_fetch_result(Ok(Some(daily_review("stored review"))));
         let service = setup_with_daily_review_runner(runner.clone()).await;
 
         let outgoing = service
@@ -1115,10 +989,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_date_returns_generated_review() {
-        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::Generated(daily_review(
-            "generated review",
-        ))));
+    async fn review_date_returns_not_available_when_no_review_exists() {
+        let runner = FakeDailyReviewRunner::with_fetch_result(Ok(None));
         let service = setup_with_daily_review_runner(runner).await;
 
         let outgoing = service
@@ -1126,15 +998,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            outgoing.text,
-            "Daily review for 2026-04-28\n\ngenerated review"
-        );
+        assert_eq!(outgoing.text, "No review available for 2026-04-28 yet.");
     }
 
     #[tokio::test]
-    async fn review_date_returns_empty_day_response() {
-        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::EmptyDay));
+    async fn review_date_returns_not_available_on_fetch_error() {
+        let runner = FakeDailyReviewRunner::with_fetch_result(Err(
+            DailyReviewServiceError::Storage("database unavailable".to_string()),
+        ));
         let service = setup_with_daily_review_runner(runner).await;
 
         let outgoing = service
@@ -1142,144 +1013,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(outgoing.text, "No journal entries found for 2026-04-28.");
-    }
-
-    #[tokio::test]
-    async fn review_date_returns_failure_response_for_generation_failure() {
-        let runner = FakeDailyReviewRunner::new(Ok(DailyReviewResult::GenerationFailed(
-            DailyReviewFailure {
-                user_id: "7".to_string(),
-                review_date: date(),
-                model: "test-model".to_string(),
-                prompt_version: "v1".to_string(),
-                error_message: "provider down".to_string(),
-            },
-        )));
-        let service = setup_with_daily_review_runner(runner).await;
-
-        let outgoing = service
-            .command(&command(JournalCommand::ReviewDate { date: date() }))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            outgoing.text,
-            "I could not generate today's review right now. Please try again later."
-        );
-    }
-
-    #[tokio::test]
-    async fn review_date_returns_failure_response_for_service_error() {
-        let runner = FakeDailyReviewRunner::new(Err(DailyReviewServiceError::Storage(
-            "database unavailable".to_string(),
-        )));
-        let service = setup_with_daily_review_runner(runner).await;
-
-        let outgoing = service
-            .command(&command(JournalCommand::ReviewDate { date: date() }))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            outgoing.text,
-            "I could not generate today's review right now. Please try again later."
-        );
-    }
-
-    #[tokio::test]
-    async fn review_date_uses_specified_date_not_received_at() {
-        let (service, _daily_reviews, journal_entries) = setup_with_daily_review_service(
-            FakeReviewGenerator::succeeding("explicit date review"),
-        )
-        .await;
-        let explicit_date = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
-        journal_entries
-            .store(&incoming(
-                "1",
-                "explicit date entry",
-                Utc.with_ymd_and_hms(2026, 4, 27, 10, 0, 0).unwrap(),
-            ))
-            .await
-            .unwrap();
-        journal_entries
-            .store(&incoming("2", "other date entry", at(10, 0)))
-            .await
-            .unwrap();
-
-        let outgoing = service
-            .command(&JournalCommandRequest {
-                source: MessageSource::Telegram,
-                source_conversation_id: "42".to_string(),
-                user_id: "7".to_string(),
-                received_at: at(23, 59),
-                command: JournalCommand::ReviewDate {
-                    date: explicit_date,
-                },
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(
-            outgoing.text,
-            "Daily review for 2026-04-27\n\nexplicit date review"
-        );
-    }
-
-    #[tokio::test]
-    async fn review_date_is_isolated_by_user() {
-        let (service, _daily_reviews, journal_entries) =
-            setup_with_daily_review_service(FakeReviewGenerator::new(vec![
-                Ok("user seven review".to_string()),
-                Ok("user eight review".to_string()),
-            ]))
-            .await;
-        let explicit_date = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
-        journal_entries
-            .store(&incoming(
-                "1",
-                "user seven entry",
-                Utc.with_ymd_and_hms(2026, 4, 27, 10, 0, 0).unwrap(),
-            ))
-            .await
-            .unwrap();
-        let other_user = IncomingMessage {
-            source: MessageSource::Telegram,
-            source_conversation_id: "42".to_string(),
-            source_message_id: "2".to_string(),
-            user_id: "8".to_string(),
-            text: "user eight entry".to_string(),
-            received_at: Utc.with_ymd_and_hms(2026, 4, 27, 11, 0, 0).unwrap(),
-        };
-        journal_entries.store(&other_user).await.unwrap();
-
-        let user_seven = service
-            .command(&command(JournalCommand::ReviewDate {
-                date: explicit_date,
-            }))
-            .await
-            .unwrap();
-        let user_eight = service
-            .command(&JournalCommandRequest {
-                source: MessageSource::Telegram,
-                source_conversation_id: "42".to_string(),
-                user_id: "8".to_string(),
-                received_at: at(12, 0),
-                command: JournalCommand::ReviewDate {
-                    date: explicit_date,
-                },
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(
-            user_seven.text,
-            "Daily review for 2026-04-27\n\nuser seven review"
-        );
-        assert_eq!(
-            user_eight.text,
-            "Daily review for 2026-04-27\n\nuser eight review"
-        );
+        assert_eq!(outgoing.text, "No review available for 2026-04-28 yet.");
     }
 
     #[tokio::test]
