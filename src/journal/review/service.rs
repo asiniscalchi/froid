@@ -7,7 +7,7 @@ use crate::journal::{
     repository::JournalRepository,
     review::{
         DailyReview, DailyReviewFailure, DailyReviewResult, DailyReviewStatus,
-        generator::{JournalEntryWithExtraction, ReviewGenerator},
+        JournalEntryWithExtraction, generator::ReviewGenerator,
         repository::{DailyReviewRepository, DailyReviewRepositoryError},
     },
 };
@@ -107,32 +107,16 @@ impl DailyReviewService {
             && review
                 .review_text
                 .as_deref()
-                .is_some_and(|text| !text.trim().is_empty())
+                .is_some_and(|text: &str| !text.trim().is_empty())
         {
             return Ok(DailyReviewResult::Existing(review.clone()));
         }
 
-        let entries = self.journal_entries.fetch_today(user_id, utc_date).await?;
-        if entries.is_empty() {
+        let entries_with_extractions: Vec<JournalEntryWithExtraction> =
+            self.fetch_entries_with_extractions(user_id, utc_date).await?;
+        if entries_with_extractions.is_empty() {
             return Ok(DailyReviewResult::EmptyDay);
         }
-
-        let entry_ids: Vec<i64> = entries.iter().map(|s| s.id).collect();
-        let mut completed_extractions = self
-            .extractions
-            .find_completed_by_journal_entry_ids(&entry_ids)
-            .await?;
-
-        let entries_with_extractions: Vec<JournalEntryWithExtraction> = entries
-            .into_iter()
-            .map(|stored| {
-                let extraction = completed_extractions.remove(&stored.id);
-                JournalEntryWithExtraction {
-                    entry: stored.entry,
-                    extraction,
-                }
-            })
-            .collect();
 
         let model = self.generator.model();
         let prompt_version = self.generator.prompt_version();
@@ -183,8 +167,37 @@ impl DailyReviewService {
             r.status == DailyReviewStatus::Completed
                 && r.review_text
                     .as_deref()
-                    .is_some_and(|t| !t.trim().is_empty())
+                    .is_some_and(|t: &str| !t.trim().is_empty())
         }))
+    }
+
+    async fn fetch_entries_with_extractions(
+        &self,
+        user_id: &str,
+        date: NaiveDate,
+    ) -> Result<Vec<JournalEntryWithExtraction>, DailyReviewServiceError> {
+        let entries = self.journal_entries.fetch_today(user_id, date).await?;
+        if entries.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let entry_ids: Vec<i64> = entries.iter().map(|s| s.id).collect();
+        let mut completed_extractions = self
+            .extractions
+            .find_completed_by_journal_entry_ids(&entry_ids)
+            .await?;
+
+        Ok(entries
+            .into_iter()
+            .map(|stored| {
+                let extraction = completed_extractions.remove(&stored.id);
+                JournalEntryWithExtraction {
+                    id: stored.id,
+                    entry: stored.entry,
+                    extraction,
+                }
+            })
+            .collect())
     }
 
     async fn store_failed_review(

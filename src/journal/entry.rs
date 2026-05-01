@@ -6,10 +6,22 @@ pub struct JournalEntry {
     pub received_at: DateTime<Utc>,
 }
 
+impl AsRef<JournalEntry> for JournalEntry {
+    fn as_ref(&self) -> &JournalEntry {
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredJournalEntry {
     pub id: i64,
     pub entry: JournalEntry,
+}
+
+impl AsRef<JournalEntry> for StoredJournalEntry {
+    fn as_ref(&self) -> &JournalEntry {
+        &self.entry
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

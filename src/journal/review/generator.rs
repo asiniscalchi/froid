@@ -9,17 +9,10 @@ use rig::{
 
 use crate::journal::{
     entry::JournalEntry,
-    extraction::JournalEntryExtractionResult,
-    review::{DailyReviewPrompt, DailyReviewPromptError},
+    review::{DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction},
 };
 
 pub const DEFAULT_REVIEW_MODEL: &str = GPT_5_MINI;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct JournalEntryWithExtraction {
-    pub entry: JournalEntry,
-    pub extraction: Option<JournalEntryExtractionResult>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewConfig {
@@ -226,12 +219,11 @@ impl ReviewGenerator for RigOpenAiReviewGenerator {
 fn build_daily_review_prompt(entries: &[JournalEntryWithExtraction]) -> String {
     let formatted_entries = entries
         .iter()
-        .enumerate()
-        .map(|(index, entry_with_ext)| {
+        .map(|entry_with_ext| {
             let entry = &entry_with_ext.entry;
             let mut formatted = format!(
-                "{}. [{} UTC] {}",
-                index + 1,
+                "Entry #{}. [{} UTC] {}",
+                entry_with_ext.id,
                 entry.received_at.format("%Y-%m-%d %H:%M"),
                 entry.text
             );
@@ -279,7 +271,8 @@ pub mod fake {
 
     use async_trait::async_trait;
 
-    use super::{JournalEntryWithExtraction, ReviewGenerationError, ReviewGenerator};
+    use super::{ReviewGenerationError, ReviewGenerator};
+    use crate::journal::review::JournalEntryWithExtraction;
 
     #[derive(Debug, Clone)]
     pub struct FakeReviewGenerator {
@@ -351,6 +344,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::*;
+    use crate::journal::extraction::JournalEntryExtractionResult;
 
     #[derive(Debug, Clone)]
     struct FakeReviewProvider {
@@ -468,6 +462,7 @@ mod tests {
         assert_eq!(
             generator
                 .generate_daily_review(&[JournalEntryWithExtraction {
+                    id: 1,
                     entry: entry(28, "wrote a test"),
                     extraction: None,
                 }])
@@ -493,6 +488,7 @@ mod tests {
 
         generator
             .generate_daily_review(&[JournalEntryWithExtraction {
+                id: 1,
                 entry: entry(28, "requested date entry"),
                 extraction: None,
             }])
@@ -516,6 +512,7 @@ mod tests {
 
         let error = generator
             .generate_daily_review(&[JournalEntryWithExtraction {
+                id: 1,
                 entry: entry(28, "wrote a test"),
                 extraction: None,
             }])
@@ -528,6 +525,7 @@ mod tests {
     #[test]
     fn generated_prompt_requests_review_format() {
         let prompt_text = build_daily_review_prompt(&[JournalEntryWithExtraction {
+            id: 1,
             entry: entry(28, "finished the feature"),
             extraction: None,
         }]);
@@ -549,11 +547,13 @@ mod tests {
             possible_patterns: vec![],
         };
         let prompt_text = build_daily_review_prompt(&[JournalEntryWithExtraction {
+            id: 1,
             entry: entry(28, "entry with extraction"),
             extraction: Some(extraction),
         }]);
 
         assert!(prompt_text.contains("entry with extraction"));
+        assert!(prompt_text.contains("Entry #1"));
         assert!(prompt_text.contains("Structured extraction:"));
         assert!(prompt_text.contains("\"summary\":\"Extracted\""));
     }

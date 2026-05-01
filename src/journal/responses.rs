@@ -147,10 +147,17 @@ fn format_daily_review_status(status: &DailyReviewStatus) -> String {
     lines.join("\n")
 }
 
-pub(super) fn format_entries(entries: &[JournalEntry]) -> String {
+pub(super) fn format_entries<T: AsRef<JournalEntry>>(entries: &[T]) -> String {
     entries
         .iter()
-        .map(|e| format!("{} - {}", e.received_at.format("%Y-%m-%d %H:%M"), e.text))
+        .map(|e| {
+            let entry = e.as_ref();
+            format!(
+                "{} - {}",
+                entry.received_at.format("%Y-%m-%d %H:%M"),
+                entry.text
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
