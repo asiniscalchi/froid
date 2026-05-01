@@ -62,6 +62,11 @@ pub trait EmbeddingIndex: Send + Sync {
         limit: u32,
     ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError>;
 
+    async fn count_entries_missing_or_failed_embedding(
+        &self,
+        embedding_model: &str,
+    ) -> Result<u32, EmbeddingRepositoryError>;
+
     async fn search_for_user(
         &self,
         user_id: &str,
@@ -230,12 +235,11 @@ impl SqliteEmbeddingRepository {
             .collect())
     }
 
-    #[cfg(test)]
-    pub(crate) async fn count_entries_missing_or_failed_embedding(
+    pub async fn count_entries_missing_or_failed_embedding(
         &self,
         embedding_model: &str,
-    ) -> Result<i64, sqlx::Error> {
-        sqlx::query_scalar(
+    ) -> Result<u32, sqlx::Error> {
+        let count: i32 = sqlx::query_scalar(
             r#"
             SELECT COUNT(*)
             FROM journal_entries
@@ -248,7 +252,9 @@ impl SqliteEmbeddingRepository {
         )
         .bind(embedding_model)
         .fetch_one(&self.pool)
-        .await
+        .await?;
+
+        Ok(count as u32)
     }
 
     pub async fn count_entries_missing_embedding_for_user(
@@ -434,6 +440,15 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
         )
         .await
         .map_err(Into::into)
+    }
+
+    async fn count_entries_missing_or_failed_embedding(
+        &self,
+        embedding_model: &str,
+    ) -> Result<u32, EmbeddingRepositoryError> {
+        SqliteEmbeddingRepository::count_entries_missing_or_failed_embedding(self, embedding_model)
+            .await
+            .map_err(Into::into)
     }
 
     async fn search_for_user(

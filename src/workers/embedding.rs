@@ -47,6 +47,7 @@ where
                         attempted = result.attempted,
                         created = result.created,
                         failed = result.failed,
+                        remaining = result.remaining,
                         "embedding reconciliation cycle completed"
                     );
                 }
@@ -181,7 +182,8 @@ mod tests {
             BackfillResult {
                 attempted: 0,
                 created: 0,
-                failed: 0
+                failed: 0,
+                remaining: 0,
             }
         );
     }
@@ -243,7 +245,8 @@ mod tests {
             BackfillResult {
                 attempted: 1,
                 created: 1,
-                failed: 0
+                failed: 0,
+                remaining: 0,
             }
         );
         assert_eq!(
@@ -251,7 +254,8 @@ mod tests {
             BackfillResult {
                 attempted: 0,
                 created: 0,
-                failed: 0
+                failed: 0,
+                remaining: 0,
             }
         );
     }
@@ -270,7 +274,8 @@ mod tests {
             BackfillResult {
                 attempted: 2,
                 created: 1,
-                failed: 1
+                failed: 1,
+                remaining: 1,
             }
         );
     }

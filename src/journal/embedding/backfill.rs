@@ -9,6 +9,7 @@ pub struct BackfillResult {
     pub attempted: u32,
     pub created: u32,
     pub failed: u32,
+    pub remaining: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +67,7 @@ where
             attempted: candidates.len() as u32,
             created: 0,
             failed: 0,
+            remaining: 0,
         };
 
         for candidate in candidates {
@@ -134,6 +136,12 @@ where
                 }
             }
         }
+
+        result.remaining = self
+            .index
+            .count_entries_missing_or_failed_embedding(embedding_model)
+            .await
+            .map_err(EmbeddingBackfillError::Repository)?;
 
         Ok(result)
     }

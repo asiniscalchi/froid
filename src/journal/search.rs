@@ -306,6 +306,13 @@ mod tests {
             unreachable!("search tests do not backfill through FakeIndex")
         }
 
+        async fn count_entries_missing_or_failed_embedding(
+            &self,
+            _embedding_model: &str,
+        ) -> Result<u32, EmbeddingRepositoryError> {
+            unreachable!("search tests do not count missing through FakeIndex")
+        }
+
         async fn search_for_user(
             &self,
             _user_id: &str,
