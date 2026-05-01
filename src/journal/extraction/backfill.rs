@@ -49,6 +49,14 @@ where
         Self { repository, runner }
     }
 
+    pub fn model(&self) -> &str {
+        self.runner.model()
+    }
+
+    pub fn prompt_version(&self) -> &str {
+        self.runner.prompt_version()
+    }
+
     pub async fn backfill_missing_or_failed_extractions(
         &self,
         limit: u32,
@@ -199,6 +207,14 @@ mod tests {
 
     #[async_trait]
     impl JournalEntryExtractionRunner for FakeRunner {
+        fn model(&self) -> &str {
+            "test-extraction-model"
+        }
+
+        fn prompt_version(&self) -> &str {
+            "entry_extraction_v1"
+        }
+
         async fn extract_entry(
             &self,
             journal_entry_id: i64,

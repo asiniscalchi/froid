@@ -40,6 +40,8 @@ where
 
     pub async fn run_forever(self) {
         info!(
+            model = self.backfill_service.model(),
+            prompt_version = self.backfill_service.prompt_version(),
             batch_size = self.config.batch_size,
             interval_seconds = self.config.interval.as_secs(),
             "extraction reconciliation worker started"
@@ -111,6 +113,14 @@ mod tests {
 
     #[async_trait]
     impl JournalEntryExtractionRunner for FakeRunner {
+        fn model(&self) -> &str {
+            "test-extraction-model"
+        }
+
+        fn prompt_version(&self) -> &str {
+            "entry_extraction_v1"
+        }
+
         async fn extract_entry(
             &self,
             _journal_entry_id: i64,

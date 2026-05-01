@@ -31,6 +31,9 @@ impl From<JournalEntryExtractionRepositoryError> for JournalEntryExtractionServi
 
 #[async_trait]
 pub trait JournalEntryExtractionRunner: Send + Sync {
+    fn model(&self) -> &str;
+    fn prompt_version(&self) -> &str;
+
     async fn extract_entry(
         &self,
         journal_entry_id: i64,
@@ -58,6 +61,14 @@ impl<G> JournalEntryExtractionRunner for JournalEntryExtractionService<G>
 where
     G: JournalEntryExtractionGenerator,
 {
+    fn model(&self) -> &str {
+        self.generator.model()
+    }
+
+    fn prompt_version(&self) -> &str {
+        self.generator.prompt_version()
+    }
+
     async fn extract_entry(
         &self,
         journal_entry_id: i64,
