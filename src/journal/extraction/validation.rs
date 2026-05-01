@@ -90,7 +90,7 @@ fn validate_behaviors(value: Option<&Value>) -> Result<(), JournalEntryExtractio
         require_enum(
             item.get("valence"),
             &format!("behaviors[{index}].valence"),
-            &["positive", "negative", "neutral", "mixed"],
+            &["positive", "negative", "ambiguous", "neutral", "unclear"],
         )?;
         require_number_0_to_1(
             item.get("confidence"),
@@ -269,6 +269,29 @@ mod tests {
         let error = validate(extraction).unwrap_err();
 
         assert!(error.to_string().contains("between 0 and 1"));
+    }
+
+    #[test]
+    fn accepts_new_behavior_valence_enums() {
+        let mut extraction = valid_extraction();
+        extraction["behaviors"] = serde_json::json!([
+            {
+                "label": "avoidance",
+                "valence": "ambiguous",
+                "confidence": 0.7
+            },
+            {
+                "label": "meditation",
+                "valence": "unclear",
+                "confidence": 0.5
+            }
+        ]);
+
+        let normalized = validate(extraction).unwrap();
+        let value: Value = serde_json::from_str(&normalized).unwrap();
+
+        assert_eq!(value["behaviors"][0]["valence"], "ambiguous");
+        assert_eq!(value["behaviors"][1]["valence"], "unclear");
     }
 
     #[test]

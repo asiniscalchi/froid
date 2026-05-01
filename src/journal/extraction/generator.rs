@@ -3,11 +3,10 @@ use std::{env, error::Error, fmt, sync::Arc};
 use async_trait::async_trait;
 use rig::{
     client::CompletionClient,
-    completion::Prompt,
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::extraction::JournalEntryExtractionPrompt;
+use crate::journal::extraction::{JournalEntryExtractionPrompt, JournalEntryExtractionResult};
 
 pub const DEFAULT_JOURNAL_ENTRY_EXTRACTION_MODEL: &str = GPT_5_MINI;
 
@@ -39,7 +38,7 @@ impl JournalEntryExtractionConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct JournalEntryExtractionGenerationError {
     message: String,
 }
@@ -68,7 +67,7 @@ pub trait JournalEntryExtractionGenerator: Send + Sync {
     async fn generate_entry_extraction(
         &self,
         note: &str,
-    ) -> Result<String, JournalEntryExtractionGenerationError>;
+    ) -> Result<JournalEntryExtractionResult, JournalEntryExtractionGenerationError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,7 +90,7 @@ impl fmt::Display for RigOpenAiJournalEntryExtractionGeneratorError {
 
 impl Error for RigOpenAiJournalEntryExtractionGeneratorError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum JournalEntryExtractionProviderError {
     Request(String),
 }
@@ -113,7 +112,7 @@ pub(crate) trait JournalEntryExtractionProvider: Send + Sync {
         model: &str,
         instructions: &str,
         prompt: &str,
-    ) -> Result<String, JournalEntryExtractionProviderError>;
+    ) -> Result<JournalEntryExtractionResult, JournalEntryExtractionProviderError>;
 }
 
 #[derive(Clone)]
@@ -137,11 +136,13 @@ impl JournalEntryExtractionProvider for RigOpenAiJournalEntryExtractionProvider 
         model: &str,
         instructions: &str,
         prompt: &str,
-    ) -> Result<String, JournalEntryExtractionProviderError> {
+    ) -> Result<JournalEntryExtractionResult, JournalEntryExtractionProviderError> {
+        use rig::completion::TypedPrompt;
+
         let agent = self.client.agent(model).preamble(instructions).build();
 
         agent
-            .prompt(prompt)
+            .prompt_typed::<JournalEntryExtractionResult>(prompt)
             .await
             .map_err(|error| JournalEntryExtractionProviderError::Request(error.to_string()))
     }
@@ -202,7 +203,7 @@ impl JournalEntryExtractionGenerator for RigOpenAiJournalEntryExtractionGenerato
     async fn generate_entry_extraction(
         &self,
         note: &str,
-    ) -> Result<String, JournalEntryExtractionGenerationError> {
+    ) -> Result<JournalEntryExtractionResult, JournalEntryExtractionGenerationError> {
         let prompt = build_entry_extraction_prompt(note);
         self.provider
             .complete_entry_extraction(&self.config.model, &self.prompt.text, &prompt)
@@ -214,9 +215,7 @@ impl JournalEntryExtractionGenerator for RigOpenAiJournalEntryExtractionGenerato
 fn build_entry_extraction_prompt(note: &str) -> String {
     format!(
         r#"Journal note:
-{note}
-
-Return the structured extraction as JSON only."#
+{note}"#
     )
 }
 
@@ -230,14 +229,14 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeProvider {
-        result: Result<String, JournalEntryExtractionProviderError>,
+        result: Result<JournalEntryExtractionResult, JournalEntryExtractionProviderError>,
         calls: Arc<Mutex<Vec<(String, String, String)>>>,
     }
 
     impl FakeProvider {
-        fn succeeding(response: &str) -> Self {
+        fn succeeding(response: JournalEntryExtractionResult) -> Self {
             Self {
-                result: Ok(response.to_string()),
+                result: Ok(response),
                 calls: Arc::new(Mutex::new(Vec::new())),
             }
         }
@@ -254,7 +253,7 @@ mod tests {
             model: &str,
             instructions: &str,
             prompt: &str,
-        ) -> Result<String, JournalEntryExtractionProviderError> {
+        ) -> Result<JournalEntryExtractionResult, JournalEntryExtractionProviderError> {
             self.calls.lock().unwrap().push((
                 model.to_string(),
                 instructions.to_string(),
@@ -266,9 +265,15 @@ mod tests {
 
     #[tokio::test]
     async fn generator_uses_configured_model_prompt_version_and_note() {
-        let provider = FakeProvider::succeeding(
-            r#"{"summary":"Saved","domains":[],"emotions":[],"behaviors":[],"needs":[],"possible_patterns":[]}"#,
-        );
+        let expected_result = JournalEntryExtractionResult {
+            summary: "Saved".to_string(),
+            domains: vec![],
+            emotions: vec![],
+            behaviors: vec![],
+            needs: vec![],
+            possible_patterns: vec![],
+        };
+        let provider = FakeProvider::succeeding(expected_result.clone());
         let generator = RigOpenAiJournalEntryExtractionGenerator::new(
             JournalEntryExtractionConfig {
                 model: "custom-model".to_string(),
@@ -286,7 +291,7 @@ mod tests {
             .unwrap();
         let calls = provider.calls();
 
-        assert!(output.contains("\"summary\""));
+        assert_eq!(output, expected_result);
         assert_eq!(generator.model(), "custom-model");
         assert_eq!(generator.prompt_version(), "entry_extraction_test");
         assert_eq!(calls.len(), 1);

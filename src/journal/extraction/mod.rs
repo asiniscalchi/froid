@@ -3,6 +3,7 @@ pub(crate) mod generator;
 pub(crate) mod prompt;
 pub mod repository;
 pub(crate) mod service;
+pub(crate) mod types;
 pub(crate) mod validation;
 pub(crate) mod wiring;
 pub(crate) mod worker_config;
@@ -15,6 +16,7 @@ pub use generator::{
     JournalEntryExtractionGenerator, RigOpenAiJournalEntryExtractionGenerator,
 };
 pub use prompt::{JournalEntryExtractionPrompt, JournalEntryExtractionPromptConfig};
+pub use types::{BehaviorValence, JournalEntryExtractionResult, NeedStatus, PatternExtraction};
 pub use wiring::{JournalEntryExtractionRuntimeConfig, configure_journal_entry_extraction};
 pub use worker_config::{ExtractionWorkerConfig, ExtractionWorkerConfigError};
 
