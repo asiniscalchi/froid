@@ -171,6 +171,16 @@ mod tests {
                 .map_err(Into::into)
         }
 
+        async fn count_entries_missing_or_failed_embedding(
+            &self,
+            embedding_model: &str,
+        ) -> Result<u32, EmbeddingRepositoryError> {
+            self.inner
+                .count_entries_missing_or_failed_embedding(embedding_model)
+                .await
+                .map_err(Into::into)
+        }
+
         async fn search_for_user(
             &self,
             user_id: &str,
@@ -205,6 +215,7 @@ mod tests {
                 attempted: 2,
                 created: 2,
                 failed: 0,
+                remaining: 1,
             }
         );
         assert!(
@@ -263,6 +274,7 @@ mod tests {
                 attempted: 2,
                 created: 2,
                 failed: 0,
+                remaining: 0,
             }
         );
         assert_eq!(
@@ -271,6 +283,7 @@ mod tests {
                 attempted: 0,
                 created: 0,
                 failed: 0,
+                remaining: 0,
             }
         );
         assert_eq!(count, 2);
@@ -295,6 +308,7 @@ mod tests {
                 attempted: 2,
                 created: 1,
                 failed: 1,
+                remaining: 1,
             }
         );
         assert!(
@@ -334,6 +348,7 @@ mod tests {
                 attempted: 2,
                 created: 1,
                 failed: 1,
+                remaining: 1,
             }
         );
         // first has a failed row (storage error recorded), so still counts as pending
