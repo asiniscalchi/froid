@@ -26,27 +26,4 @@ pub struct IncomingMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutgoingMessage {
     pub text: String,
-    pub reaction: Option<OutgoingReaction>,
-}
-
-impl OutgoingMessage {
-    pub fn text(text: String) -> Self {
-        Self {
-            text,
-            reaction: None,
-        }
-    }
-
-    pub fn with_reaction(text: String, reaction: OutgoingReaction) -> Self {
-        Self {
-            text,
-            reaction: Some(reaction),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OutgoingReaction {
-    MessageSaved,
-    JournalEntryExtracted,
 }

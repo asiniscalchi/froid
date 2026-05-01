@@ -35,14 +35,7 @@ pub trait JournalEntryExtractionRunner: Send + Sync {
         &self,
         journal_entry_id: i64,
         text: &str,
-    ) -> Result<JournalEntryExtractionRunResult, JournalEntryExtractionServiceError>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JournalEntryExtractionRunResult {
-    Completed,
-    Failed,
-    AlreadyExists,
+    ) -> Result<(), JournalEntryExtractionServiceError>;
 }
 
 #[derive(Clone)]
@@ -69,7 +62,7 @@ where
         &self,
         journal_entry_id: i64,
         text: &str,
-    ) -> Result<JournalEntryExtractionRunResult, JournalEntryExtractionServiceError> {
+    ) -> Result<(), JournalEntryExtractionServiceError> {
         let inserted = self
             .repository
             .insert_pending_if_absent(
@@ -80,10 +73,10 @@ where
             .await?;
 
         if !inserted {
-            return Ok(JournalEntryExtractionRunResult::AlreadyExists);
+            return Ok(());
         }
 
-        let result = match self.generator.generate_entry_extraction(text).await {
+        match self.generator.generate_entry_extraction(text).await {
             Ok(raw_json) => match validate_extraction_json(&raw_json) {
                 Ok(valid_json) => {
                     self.repository
@@ -94,20 +87,17 @@ where
                             self.generator.prompt_version(),
                         )
                         .await?;
-                    JournalEntryExtractionRunResult::Completed
                 }
                 Err(error) => {
                     self.record_failure(journal_entry_id, error).await?;
-                    JournalEntryExtractionRunResult::Failed
                 }
             },
             Err(error) => {
                 self.record_failure(journal_entry_id, error).await?;
-                JournalEntryExtractionRunResult::Failed
             }
-        };
+        }
 
-        Ok(result)
+        Ok(())
     }
 }
 
@@ -250,7 +240,7 @@ mod tests {
         let (service, repo, pool) = setup(FakeGenerator::succeeding(valid_json())).await;
         let entry_id = insert_entry(&pool, "Work felt stressful today").await;
 
-        let result = service
+        service
             .extract_entry(entry_id, "Work felt stressful today")
             .await
             .unwrap();
@@ -263,7 +253,6 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_str(extraction.extraction_json.as_ref().unwrap()).unwrap();
 
-        assert_eq!(result, JournalEntryExtractionRunResult::Completed);
         assert_eq!(extraction.status, JournalEntryExtractionStatus::Completed);
         assert_eq!(extraction.model, "test-extraction-model");
         assert_eq!(extraction.prompt_version, "entry_extraction_v1");
@@ -275,7 +264,7 @@ mod tests {
         let (service, repo, pool) = setup(FakeGenerator::failing("provider down")).await;
         let entry_id = insert_entry(&pool, "Work felt stressful today").await;
 
-        let result = service
+        service
             .extract_entry(entry_id, "Work felt stressful today")
             .await
             .unwrap();
@@ -286,7 +275,6 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(result, JournalEntryExtractionRunResult::Failed);
         assert_eq!(extraction.status, JournalEntryExtractionStatus::Failed);
         assert_eq!(extraction.extraction_json, None);
         assert_eq!(extraction.error_message, Some("provider down".to_string()));
@@ -297,7 +285,7 @@ mod tests {
         let (service, repo, pool) = setup(FakeGenerator::succeeding("not json")).await;
         let entry_id = insert_entry(&pool, "Work felt stressful today").await;
 
-        let result = service
+        service
             .extract_entry(entry_id, "Work felt stressful today")
             .await
             .unwrap();
@@ -308,7 +296,6 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(result, JournalEntryExtractionRunResult::Failed);
         assert_eq!(extraction.status, JournalEntryExtractionStatus::Failed);
         assert!(extraction.error_message.unwrap().contains("not valid JSON"));
     }
@@ -319,8 +306,8 @@ mod tests {
         let (service, repo, pool) = setup(generator.clone()).await;
         let entry_id = insert_entry(&pool, "Work felt stressful today").await;
 
-        let first = service.extract_entry(entry_id, "first call").await.unwrap();
-        let second = service
+        service.extract_entry(entry_id, "first call").await.unwrap();
+        service
             .extract_entry(entry_id, "second call")
             .await
             .unwrap();
@@ -329,8 +316,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(first, JournalEntryExtractionRunResult::Completed);
-        assert_eq!(second, JournalEntryExtractionRunResult::AlreadyExists);
         assert_eq!(generator.calls(), 1);
         assert_eq!(count, 1);
         assert!(
