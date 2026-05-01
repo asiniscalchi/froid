@@ -1,8 +1,8 @@
 use tracing::{error, info};
 
 use crate::journal::extraction::{
-    ExtractionBackfillResult, ExtractionBackfillService, ExtractionWorkerConfig,
-    service::JournalEntryExtractionRunner,
+    ExtractionBackfillError, ExtractionBackfillResult, ExtractionBackfillService,
+    ExtractionWorkerConfig, service::JournalEntryExtractionRunner,
 };
 
 pub struct ExtractionReconciliationWorker<R> {
@@ -24,21 +24,10 @@ where
         }
     }
 
-    pub async fn run_once(&self) -> ExtractionBackfillResult {
-        match self
-            .backfill_service
+    pub async fn run_once(&self) -> Result<ExtractionBackfillResult, ExtractionBackfillError> {
+        self.backfill_service
             .backfill_missing_or_failed_extractions(self.config.batch_size)
             .await
-        {
-            Ok(result) => result,
-            Err(err) => {
-                error!(error = %err, "extraction reconciliation cycle failed");
-                ExtractionBackfillResult {
-                    attempted: 0,
-                    errored: 0,
-                }
-            }
-        }
     }
 
     pub async fn run_forever(self) {
@@ -51,12 +40,18 @@ where
         );
 
         loop {
-            let result = self.run_once().await;
-            info!(
-                attempted = result.attempted,
-                errored = result.errored,
-                "extraction reconciliation cycle completed"
-            );
+            match self.run_once().await {
+                Ok(result) => {
+                    info!(
+                        attempted = result.attempted,
+                        errored = result.errored,
+                        "extraction reconciliation cycle completed"
+                    );
+                }
+                Err(err) => {
+                    error!(error = %err, "extraction reconciliation cycle failed");
+                }
+            }
             tokio::time::sleep(self.config.interval).await;
         }
     }
@@ -153,7 +148,7 @@ mod tests {
         let (_, extraction_repo) = setup().await;
         let worker = worker(extraction_repo, 20);
 
-        let result = worker.run_once().await;
+        let result = worker.run_once().await.unwrap();
 
         assert_eq!(
             result,
@@ -172,7 +167,7 @@ mod tests {
         store_entry(&journal_repo, "3", "third", 12).await;
         let worker = worker(extraction_repo, 2);
 
-        let result = worker.run_once().await;
+        let result = worker.run_once().await.unwrap();
 
         assert_eq!(result.attempted, 2);
         assert_eq!(result.errored, 0);
@@ -192,7 +187,7 @@ mod tests {
             .unwrap();
         let worker = worker(extraction_repo, 20);
 
-        let result = worker.run_once().await;
+        let result = worker.run_once().await.unwrap();
 
         assert_eq!(result.attempted, 1);
         assert_eq!(result.errored, 0);
@@ -217,8 +212,8 @@ mod tests {
             .unwrap();
         let worker = worker(extraction_repo, 20);
 
-        let first = worker.run_once().await;
-        let second = worker.run_once().await;
+        let first = worker.run_once().await.unwrap();
+        let second = worker.run_once().await.unwrap();
 
         assert_eq!(first.attempted, 0);
         assert_eq!(second.attempted, 0);

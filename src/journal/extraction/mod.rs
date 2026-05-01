@@ -9,7 +9,7 @@ pub(crate) mod worker_config;
 
 use chrono::{DateTime, Utc};
 
-pub use backfill::{ExtractionBackfillResult, ExtractionBackfillService};
+pub use backfill::{ExtractionBackfillError, ExtractionBackfillResult, ExtractionBackfillService};
 pub use generator::{
     JournalEntryExtractionConfig, JournalEntryExtractionGenerationError,
     JournalEntryExtractionGenerator, RigOpenAiJournalEntryExtractionGenerator,
