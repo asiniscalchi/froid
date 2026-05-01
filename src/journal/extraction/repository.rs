@@ -144,6 +144,23 @@ impl JournalEntryExtractionRepository {
         Ok(())
     }
 
+    pub async fn count_entries_missing_or_failed_extraction(
+        &self,
+    ) -> Result<u32, JournalEntryExtractionRepositoryError> {
+        let count: i32 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM journal_entries j
+            LEFT JOIN journal_entry_extractions e ON e.journal_entry_id = j.id
+            WHERE e.id IS NULL OR e.status = 'failed'
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count as u32)
+    }
+
     pub async fn find_entries_missing_or_failed_extraction(
         &self,
         limit: u32,

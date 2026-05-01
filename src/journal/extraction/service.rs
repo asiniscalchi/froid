@@ -1,3 +1,4 @@
+use tracing::{info, warn};
 use std::{error::Error, fmt};
 
 use async_trait::async_trait;
@@ -98,12 +99,27 @@ where
                             self.generator.prompt_version(),
                         )
                         .await?;
+                    info!(
+                        journal_entry_id,
+                        model = self.generator.model(),
+                        "extraction completed successfully"
+                    );
                 }
                 Err(error) => {
+                    warn!(
+                        journal_entry_id,
+                        error = %error,
+                        "extraction validation failed"
+                    );
                     self.record_failure(journal_entry_id, error).await?;
                 }
             },
             Err(error) => {
+                warn!(
+                    journal_entry_id,
+                    error = %error,
+                    "extraction generation failed"
+                );
                 self.record_failure(journal_entry_id, error).await?;
             }
         }

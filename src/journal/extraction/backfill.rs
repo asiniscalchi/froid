@@ -12,6 +12,7 @@ use super::{
 pub struct ExtractionBackfillResult {
     pub attempted: u32,
     pub errored: u32,
+    pub remaining: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +70,7 @@ where
         let mut result = ExtractionBackfillResult {
             attempted: candidates.len() as u32,
             errored: 0,
+            remaining: 0,
         };
 
         for candidate in candidates {
@@ -81,6 +83,8 @@ where
                 );
             }
         }
+
+        result.remaining = self.repository.count_entries_missing_or_failed_extraction().await?;
 
         Ok(result)
     }
@@ -250,6 +254,7 @@ mod tests {
             ExtractionBackfillResult {
                 attempted: 0,
                 errored: 0,
+                remaining: 0,
             }
         );
     }
