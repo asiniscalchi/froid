@@ -216,18 +216,24 @@ fn require_enum(
 mod tests {
     use super::*;
 
-    #[test]
-    fn accepts_compact_extraction_with_empty_uncertain_fields() {
-        let valid = r#"{
+    fn valid_extraction() -> Value {
+        serde_json::json!({
             "summary": "The note records a brief factual update.",
             "domains": [],
             "emotions": [],
             "behaviors": [],
             "needs": [],
             "possible_patterns": []
-        }"#;
+        })
+    }
 
-        let normalized = validate_extraction_json(valid).unwrap();
+    fn validate(value: Value) -> Result<String, EntryExtractionValidationError> {
+        validate_extraction_json(&value.to_string())
+    }
+
+    #[test]
+    fn accepts_compact_extraction_with_empty_uncertain_fields() {
+        let normalized = validate(valid_extraction()).unwrap();
         let value: Value = serde_json::from_str(&normalized).unwrap();
 
         assert_eq!(value["summary"], "The note records a brief factual update.");
@@ -243,56 +249,43 @@ mod tests {
 
     #[test]
     fn rejects_values_outside_confidence_range() {
-        let error = validate_extraction_json(
-            r#"{
-                "summary": "A note about work stress.",
-                "domains": ["work"],
-                "emotions": [{"label": "anxiety", "intensity": 1.2, "confidence": 0.8}],
-                "behaviors": [],
-                "needs": [],
-                "possible_patterns": []
-            }"#,
-        )
-        .unwrap_err();
+        let mut extraction = valid_extraction();
+        extraction["emotions"] = serde_json::json!([{
+            "label": "anxiety",
+            "intensity": 1.2,
+            "confidence": 0.8
+        }]);
+
+        let error = validate(extraction).unwrap_err();
 
         assert!(error.to_string().contains("between 0 and 1"));
     }
 
     #[test]
     fn rejects_invalid_enums() {
-        let error = validate_extraction_json(
-            r#"{
-                "summary": "A note about postponing a task.",
-                "domains": ["work"],
-                "emotions": [],
-                "behaviors": [{"label": "avoidance", "valence": "bad", "confidence": 0.7}],
-                "needs": [],
-                "possible_patterns": []
-            }"#,
-        )
-        .unwrap_err();
+        let mut extraction = valid_extraction();
+        extraction["behaviors"] = serde_json::json!([{
+            "label": "avoidance",
+            "valence": "bad",
+            "confidence": 0.7
+        }]);
+
+        let error = validate(extraction).unwrap_err();
 
         assert!(error.to_string().contains("must be one of"));
     }
 
     #[test]
     fn rejects_too_many_possible_patterns() {
-        let error = validate_extraction_json(
-            r#"{
-                "summary": "A note about a recurring concern.",
-                "domains": [],
-                "emotions": [],
-                "behaviors": [],
-                "needs": [],
-                "possible_patterns": [
-                    {"description": "One cautious possibility.", "confidence": 0.3},
-                    {"description": "Another cautious possibility.", "confidence": 0.3},
-                    {"description": "A third cautious possibility.", "confidence": 0.3},
-                    {"description": "A fourth cautious possibility.", "confidence": 0.3}
-                ]
-            }"#,
-        )
-        .unwrap_err();
+        let mut extraction = valid_extraction();
+        extraction["possible_patterns"] = serde_json::json!([
+            {"description": "One cautious possibility.", "confidence": 0.3},
+            {"description": "Another cautious possibility.", "confidence": 0.3},
+            {"description": "A third cautious possibility.", "confidence": 0.3},
+            {"description": "A fourth cautious possibility.", "confidence": 0.3}
+        ]);
+
+        let error = validate(extraction).unwrap_err();
 
         assert!(error.to_string().contains("at most 3"));
     }

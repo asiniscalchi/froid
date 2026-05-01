@@ -1,9 +1,9 @@
-pub mod generator;
-pub mod prompt;
+pub(crate) mod generator;
+pub(crate) mod prompt;
 pub mod repository;
-pub mod service;
-pub mod validation;
-pub mod wiring;
+pub(crate) mod service;
+pub(crate) mod validation;
+pub(crate) mod wiring;
 
 use chrono::{DateTime, Utc};
 
