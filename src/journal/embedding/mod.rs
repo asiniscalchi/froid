@@ -137,13 +137,36 @@ mod tests {
                 .map_err(Into::into)
         }
 
-        async fn find_entries_missing_embedding(
+        async fn record_embedding_failure(
+            &self,
+            journal_entry_id: i64,
+            embedding_model: &str,
+            error_message: &str,
+        ) -> Result<(), EmbeddingRepositoryError> {
+            self.inner
+                .record_embedding_failure(journal_entry_id, embedding_model, error_message)
+                .await
+                .map_err(Into::into)
+        }
+
+        async fn delete_failed_embedding(
+            &self,
+            journal_entry_id: i64,
+            embedding_model: &str,
+        ) -> Result<bool, EmbeddingRepositoryError> {
+            self.inner
+                .delete_failed_embedding(journal_entry_id, embedding_model)
+                .await
+                .map_err(Into::into)
+        }
+
+        async fn find_entries_missing_or_failed_embedding(
             &self,
             embedding_model: &str,
             limit: u32,
         ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
             self.inner
-                .find_entries_missing_embedding(embedding_model, limit)
+                .find_entries_missing_or_failed_embedding(embedding_model, limit)
                 .await
                 .map_err(Into::into)
         }
@@ -171,7 +194,10 @@ mod tests {
 
         let service = EmbeddingBackfillService::new(embedding_repository.clone(), FakeEmbedder);
 
-        let result = service.backfill_missing_embeddings(2).await.unwrap();
+        let result = service
+            .backfill_missing_or_failed_embeddings(2)
+            .await
+            .unwrap();
 
         assert_eq!(
             result,
@@ -216,8 +242,14 @@ mod tests {
 
         let service = EmbeddingBackfillService::new(embedding_repository.clone(), FakeEmbedder);
 
-        let first_result = service.backfill_missing_embeddings(50).await.unwrap();
-        let second_result = service.backfill_missing_embeddings(50).await.unwrap();
+        let first_result = service
+            .backfill_missing_or_failed_embeddings(50)
+            .await
+            .unwrap();
+        let second_result = service
+            .backfill_missing_or_failed_embeddings(50)
+            .await
+            .unwrap();
 
         let count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_embedding_metadata")
@@ -252,7 +284,10 @@ mod tests {
 
         let service = EmbeddingBackfillService::new(embedding_repository.clone(), FakeEmbedder);
 
-        let result = service.backfill_missing_embeddings(50).await.unwrap();
+        let result = service
+            .backfill_missing_or_failed_embeddings(50)
+            .await
+            .unwrap();
 
         assert_eq!(
             result,
@@ -270,7 +305,7 @@ mod tests {
         );
         assert_eq!(
             embedding_repository
-                .count_entries_missing_embedding(TEST_EMBEDDING_MODEL)
+                .count_entries_missing_or_failed_embedding(TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap(),
             1
@@ -288,7 +323,10 @@ mod tests {
         };
         let service = EmbeddingBackfillService::new(failing_index, FakeEmbedder);
 
-        let result = service.backfill_missing_embeddings(50).await.unwrap();
+        let result = service
+            .backfill_missing_or_failed_embeddings(50)
+            .await
+            .unwrap();
 
         assert_eq!(
             result,
@@ -298,11 +336,20 @@ mod tests {
                 failed: 1,
             }
         );
+        // first has a failed row (storage error recorded), so still counts as pending
+        assert_eq!(
+            embedding_repository
+                .count_entries_missing_or_failed_embedding(TEST_EMBEDDING_MODEL)
+                .await
+                .unwrap(),
+            1
+        );
         assert!(
-            !embedding_repository
-                .has_embedding(first, TEST_EMBEDDING_MODEL)
+            embedding_repository
+                .stored_embedding(first, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
+                .is_none()
         );
         assert!(
             embedding_repository

@@ -43,7 +43,20 @@ pub trait EmbeddingIndex: Send + Sync {
         embedding: &Embedding,
     ) -> Result<bool, EmbeddingRepositoryError>;
 
-    async fn find_entries_missing_embedding(
+    async fn record_embedding_failure(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+        error_message: &str,
+    ) -> Result<(), EmbeddingRepositoryError>;
+
+    async fn delete_failed_embedding(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+    ) -> Result<bool, EmbeddingRepositoryError>;
+
+    async fn find_entries_missing_or_failed_embedding(
         &self,
         embedding_model: &str,
         limit: u32,
@@ -75,6 +88,47 @@ pub struct SqliteEmbeddingRepository {
 impl SqliteEmbeddingRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    pub async fn record_embedding_failure(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+        error_message: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO journal_entry_embedding_metadata
+                (journal_entry_id, embedding_model, embedding_dim, status, error_message)
+            VALUES (?, ?, 0, 'failed', ?)
+            "#,
+        )
+        .bind(journal_entry_id)
+        .bind(embedding_model)
+        .bind(error_message)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_failed_embedding(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM journal_entry_embedding_metadata
+            WHERE journal_entry_id = ? AND embedding_model = ? AND status = 'failed'
+            "#,
+        )
+        .bind(journal_entry_id)
+        .bind(embedding_model)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn store_embedding(
@@ -144,7 +198,7 @@ impl SqliteEmbeddingRepository {
         Ok(exists)
     }
 
-    pub async fn find_entries_missing_embedding(
+    pub async fn find_entries_missing_or_failed_embedding(
         &self,
         embedding_model: &str,
         limit: u32,
@@ -157,6 +211,7 @@ impl SqliteEmbeddingRepository {
               ON journal_entry_embedding_metadata.journal_entry_id = journal_entries.id
              AND journal_entry_embedding_metadata.embedding_model = ?
             WHERE journal_entry_embedding_metadata.id IS NULL
+               OR journal_entry_embedding_metadata.status = 'failed'
             ORDER BY journal_entries.received_at ASC, journal_entries.id ASC
             LIMIT ?
             "#,
@@ -176,7 +231,7 @@ impl SqliteEmbeddingRepository {
     }
 
     #[cfg(test)]
-    pub(crate) async fn count_entries_missing_embedding(
+    pub(crate) async fn count_entries_missing_or_failed_embedding(
         &self,
         embedding_model: &str,
     ) -> Result<i64, sqlx::Error> {
@@ -188,6 +243,7 @@ impl SqliteEmbeddingRepository {
               ON journal_entry_embedding_metadata.journal_entry_id = journal_entries.id
              AND journal_entry_embedding_metadata.embedding_model = ?
             WHERE journal_entry_embedding_metadata.id IS NULL
+               OR journal_entry_embedding_metadata.status = 'failed'
             "#,
         )
         .bind(embedding_model)
@@ -208,7 +264,8 @@ impl SqliteEmbeddingRepository {
               ON journal_entry_embedding_metadata.journal_entry_id = journal_entries.id
              AND journal_entry_embedding_metadata.embedding_model = ?
             WHERE journal_entries.user_id = ?
-              AND journal_entry_embedding_metadata.id IS NULL
+              AND (journal_entry_embedding_metadata.id IS NULL
+                   OR journal_entry_embedding_metadata.status = 'failed')
             "#,
         )
         .bind(embedding_model)
@@ -339,14 +396,44 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
         .map_err(Into::into)
     }
 
-    async fn find_entries_missing_embedding(
+    async fn record_embedding_failure(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+        error_message: &str,
+    ) -> Result<(), EmbeddingRepositoryError> {
+        SqliteEmbeddingRepository::record_embedding_failure(
+            self,
+            journal_entry_id,
+            embedding_model,
+            error_message,
+        )
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn delete_failed_embedding(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+    ) -> Result<bool, EmbeddingRepositoryError> {
+        SqliteEmbeddingRepository::delete_failed_embedding(self, journal_entry_id, embedding_model)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn find_entries_missing_or_failed_embedding(
         &self,
         embedding_model: &str,
         limit: u32,
     ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::find_entries_missing_embedding(self, embedding_model, limit)
-            .await
-            .map_err(Into::into)
+        SqliteEmbeddingRepository::find_entries_missing_or_failed_embedding(
+            self,
+            embedding_model,
+            limit,
+        )
+        .await
+        .map_err(Into::into)
     }
 
     async fn search_for_user(
@@ -612,12 +699,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finds_missing_entries_oldest_first_with_limit() {
+    async fn finds_missing_and_failed_entries_oldest_first_with_limit() {
         let (journal_repository, embedding_repository) = setup().await;
         let second = store_entry(&journal_repository, "2", "second", at(11, 0)).await;
         let first = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
         let third = store_entry(&journal_repository, "3", "third", at(12, 0)).await;
 
+        // second has a completed embedding — should not appear
         embedding_repository
             .store_embedding(
                 second,
@@ -627,14 +715,19 @@ mod tests {
             )
             .await
             .unwrap();
+        // third has a failed embedding — should appear
+        embedding_repository
+            .record_embedding_failure(third, TEST_EMBEDDING_MODEL, "provider error")
+            .await
+            .unwrap();
 
-        let missing = embedding_repository
-            .find_entries_missing_embedding(TEST_EMBEDDING_MODEL, 2)
+        let candidates = embedding_repository
+            .find_entries_missing_or_failed_embedding(TEST_EMBEDDING_MODEL, 10)
             .await
             .unwrap();
 
         assert_eq!(
-            missing,
+            candidates,
             vec![
                 JournalEntryEmbeddingCandidate {
                     journal_entry_id: first,
@@ -649,7 +742,137 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detects_entries_missing_new_embedding_model() {
+    async fn find_missing_or_failed_respects_limit() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let first = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+        store_entry(&journal_repository, "2", "second", at(11, 0)).await;
+        store_entry(&journal_repository, "3", "third", at(12, 0)).await;
+
+        let candidates = embedding_repository
+            .find_entries_missing_or_failed_embedding(TEST_EMBEDDING_MODEL, 2)
+            .await
+            .unwrap();
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].journal_entry_id, first);
+    }
+
+    #[tokio::test]
+    async fn records_embedding_failure_inserts_failed_row() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let entry_id = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+
+        embedding_repository
+            .record_embedding_failure(entry_id, TEST_EMBEDDING_MODEL, "provider down")
+            .await
+            .unwrap();
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM journal_entry_embedding_metadata WHERE journal_entry_id = ? AND status = 'failed'",
+        )
+        .bind(entry_id)
+        .fetch_one(&embedding_repository.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn record_embedding_failure_does_not_overwrite_completed_embedding() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let entry_id = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+
+        embedding_repository
+            .store_embedding(
+                entry_id,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &embedding(1.0),
+            )
+            .await
+            .unwrap();
+        embedding_repository
+            .record_embedding_failure(entry_id, TEST_EMBEDDING_MODEL, "should be ignored")
+            .await
+            .unwrap();
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM journal_entry_embedding_metadata WHERE journal_entry_id = ? AND status = 'completed'",
+        )
+        .bind(entry_id)
+        .fetch_one(&embedding_repository.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn delete_failed_embedding_removes_failed_row() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let entry_id = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+
+        embedding_repository
+            .record_embedding_failure(entry_id, TEST_EMBEDDING_MODEL, "error")
+            .await
+            .unwrap();
+
+        let deleted = embedding_repository
+            .delete_failed_embedding(entry_id, TEST_EMBEDDING_MODEL)
+            .await
+            .unwrap();
+
+        assert!(deleted);
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_embedding_metadata")
+                .fetch_one(&embedding_repository.pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_failed_embedding_returns_false_when_no_failed_row_exists() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let entry_id = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+
+        let deleted = embedding_repository
+            .delete_failed_embedding(entry_id, TEST_EMBEDDING_MODEL)
+            .await
+            .unwrap();
+
+        assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn delete_failed_embedding_does_not_remove_completed_embedding() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let entry_id = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+
+        embedding_repository
+            .store_embedding(
+                entry_id,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &embedding(1.0),
+            )
+            .await
+            .unwrap();
+        let deleted = embedding_repository
+            .delete_failed_embedding(entry_id, TEST_EMBEDDING_MODEL)
+            .await
+            .unwrap();
+
+        assert!(!deleted);
+        assert!(
+            embedding_repository
+                .has_embedding(entry_id, TEST_EMBEDDING_MODEL)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn detects_entries_missing_or_failed_for_new_embedding_model() {
         let (journal_repository, embedding_repository) = setup().await;
         let journal_entry_id = store_entry(&journal_repository, "100", "first", at(10, 0)).await;
 
@@ -665,14 +888,33 @@ mod tests {
 
         assert_eq!(
             embedding_repository
-                .count_entries_missing_embedding(TEST_EMBEDDING_MODEL)
+                .count_entries_missing_or_failed_embedding(TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap(),
             0
         );
         assert_eq!(
             embedding_repository
-                .count_entries_missing_embedding("test-model-v2")
+                .count_entries_missing_or_failed_embedding("test-model-v2")
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn counts_failed_entries_as_missing() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let entry_id = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
+
+        embedding_repository
+            .record_embedding_failure(entry_id, TEST_EMBEDDING_MODEL, "error")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            embedding_repository
+                .count_entries_missing_or_failed_embedding(TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap(),
             1

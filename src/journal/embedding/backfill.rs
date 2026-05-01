@@ -49,7 +49,7 @@ where
         self.embedder.dimensions()
     }
 
-    pub async fn backfill_missing_embeddings(
+    pub async fn backfill_missing_or_failed_embeddings(
         &self,
         limit: u32,
     ) -> Result<BackfillResult, EmbeddingBackfillError> {
@@ -58,7 +58,7 @@ where
 
         let candidates = self
             .index
-            .find_entries_missing_embedding(embedding_model, limit)
+            .find_entries_missing_or_failed_embedding(embedding_model, limit)
             .await
             .map_err(EmbeddingBackfillError::Repository)?;
 
@@ -69,6 +69,20 @@ where
         };
 
         for candidate in candidates {
+            if let Err(error) = self
+                .index
+                .delete_failed_embedding(candidate.journal_entry_id, embedding_model)
+                .await
+            {
+                result.failed += 1;
+                warn!(
+                    journal_entry_id = candidate.journal_entry_id,
+                    error = %error,
+                    "failed to delete previous failed embedding record"
+                );
+                continue;
+            }
+
             let embedding = match self.embedder.embed(&candidate.raw_text).await {
                 Ok(embedding) => embedding,
                 Err(error) => {
@@ -80,6 +94,12 @@ where
                         error = %error,
                         "failed to generate journal entry embedding"
                     );
+                    self.record_failure(
+                        candidate.journal_entry_id,
+                        embedding_model,
+                        &error.to_string(),
+                    )
+                    .await;
                     continue;
                 }
             };
@@ -105,10 +125,35 @@ where
                         error = %error,
                         "failed to store journal entry embedding"
                     );
+                    self.record_failure(
+                        candidate.journal_entry_id,
+                        embedding_model,
+                        &error.to_string(),
+                    )
+                    .await;
                 }
             }
         }
 
         Ok(result)
+    }
+
+    async fn record_failure(
+        &self,
+        journal_entry_id: i64,
+        embedding_model: &str,
+        error_message: &str,
+    ) {
+        if let Err(db_error) = self
+            .index
+            .record_embedding_failure(journal_entry_id, embedding_model, error_message)
+            .await
+        {
+            warn!(
+                journal_entry_id,
+                error = %db_error,
+                "failed to record embedding failure"
+            );
+        }
     }
 }
