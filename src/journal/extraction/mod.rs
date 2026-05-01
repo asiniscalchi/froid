@@ -16,7 +16,7 @@ pub use generator::{
 };
 pub use prompt::{JournalEntryExtractionPrompt, JournalEntryExtractionPromptConfig};
 pub use wiring::{JournalEntryExtractionRuntimeConfig, configure_journal_entry_extraction};
-// pub use worker_config::ExtractionWorkerConfig; — added in a subsequent commit
+pub use worker_config::{ExtractionWorkerConfig, ExtractionWorkerConfigError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryExtractionCandidate {
