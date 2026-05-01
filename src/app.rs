@@ -11,6 +11,7 @@ use crate::{
         embedding::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
         },
+        extraction::{EntryExtractionRuntimeConfig, configure_entry_extraction},
         repository::JournalRepository,
         review::{DailyReviewRuntimeConfig, build_daily_review_service, configure_daily_review},
         search::SemanticSearchService,
@@ -39,6 +40,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
 
     let embedding_config = EmbeddingConfig::from_env().ok();
     let daily_review_config = DailyReviewRuntimeConfig::from_env();
+    let entry_extraction_config = EntryExtractionRuntimeConfig::from_env();
 
     spawn_embedding_worker(&pool, &config, embedding_config.as_ref())?;
     let delivery_configured =
@@ -46,6 +48,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let journal_service = build_journal_service(
         pool,
         embedding_config,
+        entry_extraction_config,
         daily_review_config,
         delivery_configured,
     )?;
@@ -105,10 +108,14 @@ fn spawn_daily_review_delivery_worker(
 fn build_journal_service(
     pool: SqlitePool,
     embedding_config: Option<EmbeddingConfig>,
+    entry_extraction_config: EntryExtractionRuntimeConfig,
     daily_review_config: DailyReviewRuntimeConfig,
     delivery_configured: bool,
 ) -> Result<JournalService, Box<dyn Error>> {
     let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
+
+    journal_service =
+        configure_entry_extraction(journal_service, pool.clone(), entry_extraction_config)?;
 
     journal_service = configure_daily_review(journal_service, pool.clone(), daily_review_config)?;
 

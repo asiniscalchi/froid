@@ -722,6 +722,7 @@ dependencies = [
  "dotenvy",
  "libsqlite3-sys",
  "rig-core",
+ "serde",
  "serde_json",
  "sqlite-vec",
  "sqlx",
