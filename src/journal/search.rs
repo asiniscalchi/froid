@@ -281,7 +281,24 @@ mod tests {
             unreachable!("search tests do not store through FakeIndex")
         }
 
-        async fn find_entries_missing_embedding(
+        async fn record_embedding_failure(
+            &self,
+            _journal_entry_id: i64,
+            _embedding_model: &str,
+            _error_message: &str,
+        ) -> Result<(), EmbeddingRepositoryError> {
+            unreachable!("search tests do not record failures through FakeIndex")
+        }
+
+        async fn delete_failed_embedding(
+            &self,
+            _journal_entry_id: i64,
+            _embedding_model: &str,
+        ) -> Result<bool, EmbeddingRepositoryError> {
+            unreachable!("search tests do not delete through FakeIndex")
+        }
+
+        async fn find_entries_missing_or_failed_embedding(
             &self,
             _embedding_model: &str,
             _limit: u32,

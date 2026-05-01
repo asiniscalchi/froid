@@ -27,7 +27,7 @@ where
 
     pub async fn run_once(&self) -> Result<BackfillResult, EmbeddingBackfillError> {
         self.backfill_service
-            .backfill_missing_embeddings(self.config.batch_size)
+            .backfill_missing_or_failed_embeddings(self.config.batch_size)
             .await
     }
 
@@ -201,7 +201,7 @@ mod tests {
         assert_eq!(result.failed, 0);
         assert_eq!(
             embedding_repository
-                .count_entries_missing_embedding(TEST_EMBEDDING_MODEL)
+                .count_entries_missing_or_failed_embedding(TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap(),
             1
@@ -222,7 +222,7 @@ mod tests {
         assert_eq!(result.failed, 0);
         assert_eq!(
             embedding_repository
-                .count_entries_missing_embedding(TEST_EMBEDDING_MODEL)
+                .count_entries_missing_or_failed_embedding(TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap(),
             0
