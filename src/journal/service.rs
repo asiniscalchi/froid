@@ -256,7 +256,7 @@ mod tests {
             embedding::{
                 EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
             },
-            extraction::service::EntryExtractionServiceError,
+            extraction::service::JournalEntryExtractionServiceError,
             repository::JournalRepository,
             review::{
                 DailyReview, DailyReviewResult, DailyReviewStatus,
@@ -466,11 +466,11 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct FakeEntryExtractionRunner {
+    struct FakeJournalEntryExtractionRunner {
         calls: Arc<Mutex<Vec<(i64, String)>>>,
     }
 
-    impl FakeEntryExtractionRunner {
+    impl FakeJournalEntryExtractionRunner {
         fn new() -> Self {
             Self {
                 calls: Arc::new(Mutex::new(Vec::new())),
@@ -483,12 +483,12 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl JournalEntryExtractionRunner for FakeEntryExtractionRunner {
+    impl JournalEntryExtractionRunner for FakeJournalEntryExtractionRunner {
         async fn extract_entry(
             &self,
             journal_entry_id: i64,
             text: &str,
-        ) -> Result<(), EntryExtractionServiceError> {
+        ) -> Result<(), JournalEntryExtractionServiceError> {
             self.calls
                 .lock()
                 .unwrap()
@@ -627,7 +627,7 @@ mod tests {
 
     #[tokio::test]
     async fn process_runs_entry_extraction_without_exposing_content_to_user() {
-        let runner = FakeEntryExtractionRunner::new();
+        let runner = FakeJournalEntryExtractionRunner::new();
         let (service, repo) = setup_with_entry_extraction_runner(runner.clone()).await;
         let message = incoming("100", "private structured meaning source", at(10, 0));
 

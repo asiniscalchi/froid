@@ -3,17 +3,17 @@ use std::{error::Error, fmt};
 use async_trait::async_trait;
 
 use crate::journal::extraction::{
-    EntryExtractionGenerator,
+    JournalEntryExtractionGenerator,
     repository::{JournalEntryExtractionRepository, JournalEntryExtractionRepositoryError},
     validation::validate_extraction_json,
 };
 
 #[derive(Debug)]
-pub enum EntryExtractionServiceError {
+pub enum JournalEntryExtractionServiceError {
     Repository(JournalEntryExtractionRepositoryError),
 }
 
-impl fmt::Display for EntryExtractionServiceError {
+impl fmt::Display for JournalEntryExtractionServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Repository(error) => write!(f, "{error}"),
@@ -21,9 +21,9 @@ impl fmt::Display for EntryExtractionServiceError {
     }
 }
 
-impl Error for EntryExtractionServiceError {}
+impl Error for JournalEntryExtractionServiceError {}
 
-impl From<JournalEntryExtractionRepositoryError> for EntryExtractionServiceError {
+impl From<JournalEntryExtractionRepositoryError> for JournalEntryExtractionServiceError {
     fn from(error: JournalEntryExtractionRepositoryError) -> Self {
         Self::Repository(error)
     }
@@ -35,16 +35,16 @@ pub trait JournalEntryExtractionRunner: Send + Sync {
         &self,
         journal_entry_id: i64,
         text: &str,
-    ) -> Result<(), EntryExtractionServiceError>;
+    ) -> Result<(), JournalEntryExtractionServiceError>;
 }
 
 #[derive(Clone)]
-pub struct EntryExtractionService<G> {
+pub struct JournalEntryExtractionService<G> {
     repository: JournalEntryExtractionRepository,
     generator: G,
 }
 
-impl<G> EntryExtractionService<G> {
+impl<G> JournalEntryExtractionService<G> {
     pub fn new(repository: JournalEntryExtractionRepository, generator: G) -> Self {
         Self {
             repository,
@@ -54,15 +54,15 @@ impl<G> EntryExtractionService<G> {
 }
 
 #[async_trait]
-impl<G> JournalEntryExtractionRunner for EntryExtractionService<G>
+impl<G> JournalEntryExtractionRunner for JournalEntryExtractionService<G>
 where
-    G: EntryExtractionGenerator,
+    G: JournalEntryExtractionGenerator,
 {
     async fn extract_entry(
         &self,
         journal_entry_id: i64,
         text: &str,
-    ) -> Result<(), EntryExtractionServiceError> {
+    ) -> Result<(), JournalEntryExtractionServiceError> {
         let inserted = self
             .repository
             .insert_pending_if_absent(
@@ -101,15 +101,15 @@ where
     }
 }
 
-impl<G> EntryExtractionService<G>
+impl<G> JournalEntryExtractionService<G>
 where
-    G: EntryExtractionGenerator,
+    G: JournalEntryExtractionGenerator,
 {
     async fn record_failure(
         &self,
         journal_entry_id: i64,
         error: impl std::fmt::Display,
-    ) -> Result<(), EntryExtractionServiceError> {
+    ) -> Result<(), JournalEntryExtractionServiceError> {
         self.repository
             .mark_failed(
                 journal_entry_id,
@@ -137,7 +137,7 @@ mod tests {
     use crate::{
         database,
         journal::extraction::{
-            EntryExtractionGenerationError, JournalEntryExtractionStatus,
+            JournalEntryExtractionGenerationError, JournalEntryExtractionStatus,
             repository::JournalEntryExtractionRepository,
         },
         messages::{IncomingMessage, MessageSource},
@@ -145,7 +145,7 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeGenerator {
-        result: Result<String, EntryExtractionGenerationError>,
+        result: Result<String, JournalEntryExtractionGenerationError>,
         calls: Arc<AtomicUsize>,
         notes: Arc<Mutex<Vec<String>>>,
     }
@@ -161,7 +161,7 @@ mod tests {
 
         fn failing(message: &str) -> Self {
             Self {
-                result: Err(EntryExtractionGenerationError::new(message)),
+                result: Err(JournalEntryExtractionGenerationError::new(message)),
                 calls: Arc::new(AtomicUsize::new(0)),
                 notes: Arc::new(Mutex::new(Vec::new())),
             }
@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl EntryExtractionGenerator for FakeGenerator {
+    impl JournalEntryExtractionGenerator for FakeGenerator {
         fn model(&self) -> &str {
             "test-extraction-model"
         }
@@ -185,7 +185,7 @@ mod tests {
         async fn generate_entry_extraction(
             &self,
             note: &str,
-        ) -> Result<String, EntryExtractionGenerationError> {
+        ) -> Result<String, JournalEntryExtractionGenerationError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.notes.lock().unwrap().push(note.to_string());
             self.result.clone()
@@ -195,7 +195,7 @@ mod tests {
     async fn setup(
         generator: FakeGenerator,
     ) -> (
-        EntryExtractionService<FakeGenerator>,
+        JournalEntryExtractionService<FakeGenerator>,
         JournalEntryExtractionRepository,
         SqlitePool,
     ) {
@@ -203,7 +203,7 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
         let repo = JournalEntryExtractionRepository::new(pool.clone());
-        let service = EntryExtractionService::new(repo.clone(), generator);
+        let service = JournalEntryExtractionService::new(repo.clone(), generator);
         (service, repo, pool)
     }
 
