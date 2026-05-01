@@ -11,6 +11,7 @@ use crate::{
             Embedder, EmbedderError, Embedding, EmbeddingIndex, EmbeddingRepositoryError,
             PendingEmbeddingCounter,
         },
+        extraction::service::JournalEntryExtractionRunner,
         responses::message_saved_response,
         review::service::DailyReviewRunner,
         search::{SearchService, SemanticSearchService},
@@ -31,6 +32,7 @@ pub struct JournalService {
     store: JournalEntryStore,
     search: Option<Arc<dyn SearchService>>,
     capture_embedding: Option<Arc<dyn CaptureEmbeddingService>>,
+    entry_extraction: Option<Arc<dyn JournalEntryExtractionRunner>>,
     daily_review: Option<Arc<dyn DailyReviewRunner>>,
     embedding_status_config: Option<EmbeddingStatusConfig>,
     pending_embedding_counter: Option<Arc<dyn PendingEmbeddingCounter>>,
@@ -46,6 +48,7 @@ impl JournalService {
             store,
             search: None,
             capture_embedding: None,
+            entry_extraction: None,
             daily_review: None,
             embedding_status_config: None,
             pending_embedding_counter: None,
@@ -87,6 +90,14 @@ impl JournalService {
         self
     }
 
+    pub fn with_entry_extraction_runner<R>(mut self, runner: R) -> Self
+    where
+        R: JournalEntryExtractionRunner + 'static,
+    {
+        self.entry_extraction = Some(Arc::new(runner));
+        self
+    }
+
     pub fn with_daily_review_runner<R>(mut self, daily_review: R) -> Self
     where
         R: DailyReviewRunner + 'static,
@@ -106,17 +117,30 @@ impl JournalService {
     }
 
     pub async fn process(&self, message: &IncomingMessage) -> Result<OutgoingMessage, sqlx::Error> {
-        if let Some(journal_entry_id) = self.store.store(message).await?
-            && let Some(capture_embedding) = &self.capture_embedding
-            && let Err(error) = capture_embedding
-                .embed_entry(journal_entry_id, &message.text)
-                .await
-        {
-            warn!(
-                journal_entry_id,
-                error = %error,
-                "failed to create journal entry embedding after capture"
-            );
+        if let Some(journal_entry_id) = self.store.store(message).await? {
+            if let Some(capture_embedding) = &self.capture_embedding
+                && let Err(error) = capture_embedding
+                    .embed_entry(journal_entry_id, &message.text)
+                    .await
+            {
+                warn!(
+                    journal_entry_id,
+                    error = %error,
+                    "failed to create journal entry embedding after capture"
+                );
+            }
+
+            if let Some(entry_extraction) = &self.entry_extraction
+                && let Err(error) = entry_extraction
+                    .extract_entry(journal_entry_id, &message.text)
+                    .await
+            {
+                warn!(
+                    journal_entry_id,
+                    error = %error,
+                    "failed to process journal entry extraction after capture"
+                );
+            }
         }
 
         Ok(OutgoingMessage {
@@ -232,6 +256,7 @@ mod tests {
             embedding::{
                 EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
             },
+            extraction::service::EntryExtractionServiceError,
             repository::JournalRepository,
             review::{
                 DailyReview, DailyReviewResult, DailyReviewStatus,
@@ -269,6 +294,20 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
         JournalService::new(JournalRepository::new(pool)).with_daily_review_runner(runner)
+    }
+
+    async fn setup_with_entry_extraction_runner<R>(runner: R) -> (JournalService, JournalRepository)
+    where
+        R: JournalEntryExtractionRunner + 'static,
+    {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let repo = JournalRepository::new(pool);
+        (
+            JournalService::new(repo.clone()).with_entry_extraction_runner(runner),
+            repo,
+        )
     }
 
     async fn setup_with_daily_review_service(
@@ -427,6 +466,38 @@ mod tests {
     }
 
     #[derive(Clone)]
+    struct FakeEntryExtractionRunner {
+        calls: Arc<Mutex<Vec<(i64, String)>>>,
+    }
+
+    impl FakeEntryExtractionRunner {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn calls(&self) -> Vec<(i64, String)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl JournalEntryExtractionRunner for FakeEntryExtractionRunner {
+        async fn extract_entry(
+            &self,
+            journal_entry_id: i64,
+            text: &str,
+        ) -> Result<(), EntryExtractionServiceError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((journal_entry_id, text.to_string()));
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
     struct FailingPendingEmbeddingCounter;
 
     #[async_trait::async_trait]
@@ -552,6 +623,27 @@ mod tests {
 
         assert_eq!(outgoing.text, "Message saved.");
         assert!(!index.has_embedding(entry_id, TEST_MODEL).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn process_runs_entry_extraction_without_exposing_content_to_user() {
+        let runner = FakeEntryExtractionRunner::new();
+        let (service, repo) = setup_with_entry_extraction_runner(runner.clone()).await;
+        let message = incoming("100", "private structured meaning source", at(10, 0));
+
+        let outgoing = service.process(&message).await.unwrap();
+        let entry_id: i64 =
+            sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '100'")
+                .fetch_one(repo.pool())
+                .await
+                .unwrap();
+
+        assert_eq!(outgoing.text, "Message saved.");
+        assert_eq!(
+            runner.calls(),
+            vec![(entry_id, "private structured meaning source".to_string())]
+        );
+        assert!(!outgoing.text.contains("structured meaning"));
     }
 
     #[tokio::test]

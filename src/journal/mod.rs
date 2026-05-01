@@ -1,6 +1,7 @@
 pub mod command;
 pub mod embedding;
 pub mod entry;
+pub mod extraction;
 pub mod repository;
 pub(crate) mod responses;
 pub mod review;
