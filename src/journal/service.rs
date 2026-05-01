@@ -11,14 +11,14 @@ use crate::{
             Embedder, EmbedderError, Embedding, EmbeddingIndex, EmbeddingRepositoryError,
             PendingEmbeddingCounter,
         },
-        extraction::service::{JournalEntryExtractionRunResult, JournalEntryExtractionRunner},
+        extraction::service::JournalEntryExtractionRunner,
         responses::message_saved_response,
         review::service::DailyReviewRunner,
         search::{SearchService, SemanticSearchService},
         status::EmbeddingStatusConfig,
         store::JournalEntryStore,
     },
-    messages::{IncomingMessage, OutgoingMessage, OutgoingReaction},
+    messages::{IncomingMessage, OutgoingMessage},
 };
 
 use super::repository::JournalRepository;
@@ -117,8 +117,6 @@ impl JournalService {
     }
 
     pub async fn process(&self, message: &IncomingMessage) -> Result<OutgoingMessage, sqlx::Error> {
-        let mut reaction = OutgoingReaction::MessageSaved;
-
         if let Some(journal_entry_id) = self.store.store(message).await? {
             if let Some(capture_embedding) = &self.capture_embedding
                 && let Err(error) = capture_embedding
@@ -132,31 +130,22 @@ impl JournalService {
                 );
             }
 
-            if let Some(entry_extraction) = &self.entry_extraction {
-                match entry_extraction
+            if let Some(entry_extraction) = &self.entry_extraction
+                && let Err(error) = entry_extraction
                     .extract_entry(journal_entry_id, &message.text)
                     .await
-                {
-                    Ok(JournalEntryExtractionRunResult::Completed) => {
-                        reaction = OutgoingReaction::JournalEntryExtracted;
-                    }
-                    Ok(JournalEntryExtractionRunResult::Failed)
-                    | Ok(JournalEntryExtractionRunResult::AlreadyExists) => {}
-                    Err(error) => {
-                        warn!(
-                            journal_entry_id,
-                            error = %error,
-                            "failed to process journal entry extraction after capture"
-                        );
-                    }
-                }
+            {
+                warn!(
+                    journal_entry_id,
+                    error = %error,
+                    "failed to process journal entry extraction after capture"
+                );
             }
         }
 
-        Ok(OutgoingMessage::with_reaction(
-            message_saved_response(),
-            reaction,
-        ))
+        Ok(OutgoingMessage {
+            text: message_saved_response(),
+        })
     }
 }
 
@@ -478,18 +467,12 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeJournalEntryExtractionRunner {
-        result: JournalEntryExtractionRunResult,
         calls: Arc<Mutex<Vec<(i64, String)>>>,
     }
 
     impl FakeJournalEntryExtractionRunner {
         fn new() -> Self {
-            Self::with_result(JournalEntryExtractionRunResult::Completed)
-        }
-
-        fn with_result(result: JournalEntryExtractionRunResult) -> Self {
             Self {
-                result,
                 calls: Arc::new(Mutex::new(Vec::new())),
             }
         }
@@ -505,12 +488,12 @@ mod tests {
             &self,
             journal_entry_id: i64,
             text: &str,
-        ) -> Result<JournalEntryExtractionRunResult, JournalEntryExtractionServiceError> {
+        ) -> Result<(), JournalEntryExtractionServiceError> {
             self.calls
                 .lock()
                 .unwrap()
                 .push((journal_entry_id, text.to_string()));
-            Ok(self.result)
+            Ok(())
         }
     }
 
@@ -657,27 +640,10 @@ mod tests {
 
         assert_eq!(outgoing.text, "Message saved.");
         assert_eq!(
-            outgoing.reaction,
-            Some(OutgoingReaction::JournalEntryExtracted)
-        );
-        assert_eq!(
             runner.calls(),
             vec![(entry_id, "private structured meaning source".to_string())]
         );
         assert!(!outgoing.text.contains("structured meaning"));
-    }
-
-    #[tokio::test]
-    async fn process_uses_saved_reaction_when_entry_extraction_fails() {
-        let runner =
-            FakeJournalEntryExtractionRunner::with_result(JournalEntryExtractionRunResult::Failed);
-        let (service, _) = setup_with_entry_extraction_runner(runner).await;
-        let message = incoming("100", "private structured meaning source", at(10, 0));
-
-        let outgoing = service.process(&message).await.unwrap();
-
-        assert_eq!(outgoing.text, "Message saved.");
-        assert_eq!(outgoing.reaction, Some(OutgoingReaction::MessageSaved));
     }
 
     #[tokio::test]
