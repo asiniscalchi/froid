@@ -12,7 +12,10 @@ pub use generator::{
     JournalEntryExtractionGenerator, RigOpenAiJournalEntryExtractionGenerator,
 };
 pub use prompt::{JournalEntryExtractionPrompt, JournalEntryExtractionPromptConfig};
-pub use wiring::{JournalEntryExtractionRuntimeConfig, configure_journal_entry_extraction};
+pub use wiring::{
+    JournalEntryExtractionRuntimeConfig, build_journal_entry_extraction_service,
+    configure_journal_entry_extraction,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JournalEntryExtractionStatus {

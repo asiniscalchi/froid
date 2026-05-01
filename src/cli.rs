@@ -5,6 +5,8 @@ use crate::{
     version,
 };
 
+pub const DEFAULT_ENTRY_EXTRACTION_BACKFILL_LIMIT: u32 = 100;
+
 #[derive(Debug, Parser)]
 #[command(version = version::VERSION, about)]
 pub struct Cli {
@@ -50,10 +52,22 @@ pub struct Cli {
     command: Option<Command>,
 }
 
-#[derive(Debug, Default, Clone, Copy, Subcommand)]
+#[derive(Debug, Default, Clone, Subcommand)]
 pub enum Command {
     #[default]
     Serve,
+    Backfill {
+        #[command(subcommand)]
+        command: BackfillCommand,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum BackfillCommand {
+    EntryExtractions {
+        #[arg(long, default_value_t = DEFAULT_ENTRY_EXTRACTION_BACKFILL_LIMIT)]
+        limit: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,9 +79,16 @@ pub struct ServeConfig {
     pub daily_review_delivery: DailyReviewDeliveryWorkerConfig,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryExtractionBackfillConfig {
+    pub database_path: String,
+    pub database_url: String,
+    pub limit: u32,
+}
+
 impl Cli {
     pub fn selected_command(&self) -> Command {
-        self.command.unwrap_or_default()
+        self.command.clone().unwrap_or_default()
     }
 
     pub fn serve_config(&self) -> Result<ServeConfig, clap::Error> {
@@ -106,6 +127,26 @@ impl Cli {
             database_path,
             embedding_worker,
             daily_review_delivery,
+        })
+    }
+
+    pub fn entry_extraction_backfill_config(
+        &self,
+        limit: u32,
+    ) -> Result<EntryExtractionBackfillConfig, clap::Error> {
+        if limit == 0 {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                "--limit must be greater than zero",
+            ));
+        }
+
+        let database_path = format!("{}/{}", self.data_dir, self.database_file);
+
+        Ok(EntryExtractionBackfillConfig {
+            database_url: format!("sqlite:{database_path}"),
+            database_path,
+            limit,
         })
     }
 }
@@ -161,6 +202,57 @@ mod tests {
         };
 
         assert!(matches!(cli.selected_command(), Command::Serve));
+    }
+
+    #[test]
+    fn parses_entry_extraction_backfill_config() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--data-dir",
+            "custom",
+            "--database-file",
+            "app.db",
+            "backfill",
+            "entry-extractions",
+            "--limit",
+            "25",
+        ]);
+
+        match cli.selected_command() {
+            Command::Backfill {
+                command: BackfillCommand::EntryExtractions { limit },
+            } => {
+                let config = cli.entry_extraction_backfill_config(limit).unwrap();
+                assert_eq!(config.database_path, "custom/app.db");
+                assert_eq!(config.database_url, "sqlite:custom/app.db");
+                assert_eq!(config.limit, 25);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn entry_extraction_backfill_limit_defaults_to_safe_batch_size() {
+        let cli = Cli::parse_from(["froid", "backfill", "entry-extractions"]);
+
+        assert!(matches!(
+            cli.selected_command(),
+            Command::Backfill {
+                command: BackfillCommand::EntryExtractions {
+                    limit: DEFAULT_ENTRY_EXTRACTION_BACKFILL_LIMIT
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_entry_extraction_backfill_limit() {
+        let cli = Cli::parse_from(["froid", "backfill", "entry-extractions", "--limit", "0"]);
+
+        let error = cli.entry_extraction_backfill_config(0).unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("greater than zero"));
     }
 
     #[test]

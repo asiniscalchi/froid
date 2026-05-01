@@ -1,7 +1,7 @@
 use clap::Parser;
 use froid::{
     app,
-    cli::{Cli, Command},
+    cli::{BackfillCommand, Cli, Command},
     version,
 };
 use tracing::info;
@@ -26,6 +26,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Serve => {
             let config = cli.serve_config()?;
             app::serve(config).await?;
+        }
+        Command::Backfill {
+            command: BackfillCommand::EntryExtractions { limit },
+        } => {
+            let config = cli.entry_extraction_backfill_config(limit)?;
+            app::backfill_entry_extractions(config).await?;
         }
     }
 

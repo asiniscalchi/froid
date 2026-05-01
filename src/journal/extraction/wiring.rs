@@ -34,12 +34,26 @@ pub fn configure_journal_entry_extraction(
     pool: SqlitePool,
     config: JournalEntryExtractionRuntimeConfig,
 ) -> Result<JournalService, Box<dyn std::error::Error>> {
+    let Some(service) = build_journal_entry_extraction_service(pool, config)? else {
+        warn!("journal entry extraction is not configured");
+        return Ok(journal_service);
+    };
+
+    Ok(journal_service.with_entry_extraction_runner(service))
+}
+
+pub fn build_journal_entry_extraction_service(
+    pool: SqlitePool,
+    config: JournalEntryExtractionRuntimeConfig,
+) -> Result<
+    Option<JournalEntryExtractionService<RigOpenAiJournalEntryExtractionGenerator>>,
+    Box<dyn std::error::Error>,
+> {
     let Some(openai_api_key) = config
         .openai_api_key
         .filter(|value| !value.trim().is_empty())
     else {
-        warn!("journal entry extraction is not configured");
-        return Ok(journal_service);
+        return Ok(None);
     };
 
     let prompt = config.prompt.load()?;
@@ -51,5 +65,5 @@ pub fn configure_journal_entry_extraction(
     let service =
         JournalEntryExtractionService::new(JournalEntryExtractionRepository::new(pool), generator);
 
-    Ok(journal_service.with_entry_extraction_runner(service))
+    Ok(Some(service))
 }

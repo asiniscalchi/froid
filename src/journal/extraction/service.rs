@@ -8,6 +8,20 @@ use crate::journal::extraction::{
     validation::validate_extraction_json,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalEntryExtractionBackfillResult {
+    pub attempted: u32,
+    pub completed: u32,
+    pub failed: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JournalEntryExtractionRunResult {
+    Completed,
+    Failed,
+    AlreadyExists,
+}
+
 #[derive(Debug)]
 pub enum JournalEntryExtractionServiceError {
     Repository(JournalEntryExtractionRepositoryError),
@@ -63,6 +77,50 @@ where
         journal_entry_id: i64,
         text: &str,
     ) -> Result<(), JournalEntryExtractionServiceError> {
+        self.extract_entry_with_result(journal_entry_id, text)
+            .await
+            .map(|_| ())
+    }
+}
+
+impl<G> JournalEntryExtractionService<G>
+where
+    G: JournalEntryExtractionGenerator,
+{
+    pub async fn backfill_missing_extractions(
+        &self,
+        limit: u32,
+    ) -> Result<JournalEntryExtractionBackfillResult, JournalEntryExtractionServiceError> {
+        let candidates = self
+            .repository
+            .find_entries_missing_extraction(limit)
+            .await?;
+
+        let mut result = JournalEntryExtractionBackfillResult {
+            attempted: candidates.len() as u32,
+            completed: 0,
+            failed: 0,
+        };
+
+        for candidate in candidates {
+            match self
+                .extract_entry_with_result(candidate.journal_entry_id, &candidate.raw_text)
+                .await?
+            {
+                JournalEntryExtractionRunResult::Completed => result.completed += 1,
+                JournalEntryExtractionRunResult::Failed => result.failed += 1,
+                JournalEntryExtractionRunResult::AlreadyExists => {}
+            }
+        }
+
+        Ok(result)
+    }
+
+    async fn extract_entry_with_result(
+        &self,
+        journal_entry_id: i64,
+        text: &str,
+    ) -> Result<JournalEntryExtractionRunResult, JournalEntryExtractionServiceError> {
         let inserted = self
             .repository
             .insert_pending_if_absent(
@@ -73,10 +131,10 @@ where
             .await?;
 
         if !inserted {
-            return Ok(());
+            return Ok(JournalEntryExtractionRunResult::AlreadyExists);
         }
 
-        match self.generator.generate_entry_extraction(text).await {
+        let result = match self.generator.generate_entry_extraction(text).await {
             Ok(raw_json) => match validate_extraction_json(&raw_json) {
                 Ok(valid_json) => {
                     self.repository
@@ -87,17 +145,20 @@ where
                             self.generator.prompt_version(),
                         )
                         .await?;
+                    JournalEntryExtractionRunResult::Completed
                 }
                 Err(error) => {
                     self.record_failure(journal_entry_id, error).await?;
+                    JournalEntryExtractionRunResult::Failed
                 }
             },
             Err(error) => {
                 self.record_failure(journal_entry_id, error).await?;
+                JournalEntryExtractionRunResult::Failed
             }
-        }
+        };
 
-        Ok(())
+        Ok(result)
     }
 }
 
@@ -125,9 +186,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        collections::VecDeque,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use async_trait::async_trait;
@@ -145,7 +209,8 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeGenerator {
-        result: Result<String, JournalEntryExtractionGenerationError>,
+        fallback: Result<String, JournalEntryExtractionGenerationError>,
+        responses: Arc<Mutex<VecDeque<Result<String, JournalEntryExtractionGenerationError>>>>,
         calls: Arc<AtomicUsize>,
         notes: Arc<Mutex<Vec<String>>>,
     }
@@ -153,7 +218,8 @@ mod tests {
     impl FakeGenerator {
         fn succeeding(json: &str) -> Self {
             Self {
-                result: Ok(json.to_string()),
+                fallback: Ok(json.to_string()),
+                responses: Arc::new(Mutex::new(VecDeque::new())),
                 calls: Arc::new(AtomicUsize::new(0)),
                 notes: Arc::new(Mutex::new(Vec::new())),
             }
@@ -161,7 +227,19 @@ mod tests {
 
         fn failing(message: &str) -> Self {
             Self {
-                result: Err(JournalEntryExtractionGenerationError::new(message)),
+                fallback: Err(JournalEntryExtractionGenerationError::new(message)),
+                responses: Arc::new(Mutex::new(VecDeque::new())),
+                calls: Arc::new(AtomicUsize::new(0)),
+                notes: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn with_responses(
+            responses: Vec<Result<String, JournalEntryExtractionGenerationError>>,
+        ) -> Self {
+            Self {
+                fallback: Ok(valid_json().to_string()),
+                responses: Arc::new(Mutex::new(VecDeque::from(responses))),
                 calls: Arc::new(AtomicUsize::new(0)),
                 notes: Arc::new(Mutex::new(Vec::new())),
             }
@@ -169,6 +247,10 @@ mod tests {
 
         fn calls(&self) -> usize {
             self.calls.load(Ordering::SeqCst)
+        }
+
+        fn notes(&self) -> Vec<String> {
+            self.notes.lock().unwrap().clone()
         }
     }
 
@@ -188,7 +270,11 @@ mod tests {
         ) -> Result<String, JournalEntryExtractionGenerationError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.notes.lock().unwrap().push(note.to_string());
-            self.result.clone()
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| self.fallback.clone())
         }
     }
 
@@ -208,10 +294,18 @@ mod tests {
     }
 
     async fn insert_entry(pool: &SqlitePool, text: &str) -> i64 {
+        insert_entry_with_message_id(pool, "100", text).await
+    }
+
+    async fn insert_entry_with_message_id(
+        pool: &SqlitePool,
+        source_message_id: &str,
+        text: &str,
+    ) -> i64 {
         let message = IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
-            source_message_id: "100".to_string(),
+            source_message_id: source_message_id.to_string(),
             user_id: "7".to_string(),
             text: text.to_string(),
             received_at: chrono::Utc::now(),
@@ -320,6 +414,158 @@ mod tests {
         assert_eq!(count, 1);
         assert!(
             repo.find_by_journal_entry_id(entry_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_processes_missing_entries_up_to_limit_oldest_first() {
+        let generator = FakeGenerator::succeeding(valid_json());
+        let (service, repo, pool) = setup(generator.clone()).await;
+        let first = insert_entry_with_message_id(&pool, "1", "first").await;
+        let second = insert_entry_with_message_id(&pool, "2", "second").await;
+        insert_entry_with_message_id(&pool, "3", "third").await;
+
+        let result = service.backfill_missing_extractions(2).await.unwrap();
+
+        assert_eq!(
+            result,
+            JournalEntryExtractionBackfillResult {
+                attempted: 2,
+                completed: 2,
+                failed: 0,
+            }
+        );
+        assert_eq!(generator.calls(), 2);
+        assert_eq!(generator.notes(), vec!["first", "second"]);
+        assert!(
+            repo.find_by_journal_entry_id(first)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            repo.find_by_journal_entry_id(second)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_skips_entries_that_already_have_extractions() {
+        let generator = FakeGenerator::succeeding(valid_json());
+        let (service, repo, pool) = setup(generator.clone()).await;
+        let first = insert_entry_with_message_id(&pool, "1", "first").await;
+        let second = insert_entry_with_message_id(&pool, "2", "second").await;
+        service
+            .extract_entry(first, "already extracted")
+            .await
+            .unwrap();
+
+        let result = service.backfill_missing_extractions(10).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_extractions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            JournalEntryExtractionBackfillResult {
+                attempted: 1,
+                completed: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(generator.calls(), 2);
+        assert_eq!(count, 2);
+        assert!(
+            repo.find_by_journal_entry_id(second)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_records_failure_and_continues() {
+        let generator = FakeGenerator::with_responses(vec![
+            Err(JournalEntryExtractionGenerationError::new("provider down")),
+            Ok(valid_json().to_string()),
+        ]);
+        let (service, repo, pool) = setup(generator.clone()).await;
+        let first = insert_entry_with_message_id(&pool, "1", "first").await;
+        let second = insert_entry_with_message_id(&pool, "2", "second").await;
+
+        let result = service.backfill_missing_extractions(10).await.unwrap();
+
+        let first_extraction = repo.find_by_journal_entry_id(first).await.unwrap().unwrap();
+        let second_extraction = repo
+            .find_by_journal_entry_id(second)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            result,
+            JournalEntryExtractionBackfillResult {
+                attempted: 2,
+                completed: 1,
+                failed: 1,
+            }
+        );
+        assert_eq!(generator.calls(), 2);
+        assert_eq!(
+            first_extraction.status,
+            JournalEntryExtractionStatus::Failed
+        );
+        assert_eq!(
+            first_extraction.error_message,
+            Some("provider down".to_string())
+        );
+        assert_eq!(
+            second_extraction.status,
+            JournalEntryExtractionStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_resumes_by_processing_only_entries_still_missing_extractions() {
+        let generator = FakeGenerator::succeeding(valid_json());
+        let (service, repo, pool) = setup(generator.clone()).await;
+        let first = insert_entry_with_message_id(&pool, "1", "first").await;
+        let second = insert_entry_with_message_id(&pool, "2", "second").await;
+
+        let first_result = service.backfill_missing_extractions(1).await.unwrap();
+        let second_result = service.backfill_missing_extractions(10).await.unwrap();
+
+        assert_eq!(
+            first_result,
+            JournalEntryExtractionBackfillResult {
+                attempted: 1,
+                completed: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(
+            second_result,
+            JournalEntryExtractionBackfillResult {
+                attempted: 1,
+                completed: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(generator.calls(), 2);
+        assert!(
+            repo.find_by_journal_entry_id(first)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            repo.find_by_journal_entry_id(second)
                 .await
                 .unwrap()
                 .is_some()

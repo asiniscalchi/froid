@@ -6,6 +6,12 @@ use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use super::{JournalEntryExtraction, JournalEntryExtractionStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalEntryExtractionCandidate {
+    pub journal_entry_id: i64,
+    pub raw_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JournalEntryExtractionRepositoryError {
     Storage(String),
     InvalidStatus(String),
@@ -82,6 +88,34 @@ impl JournalEntryExtractionRepository {
         .await?;
 
         Ok(result.rows_affected() != 0)
+    }
+
+    pub async fn find_entries_missing_extraction(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<JournalEntryExtractionCandidate>, JournalEntryExtractionRepositoryError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT journal_entries.id, journal_entries.raw_text
+            FROM journal_entries
+            LEFT JOIN journal_entry_extractions
+              ON journal_entry_extractions.journal_entry_id = journal_entries.id
+            WHERE journal_entry_extractions.id IS NULL
+            ORDER BY journal_entries.received_at ASC, journal_entries.id ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| JournalEntryExtractionCandidate {
+                journal_entry_id: row.get("id"),
+                raw_text: row.get("raw_text"),
+            })
+            .collect())
     }
 
     pub async fn mark_completed(
@@ -169,6 +203,7 @@ fn row_to_extraction(
 
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone;
     use sqlx::SqlitePool;
 
     use super::*;
@@ -186,13 +221,22 @@ mod tests {
     }
 
     async fn insert_entry(pool: &SqlitePool) -> i64 {
+        insert_entry_with_message_id(pool, "100", "hello froid", chrono::Utc::now()).await
+    }
+
+    async fn insert_entry_with_message_id(
+        pool: &SqlitePool,
+        source_message_id: &str,
+        text: &str,
+        received_at: chrono::DateTime<chrono::Utc>,
+    ) -> i64 {
         let message = IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
-            source_message_id: "100".to_string(),
+            source_message_id: source_message_id.to_string(),
             user_id: "7".to_string(),
-            text: "hello froid".to_string(),
-            received_at: chrono::Utc::now(),
+            text: text.to_string(),
+            received_at,
         };
 
         crate::journal::repository::JournalRepository::new(pool.clone())
@@ -200,6 +244,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+    }
+
+    fn at(h: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 4, 28, h, 0, 0).unwrap()
     }
 
     #[tokio::test]
@@ -223,6 +271,27 @@ mod tests {
         assert!(first);
         assert!(!second);
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn finds_entries_missing_extraction_oldest_first_with_limit() {
+        let (repo, pool) = setup().await;
+        let first = insert_entry_with_message_id(&pool, "1", "first", at(10)).await;
+        let second = insert_entry_with_message_id(&pool, "2", "second", at(11)).await;
+        insert_entry_with_message_id(&pool, "3", "third", at(12)).await;
+        repo.insert_pending_if_absent(first, "model-a", "entry_extraction_v1")
+            .await
+            .unwrap();
+
+        let candidates = repo.find_entries_missing_extraction(1).await.unwrap();
+
+        assert_eq!(
+            candidates,
+            vec![JournalEntryExtractionCandidate {
+                journal_entry_id: second,
+                raw_text: "second".to_string()
+            }]
+        );
     }
 
     #[tokio::test]

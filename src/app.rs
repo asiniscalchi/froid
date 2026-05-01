@@ -5,13 +5,16 @@ use tracing::info;
 
 use crate::{
     adapters::{Adapter, telegram::TelegramAdapter},
-    cli::ServeConfig,
+    cli::{EntryExtractionBackfillConfig, ServeConfig},
     database,
     journal::{
         embedding::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
         },
-        extraction::{JournalEntryExtractionRuntimeConfig, configure_journal_entry_extraction},
+        extraction::{
+            JournalEntryExtractionRuntimeConfig, build_journal_entry_extraction_service,
+            configure_journal_entry_extraction,
+        },
         repository::JournalRepository,
         review::{DailyReviewRuntimeConfig, build_daily_review_service, configure_daily_review},
         search::SemanticSearchService,
@@ -24,6 +27,40 @@ use crate::{
         embedding::EmbeddingReconciliationWorker,
     },
 };
+
+pub async fn backfill_entry_extractions(
+    config: EntryExtractionBackfillConfig,
+) -> Result<(), Box<dyn Error>> {
+    info!(
+        version = version::VERSION,
+        command = "backfill entry-extractions",
+        database_path = %config.database_path,
+        limit = config.limit,
+        "starting journal entry extraction backfill"
+    );
+
+    let pool = database::connect_pool(&config.database_url).await?;
+    sqlx::migrate!().run(&pool).await?;
+
+    let Some(service) = build_journal_entry_extraction_service(
+        pool,
+        JournalEntryExtractionRuntimeConfig::from_env(),
+    )?
+    else {
+        return Err(
+            "journal entry extraction is not configured; OPENAI_API_KEY is required".into(),
+        );
+    };
+
+    let result = service.backfill_missing_extractions(config.limit).await?;
+
+    println!(
+        "Entry extraction backfill complete: attempted={}, completed={}, failed={}",
+        result.attempted, result.completed, result.failed
+    );
+
+    Ok(())
+}
 
 pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     info!(
