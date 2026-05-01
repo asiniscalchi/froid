@@ -3,7 +3,9 @@ use std::{error::Error, fmt};
 use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
-use super::{JournalEntryExtraction, JournalEntryExtractionCandidate, JournalEntryExtractionStatus};
+use super::{
+    JournalEntryExtraction, JournalEntryExtractionCandidate, JournalEntryExtractionStatus,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JournalEntryExtractionRepositoryError {
@@ -341,7 +343,12 @@ mod tests {
         assert!(extraction.is_none());
     }
 
-    async fn insert_entry_at(pool: &SqlitePool, source_message_id: &str, text: &str, h: u32) -> i64 {
+    async fn insert_entry_at(
+        pool: &SqlitePool,
+        source_message_id: &str,
+        text: &str,
+        h: u32,
+    ) -> i64 {
         let received_at = chrono::Utc.with_ymd_and_hms(2026, 1, 1, h, 0, 0).unwrap();
         let message = IncomingMessage {
             source: MessageSource::Telegram,
@@ -495,7 +502,17 @@ mod tests {
 
         assert!(!pending_deleted);
         assert!(!completed_deleted);
-        assert!(repo.find_by_journal_entry_id(pending_id).await.unwrap().is_some());
-        assert!(repo.find_by_journal_entry_id(completed_id).await.unwrap().is_some());
+        assert!(
+            repo.find_by_journal_entry_id(pending_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            repo.find_by_journal_entry_id(completed_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 }

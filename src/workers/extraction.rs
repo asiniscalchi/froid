@@ -14,7 +14,10 @@ impl<R> ExtractionReconciliationWorker<R>
 where
     R: JournalEntryExtractionRunner,
 {
-    pub fn new(backfill_service: ExtractionBackfillService<R>, config: ExtractionWorkerConfig) -> Self {
+    pub fn new(
+        backfill_service: ExtractionBackfillService<R>,
+        config: ExtractionWorkerConfig,
+    ) -> Self {
         Self {
             backfill_service,
             config,

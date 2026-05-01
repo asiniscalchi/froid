@@ -164,11 +164,7 @@ mod tests {
             text: text.to_string(),
             received_at,
         };
-        journal_repo
-            .store(&message)
-            .await
-            .unwrap()
-            .unwrap()
+        journal_repo.store(&message).await.unwrap().unwrap()
     }
 
     fn valid_json() -> &'static str {

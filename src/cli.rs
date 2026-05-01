@@ -2,8 +2,7 @@ use clap::{Parser, Subcommand};
 
 use crate::{
     journal::{
-        embedding::EmbeddingWorkerConfig,
-        extraction::ExtractionWorkerConfig,
+        embedding::EmbeddingWorkerConfig, extraction::ExtractionWorkerConfig,
         review::DailyReviewDeliveryWorkerConfig,
     },
     version,

@@ -15,8 +15,7 @@ use crate::{
         },
         extraction::{
             ExtractionBackfillService, JournalEntryExtractionRuntimeConfig,
-            configure_journal_entry_extraction,
-            repository::JournalEntryExtractionRepository,
+            configure_journal_entry_extraction, repository::JournalEntryExtractionRepository,
             service::JournalEntryExtractionService,
         },
         repository::JournalRepository,
