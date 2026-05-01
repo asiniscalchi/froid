@@ -7,7 +7,9 @@ use rig::{
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::review::{DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction};
+use crate::journal::review::{
+    DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction,
+};
 
 pub const DEFAULT_REVIEW_MODEL: &str = GPT_5_MINI;
 
@@ -225,11 +227,11 @@ fn build_daily_review_prompt(entries: &[JournalEntryWithExtraction]) -> String {
                 entry.text
             );
 
-            if let Some(extraction) = &entry_with_ext.extraction {
-                if let Ok(json) = serde_json::to_string(extraction) {
-                    formatted.push_str("\n   Structured extraction: ");
-                    formatted.push_str(&json);
-                }
+            if let Some(extraction) = &entry_with_ext.extraction
+                && let Ok(json) = serde_json::to_string(extraction)
+            {
+                formatted.push_str("\n   Structured extraction: ");
+                formatted.push_str(&json);
             }
 
             formatted
@@ -341,6 +343,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::*;
+    use crate::journal::entry::JournalEntry;
     use crate::journal::extraction::JournalEntryExtractionResult;
 
     #[derive(Debug, Clone)]

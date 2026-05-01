@@ -68,12 +68,17 @@ impl JournalEntryExtractionRepository {
     pub async fn find_completed_by_journal_entry_ids(
         &self,
         journal_entry_ids: &[i64],
-    ) -> Result<HashMap<i64, JournalEntryExtractionResult>, JournalEntryExtractionRepositoryError> {
+    ) -> Result<HashMap<i64, JournalEntryExtractionResult>, JournalEntryExtractionRepositoryError>
+    {
         if journal_entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
 
-        let placeholders = journal_entry_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let placeholders = journal_entry_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
         let sql = format!(
             r#"
             SELECT journal_entry_id, extraction_json
@@ -589,23 +594,46 @@ mod tests {
         };
 
         // ID 1: Completed
-        repo.insert_pending_if_absent(id1, "model", "v1").await.unwrap();
-        repo.mark_completed(id1, &serde_json::to_string(&result1).unwrap(), "model", "v1").await.unwrap();
+        repo.insert_pending_if_absent(id1, "model", "v1")
+            .await
+            .unwrap();
+        repo.mark_completed(
+            id1,
+            &serde_json::to_string(&result1).unwrap(),
+            "model",
+            "v1",
+        )
+        .await
+        .unwrap();
 
         // ID 2: Failed (should be skipped)
-        repo.insert_pending_if_absent(id2, "model", "v1").await.unwrap();
+        repo.insert_pending_if_absent(id2, "model", "v1")
+            .await
+            .unwrap();
         repo.mark_failed(id2, "model", "v1", "error").await.unwrap();
 
         // ID 3: Completed
-        repo.insert_pending_if_absent(id3, "model", "v1").await.unwrap();
-        repo.mark_completed(id3, &serde_json::to_string(&result2).unwrap(), "model", "v1").await.unwrap();
+        repo.insert_pending_if_absent(id3, "model", "v1")
+            .await
+            .unwrap();
+        repo.mark_completed(
+            id3,
+            &serde_json::to_string(&result2).unwrap(),
+            "model",
+            "v1",
+        )
+        .await
+        .unwrap();
 
-        let extractions = repo.find_completed_by_journal_entry_ids(&[id1, id2, id3]).await.unwrap();
+        let extractions = repo
+            .find_completed_by_journal_entry_ids(&[id1, id2, id3])
+            .await
+            .unwrap();
 
         assert_eq!(extractions.len(), 2);
         assert_eq!(extractions.get(&id1).unwrap().summary, "Result 1");
         assert_eq!(extractions.get(&id3).unwrap().summary, "Result 2");
-        assert!(extractions.get(&id2).is_none());
+        assert!(!extractions.contains_key(&id2));
     }
 
     #[tokio::test]

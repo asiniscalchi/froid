@@ -7,7 +7,8 @@ use crate::journal::{
     repository::JournalRepository,
     review::{
         DailyReview, DailyReviewFailure, DailyReviewResult, DailyReviewStatus,
-        JournalEntryWithExtraction, generator::ReviewGenerator,
+        JournalEntryWithExtraction,
+        generator::ReviewGenerator,
         repository::{DailyReviewRepository, DailyReviewRepositoryError},
     },
 };
@@ -112,8 +113,9 @@ impl DailyReviewService {
             return Ok(DailyReviewResult::Existing(review.clone()));
         }
 
-        let entries_with_extractions: Vec<JournalEntryWithExtraction> =
-            self.fetch_entries_with_extractions(user_id, utc_date).await?;
+        let entries_with_extractions: Vec<JournalEntryWithExtraction> = self
+            .fetch_entries_with_extractions(user_id, utc_date)
+            .await?;
         if entries_with_extractions.is_empty() {
             return Ok(DailyReviewResult::EmptyDay);
         }
