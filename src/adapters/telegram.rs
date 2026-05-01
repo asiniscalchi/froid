@@ -13,7 +13,7 @@ use crate::{
     journal::command::{
         DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest, MAX_REVIEW_OFFSET,
     },
-    messages::{IncomingMessage, MessageSource},
+    messages::{IncomingMessage, MessageSource, OutgoingReaction},
 };
 
 use super::Adapter;
@@ -95,10 +95,12 @@ async fn handle_message<H: MessageHandler>(
     );
 
     match handler.process(&incoming).await {
-        Ok(_) => {
-            bot.set_reaction(&message)
-                .reaction([saved_reaction()])
-                .await?;
+        Ok(outgoing) => {
+            if let Some(reaction) = outgoing.reaction {
+                bot.set_reaction(&message)
+                    .reaction([telegram_reaction(reaction)])
+                    .await?;
+            }
         }
         Err(err) => {
             error!(%err, "failed to store journal entry");
@@ -113,6 +115,19 @@ async fn handle_message<H: MessageHandler>(
 fn saved_reaction() -> ReactionType {
     ReactionType::Emoji {
         emoji: "✍".to_string(),
+    }
+}
+
+fn extraction_completed_reaction() -> ReactionType {
+    ReactionType::Emoji {
+        emoji: "✅".to_string(),
+    }
+}
+
+fn telegram_reaction(reaction: OutgoingReaction) -> ReactionType {
+    match reaction {
+        OutgoingReaction::MessageSaved => saved_reaction(),
+        OutgoingReaction::JournalEntryExtracted => extraction_completed_reaction(),
     }
 }
 
@@ -265,6 +280,16 @@ mod tests {
             saved_reaction(),
             ReactionType::Emoji {
                 emoji: "✍".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn extraction_completed_reaction_uses_check_mark() {
+        assert_eq!(
+            telegram_reaction(OutgoingReaction::JournalEntryExtracted),
+            ReactionType::Emoji {
+                emoji: "✅".to_string()
             }
         );
     }
