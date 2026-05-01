@@ -33,20 +33,14 @@ impl JournalService {
         request: &JournalCommandRequest,
     ) -> Result<OutgoingMessage, sqlx::Error> {
         match &request.command {
-            JournalCommand::Start => Ok(OutgoingMessage {
-                text: start_response(),
-            }),
-            JournalCommand::Help => Ok(OutgoingMessage {
-                text: help_response(),
-            }),
+            JournalCommand::Start => Ok(OutgoingMessage::text(start_response())),
+            JournalCommand::Help => Ok(OutgoingMessage::text(help_response())),
             JournalCommand::Last => self.last(request).await,
             JournalCommand::Undo => self.undo(request).await,
             JournalCommand::Recent { requested_limit } => {
                 self.recent(&request.user_id, *requested_limit).await
             }
-            JournalCommand::RecentUsage => Ok(OutgoingMessage {
-                text: recent_usage_response(),
-            }),
+            JournalCommand::RecentUsage => Ok(OutgoingMessage::text(recent_usage_response())),
             JournalCommand::Today => {
                 self.today(&request.user_id, request.received_at.date_naive())
                     .await
@@ -65,21 +59,15 @@ impl JournalService {
             JournalCommand::ReviewDate { date } => {
                 Ok(self.review_date(&request.user_id, *date).await)
             }
-            JournalCommand::ReviewUsage => Ok(OutgoingMessage {
-                text: daily_review_usage_response(),
-            }),
-            JournalCommand::ReviewError { message } => Ok(OutgoingMessage {
-                text: message.clone(),
-            }),
+            JournalCommand::ReviewUsage => Ok(OutgoingMessage::text(daily_review_usage_response())),
+            JournalCommand::ReviewError { message } => Ok(OutgoingMessage::text(message.clone())),
             JournalCommand::Search { query } => {
                 Ok(self.search_command(&request.user_id, query).await)
             }
-            JournalCommand::SearchUsage => Ok(OutgoingMessage {
-                text: search_usage_response(),
-            }),
-            JournalCommand::Unknown { command } => Ok(OutgoingMessage {
-                text: unknown_command_response(command),
-            }),
+            JournalCommand::SearchUsage => Ok(OutgoingMessage::text(search_usage_response())),
+            JournalCommand::Unknown { command } => {
+                Ok(OutgoingMessage::text(unknown_command_response(command)))
+            }
         }
     }
 
@@ -111,44 +99,28 @@ impl JournalService {
         not_found_text: String,
     ) -> OutgoingMessage {
         let Some(daily_review) = &self.daily_review else {
-            return OutgoingMessage {
-                text: daily_review_unavailable_response(),
-            };
+            return OutgoingMessage::text(daily_review_unavailable_response());
         };
 
         match daily_review.fetch_review(user_id, date).await {
-            Ok(Some(review)) => OutgoingMessage {
-                text: format_review(&review),
-            },
-            Ok(None) => OutgoingMessage {
-                text: not_found_text,
-            },
+            Ok(Some(review)) => OutgoingMessage::text(format_review(&review)),
+            Ok(None) => OutgoingMessage::text(not_found_text),
             Err(error) => {
                 error!(%error, "failed to fetch daily review");
-                OutgoingMessage {
-                    text: not_found_text,
-                }
+                OutgoingMessage::text(not_found_text)
             }
         }
     }
 
     async fn search_command(&self, user_id: &str, query: &str) -> OutgoingMessage {
         let Some(search) = &self.search else {
-            return OutgoingMessage {
-                text: search_unavailable_response(),
-            };
+            return OutgoingMessage::text(search_unavailable_response());
         };
 
         match search.search(user_id, query).await {
-            Ok(results) if results.is_empty() => OutgoingMessage {
-                text: search_empty_response(),
-            },
-            Ok(results) => OutgoingMessage {
-                text: format_search_results(query, &results),
-            },
-            Err(e) => OutgoingMessage {
-                text: search_error_response(&e),
-            },
+            Ok(results) if results.is_empty() => OutgoingMessage::text(search_empty_response()),
+            Ok(results) => OutgoingMessage::text(format_search_results(query, &results)),
+            Err(e) => OutgoingMessage::text(search_error_response(&e)),
         }
     }
 
@@ -162,14 +134,10 @@ impl JournalService {
             )
             .await?
         else {
-            return Ok(OutgoingMessage {
-                text: no_last_entry_response(),
-            });
+            return Ok(OutgoingMessage::text(no_last_entry_response()));
         };
 
-        Ok(OutgoingMessage {
-            text: format_last_entry(&entry.entry),
-        })
+        Ok(OutgoingMessage::text(format_last_entry(&entry.entry)))
     }
 
     async fn undo(&self, request: &JournalCommandRequest) -> Result<OutgoingMessage, sqlx::Error> {
@@ -182,14 +150,10 @@ impl JournalService {
             )
             .await?
         else {
-            return Ok(OutgoingMessage {
-                text: no_entry_to_delete_response(),
-            });
+            return Ok(OutgoingMessage::text(no_entry_to_delete_response()));
         };
 
-        Ok(OutgoingMessage {
-            text: deleted_last_entry_response(),
-        })
+        Ok(OutgoingMessage::text(deleted_last_entry_response()))
     }
 
     async fn recent(&self, user_id: &str, limit: u32) -> Result<OutgoingMessage, sqlx::Error> {
@@ -197,14 +161,10 @@ impl JournalService {
         let entries = self.repository.fetch_recent(user_id, limit).await?;
 
         if entries.is_empty() {
-            return Ok(OutgoingMessage {
-                text: no_entries_response(),
-            });
+            return Ok(OutgoingMessage::text(no_entries_response()));
         }
 
-        Ok(OutgoingMessage {
-            text: format_entries(&entries),
-        })
+        Ok(OutgoingMessage::text(format_entries(&entries)))
     }
 
     async fn today(
@@ -215,14 +175,10 @@ impl JournalService {
         let entries = self.repository.fetch_today(user_id, date).await?;
 
         if entries.is_empty() {
-            return Ok(OutgoingMessage {
-                text: no_entries_today_response(),
-            });
+            return Ok(OutgoingMessage::text(no_entries_today_response()));
         }
 
-        Ok(OutgoingMessage {
-            text: format_entries(&entries),
-        })
+        Ok(OutgoingMessage::text(format_entries(&entries)))
     }
 
     async fn stats(
@@ -232,9 +188,7 @@ impl JournalService {
     ) -> Result<OutgoingMessage, sqlx::Error> {
         let stats = self.repository.stats(user_id, today).await?;
 
-        Ok(OutgoingMessage {
-            text: stats_response(&stats),
-        })
+        Ok(OutgoingMessage::text(stats_response(&stats)))
     }
 
     async fn status(
@@ -246,13 +200,11 @@ impl JournalService {
         let embeddings = self.embedding_status(user_id).await;
         let daily_review = self.daily_review_status();
 
-        Ok(OutgoingMessage {
-            text: status_response(&StatusReport {
-                journal,
-                embeddings,
-                daily_review,
-            }),
-        })
+        Ok(OutgoingMessage::text(status_response(&StatusReport {
+            journal,
+            embeddings,
+            daily_review,
+        })))
     }
 
     async fn embedding_status(&self, user_id: &str) -> EmbeddingStatus {
