@@ -7,9 +7,8 @@ use rig::{
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::{
-    entry::JournalEntry,
-    review::{DailyReviewPrompt, DailyReviewPromptError},
+use crate::journal::review::{
+    DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction,
 };
 
 pub const DEFAULT_REVIEW_MODEL: &str = GPT_5_MINI;
@@ -70,7 +69,7 @@ pub trait ReviewGenerator: Send + Sync {
 
     async fn generate_daily_review(
         &self,
-        entries: &[JournalEntry],
+        entries: &[JournalEntryWithExtraction],
     ) -> Result<String, ReviewGenerationError>;
 }
 
@@ -206,7 +205,7 @@ impl ReviewGenerator for RigOpenAiReviewGenerator {
 
     async fn generate_daily_review(
         &self,
-        entries: &[JournalEntry],
+        entries: &[JournalEntryWithExtraction],
     ) -> Result<String, ReviewGenerationError> {
         let prompt = build_daily_review_prompt(entries);
         self.provider
@@ -216,17 +215,26 @@ impl ReviewGenerator for RigOpenAiReviewGenerator {
     }
 }
 
-fn build_daily_review_prompt(entries: &[JournalEntry]) -> String {
+fn build_daily_review_prompt(entries: &[JournalEntryWithExtraction]) -> String {
     let formatted_entries = entries
         .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            format!(
-                "{}. [{} UTC] {}",
-                index + 1,
+        .map(|entry_with_ext| {
+            let entry = &entry_with_ext.entry;
+            let mut formatted = format!(
+                "Entry #{}. [{} UTC] {}",
+                entry_with_ext.id,
                 entry.received_at.format("%Y-%m-%d %H:%M"),
                 entry.text
-            )
+            );
+
+            if let Some(extraction) = &entry_with_ext.extraction
+                && let Ok(json) = serde_json::to_string(extraction)
+            {
+                formatted.push_str("\n   Structured extraction: ");
+                formatted.push_str(&json);
+            }
+
+            formatted
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -263,7 +271,7 @@ pub mod fake {
     use async_trait::async_trait;
 
     use super::{ReviewGenerationError, ReviewGenerator};
-    use crate::journal::entry::JournalEntry;
+    use crate::journal::review::JournalEntryWithExtraction;
 
     #[derive(Debug, Clone)]
     pub struct FakeReviewGenerator {
@@ -271,7 +279,7 @@ pub mod fake {
         prompt_version: String,
         results: Arc<Mutex<VecDeque<Result<String, ReviewGenerationError>>>>,
         calls: Arc<AtomicUsize>,
-        entries_seen: Arc<Mutex<Vec<Vec<JournalEntry>>>>,
+        entries_seen: Arc<Mutex<Vec<Vec<JournalEntryWithExtraction>>>>,
     }
 
     impl FakeReviewGenerator {
@@ -297,7 +305,7 @@ pub mod fake {
             self.calls.load(Ordering::SeqCst)
         }
 
-        pub fn entries_seen(&self) -> Vec<Vec<JournalEntry>> {
+        pub fn entries_seen(&self) -> Vec<Vec<JournalEntryWithExtraction>> {
             self.entries_seen.lock().unwrap().clone()
         }
     }
@@ -314,7 +322,7 @@ pub mod fake {
 
         async fn generate_daily_review(
             &self,
-            entries: &[JournalEntry],
+            entries: &[JournalEntryWithExtraction],
         ) -> Result<String, ReviewGenerationError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.entries_seen.lock().unwrap().push(entries.to_vec());
@@ -335,6 +343,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::*;
+    use crate::journal::entry::JournalEntry;
+    use crate::journal::extraction::JournalEntryExtractionResult;
 
     #[derive(Debug, Clone)]
     struct FakeReviewProvider {
@@ -451,7 +461,11 @@ mod tests {
         assert_eq!(generator.prompt_version(), "custom-prompt");
         assert_eq!(
             generator
-                .generate_daily_review(&[entry(28, "wrote a test")])
+                .generate_daily_review(&[JournalEntryWithExtraction {
+                    id: 1,
+                    entry: entry(28, "wrote a test"),
+                    extraction: None,
+                }])
                 .await
                 .unwrap(),
             "review text"
@@ -473,7 +487,11 @@ mod tests {
         );
 
         generator
-            .generate_daily_review(&[entry(28, "requested date entry")])
+            .generate_daily_review(&[JournalEntryWithExtraction {
+                id: 1,
+                entry: entry(28, "requested date entry"),
+                extraction: None,
+            }])
             .await
             .unwrap();
 
@@ -493,7 +511,11 @@ mod tests {
         );
 
         let error = generator
-            .generate_daily_review(&[entry(28, "wrote a test")])
+            .generate_daily_review(&[JournalEntryWithExtraction {
+                id: 1,
+                entry: entry(28, "wrote a test"),
+                extraction: None,
+            }])
             .await
             .unwrap_err();
 
@@ -502,11 +524,37 @@ mod tests {
 
     #[test]
     fn generated_prompt_requests_review_format() {
-        let prompt_text = build_daily_review_prompt(&[entry(28, "finished the feature")]);
+        let prompt_text = build_daily_review_prompt(&[JournalEntryWithExtraction {
+            id: 1,
+            entry: entry(28, "finished the feature"),
+            extraction: None,
+        }]);
 
         assert!(prompt_text.contains("Summary:"));
         assert!(prompt_text.contains("Themes:"));
         assert!(prompt_text.contains("Pay attention tomorrow:"));
         assert!(prompt_text.contains("finished the feature"));
+    }
+
+    #[test]
+    fn build_daily_review_prompt_includes_extraction_json_when_available() {
+        let extraction = JournalEntryExtractionResult {
+            summary: "Extracted".to_string(),
+            domains: vec!["test".to_string()],
+            emotions: vec![],
+            behaviors: vec![],
+            needs: vec![],
+            possible_patterns: vec![],
+        };
+        let prompt_text = build_daily_review_prompt(&[JournalEntryWithExtraction {
+            id: 1,
+            entry: entry(28, "entry with extraction"),
+            extraction: Some(extraction),
+        }]);
+
+        assert!(prompt_text.contains("entry with extraction"));
+        assert!(prompt_text.contains("Entry #1"));
+        assert!(prompt_text.contains("Structured extraction:"));
+        assert!(prompt_text.contains("\"summary\":\"Extracted\""));
     }
 }

@@ -3,9 +3,11 @@ use std::{error::Error, fmt, sync::Arc};
 use chrono::NaiveDate;
 
 use crate::journal::{
+    extraction::repository::JournalEntryExtractionRepository,
     repository::JournalRepository,
     review::{
         DailyReview, DailyReviewFailure, DailyReviewResult, DailyReviewStatus,
+        JournalEntryWithExtraction,
         generator::ReviewGenerator,
         repository::{DailyReviewRepository, DailyReviewRepositoryError},
     },
@@ -40,10 +42,21 @@ impl From<DailyReviewRepositoryError> for DailyReviewServiceError {
     }
 }
 
+impl From<crate::journal::extraction::repository::JournalEntryExtractionRepositoryError>
+    for DailyReviewServiceError
+{
+    fn from(
+        error: crate::journal::extraction::repository::JournalEntryExtractionRepositoryError,
+    ) -> Self {
+        Self::Storage(error.to_string())
+    }
+}
+
 #[derive(Clone)]
 pub struct DailyReviewService {
     daily_reviews: DailyReviewRepository,
     journal_entries: JournalRepository,
+    extractions: JournalEntryExtractionRepository,
     generator: Arc<dyn ReviewGenerator>,
 }
 
@@ -66,6 +79,7 @@ impl DailyReviewService {
     pub fn new<G>(
         daily_reviews: DailyReviewRepository,
         journal_entries: JournalRepository,
+        extractions: JournalEntryExtractionRepository,
         generator: G,
     ) -> Self
     where
@@ -74,6 +88,7 @@ impl DailyReviewService {
         Self {
             daily_reviews,
             journal_entries,
+            extractions,
             generator: Arc::new(generator),
         }
     }
@@ -93,20 +108,26 @@ impl DailyReviewService {
             && review
                 .review_text
                 .as_deref()
-                .is_some_and(|text| !text.trim().is_empty())
+                .is_some_and(|text: &str| !text.trim().is_empty())
         {
             return Ok(DailyReviewResult::Existing(review.clone()));
         }
 
-        let entries = self.journal_entries.fetch_today(user_id, utc_date).await?;
-        if entries.is_empty() {
+        let entries_with_extractions: Vec<JournalEntryWithExtraction> = self
+            .fetch_entries_with_extractions(user_id, utc_date)
+            .await?;
+        if entries_with_extractions.is_empty() {
             return Ok(DailyReviewResult::EmptyDay);
         }
 
         let model = self.generator.model();
         let prompt_version = self.generator.prompt_version();
 
-        match self.generator.generate_daily_review(&entries).await {
+        match self
+            .generator
+            .generate_daily_review(&entries_with_extractions)
+            .await
+        {
             Ok(review_text) => {
                 let review_text = review_text.trim();
                 if review_text.is_empty() {
@@ -148,8 +169,37 @@ impl DailyReviewService {
             r.status == DailyReviewStatus::Completed
                 && r.review_text
                     .as_deref()
-                    .is_some_and(|t| !t.trim().is_empty())
+                    .is_some_and(|t: &str| !t.trim().is_empty())
         }))
+    }
+
+    async fn fetch_entries_with_extractions(
+        &self,
+        user_id: &str,
+        date: NaiveDate,
+    ) -> Result<Vec<JournalEntryWithExtraction>, DailyReviewServiceError> {
+        let entries = self.journal_entries.fetch_today(user_id, date).await?;
+        if entries.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let entry_ids: Vec<i64> = entries.iter().map(|s| s.id).collect();
+        let mut completed_extractions = self
+            .extractions
+            .find_completed_by_journal_entry_ids(&entry_ids)
+            .await?;
+
+        Ok(entries
+            .into_iter()
+            .map(|stored| {
+                let extraction = completed_extractions.remove(&stored.id);
+                JournalEntryWithExtraction {
+                    id: stored.id,
+                    entry: stored.entry,
+                    extraction,
+                }
+            })
+            .collect())
     }
 
     async fn store_failed_review(
@@ -217,6 +267,7 @@ mod tests {
         DailyReviewService,
         DailyReviewRepository,
         JournalRepository,
+        JournalEntryExtractionRepository,
         FakeReviewGenerator,
     ) {
         database::register_sqlite_vec_extension();
@@ -224,14 +275,22 @@ mod tests {
         sqlx::migrate!().run(&pool).await.unwrap();
 
         let daily_reviews = DailyReviewRepository::new(pool.clone());
-        let journal_entries = JournalRepository::new(pool);
+        let journal_entries = JournalRepository::new(pool.clone());
+        let extractions = JournalEntryExtractionRepository::new(pool);
         let service = DailyReviewService::new(
             daily_reviews.clone(),
             journal_entries.clone(),
+            extractions.clone(),
             generator.clone(),
         );
 
-        (service, daily_reviews, journal_entries, generator)
+        (
+            service,
+            daily_reviews,
+            journal_entries,
+            extractions,
+            generator,
+        )
     }
 
     fn date() -> NaiveDate {
@@ -272,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_existing_completed_review_without_calling_generator() {
-        let (service, daily_reviews, _journal_entries, generator) =
+        let (service, daily_reviews, _journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::succeeding("new review")).await;
         let existing = daily_reviews
             .upsert_completed("user-1", date(), "existing review", "model", "v1")
@@ -287,7 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn generates_and_stores_review_for_entries() {
-        let (service, daily_reviews, journal_entries, generator) =
+        let (service, daily_reviews, journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::succeeding("generated review")).await;
         journal_entries
             .store(&at_date(28, "1", "first entry"))
@@ -317,7 +376,7 @@ mod tests {
 
     #[tokio::test]
     async fn blank_generated_review_is_persisted_as_failure() {
-        let (service, daily_reviews, journal_entries, generator) =
+        let (service, daily_reviews, journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::succeeding("   \n\t")).await;
         journal_entries
             .store(&at_date(28, "1", "first entry"))
@@ -353,7 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn blank_existing_completed_review_is_regenerated() {
-        let (service, daily_reviews, journal_entries, generator) =
+        let (service, daily_reviews, journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::succeeding("regenerated review")).await;
         journal_entries
             .store(&at_date(28, "1", "first entry"))
@@ -374,7 +433,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_day_returns_empty_without_calling_generator() {
-        let (service, _daily_reviews, _journal_entries, generator) =
+        let (service, _daily_reviews, _journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::succeeding("generated review")).await;
 
         let result = service.review_day("user-1", date()).await.unwrap();
@@ -385,7 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn generation_failure_is_persisted_and_returned_as_domain_result() {
-        let (service, daily_reviews, journal_entries, generator) =
+        let (service, daily_reviews, journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::failing("provider down")).await;
         journal_entries
             .store(&at_date(28, "1", "first entry"))
@@ -424,7 +483,8 @@ mod tests {
             Err(crate::journal::review::generator::ReviewGenerationError::new("provider down")),
             Ok("retry review".to_string()),
         ]);
-        let (service, daily_reviews, journal_entries, generator) = setup(generator).await;
+        let (service, daily_reviews, journal_entries, _extractions, generator) =
+            setup(generator).await;
         journal_entries
             .store(&at_date(28, "1", "first entry"))
             .await
@@ -454,7 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn users_are_isolated_for_same_review_date() {
-        let (service, _daily_reviews, journal_entries, generator) =
+        let (service, _daily_reviews, journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::new(vec![
                 Ok("user one review".to_string()),
                 Ok("user two review".to_string()),
@@ -490,7 +550,7 @@ mod tests {
 
     #[tokio::test]
     async fn dates_are_isolated_and_only_requested_utc_date_entries_are_used() {
-        let (service, _daily_reviews, journal_entries, generator) =
+        let (service, _daily_reviews, journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::succeeding("day review")).await;
         journal_entries
             .store(&at_date(27, "1", "previous day"))
@@ -512,12 +572,12 @@ mod tests {
         let entries_seen = generator.entries_seen();
         assert_eq!(entries_seen.len(), 1);
         assert_eq!(entries_seen[0].len(), 1);
-        assert_eq!(entries_seen[0][0].text, "requested day");
+        assert_eq!(entries_seen[0][0].entry.text, "requested day");
     }
 
     #[tokio::test]
     async fn same_user_can_store_reviews_for_different_dates() {
-        let (service, _daily_reviews, journal_entries, _generator) =
+        let (service, _daily_reviews, journal_entries, _extractions, _generator) =
             setup(FakeReviewGenerator::new(vec![
                 Ok("first day review".to_string()),
                 Ok("second day review".to_string()),
@@ -544,7 +604,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_review_returns_completed_review() {
-        let (service, daily_reviews, _journal_entries, _generator) =
+        let (service, daily_reviews, _journal_entries, _extractions, _generator) =
             setup(FakeReviewGenerator::succeeding("any")).await;
         daily_reviews
             .upsert_completed("user-1", date(), "review text", "model", "v1")
@@ -558,7 +618,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_review_returns_none_when_no_review_exists() {
-        let (service, _daily_reviews, _journal_entries, _generator) =
+        let (service, _daily_reviews, _journal_entries, _extractions, _generator) =
             setup(FakeReviewGenerator::succeeding("any")).await;
 
         let result = service.fetch_review("user-1", date()).await.unwrap();
@@ -568,7 +628,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_review_returns_none_for_failed_review() {
-        let (service, daily_reviews, _journal_entries, _generator) =
+        let (service, daily_reviews, _journal_entries, _extractions, _generator) =
             setup(FakeReviewGenerator::succeeding("any")).await;
         daily_reviews
             .upsert_failed("user-1", date(), "model", "v1", "provider down")
@@ -587,6 +647,7 @@ mod tests {
 
         let daily_reviews = DailyReviewRepository::new(pool.clone());
         let journal_entries = JournalRepository::new(pool.clone());
+        let extractions = JournalEntryExtractionRepository::new(pool.clone());
         journal_entries
             .store(&at_date(28, "1", "first entry"))
             .await
@@ -595,6 +656,7 @@ mod tests {
         let service = DailyReviewService::new(
             daily_reviews,
             journal_entries,
+            extractions,
             PoolClosingGenerator { pool },
         );
 
@@ -619,10 +681,62 @@ mod tests {
 
         async fn generate_daily_review(
             &self,
-            _entries: &[crate::journal::entry::JournalEntry],
+            _entries: &[JournalEntryWithExtraction],
         ) -> Result<String, ReviewGenerationError> {
             self.pool.close().await;
             Err(ReviewGenerationError::new("provider down"))
         }
+    }
+
+    #[tokio::test]
+    async fn review_day_fetches_completed_extractions_and_passes_them_to_generator() {
+        let (service, _daily_reviews, journal_entries, extractions, generator) =
+            setup(FakeReviewGenerator::succeeding("extraction review")).await;
+
+        let entry_id = journal_entries
+            .store(&at_date(28, "1", "entry with extraction"))
+            .await
+            .unwrap()
+            .unwrap();
+        journal_entries
+            .store(&at_date(28, "2", "entry without extraction"))
+            .await
+            .unwrap();
+
+        let extraction_result = crate::journal::extraction::JournalEntryExtractionResult {
+            summary: "Extracted".to_string(),
+            domains: vec!["test".to_string()],
+            emotions: vec![],
+            behaviors: vec![],
+            needs: vec![],
+            possible_patterns: vec![],
+        };
+        extractions
+            .insert_pending_if_absent(entry_id, "model", "v1")
+            .await
+            .unwrap();
+        extractions
+            .mark_completed(
+                entry_id,
+                &serde_json::to_string(&extraction_result).unwrap(),
+                "model",
+                "v1",
+            )
+            .await
+            .unwrap();
+
+        service.review_day("user-1", date()).await.unwrap();
+
+        let seen = generator.entries_seen();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].len(), 2);
+
+        // Entry 1 has extraction
+        assert_eq!(seen[0][0].entry.text, "entry with extraction");
+        assert_eq!(seen[0][0].extraction, Some(extraction_result));
+
+        // Entry 2 has no extraction
+        assert_eq!(seen[0][1].entry.text, "entry without extraction");
+        assert_eq!(seen[0][1].extraction, None);
     }
 }

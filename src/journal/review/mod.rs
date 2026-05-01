@@ -7,10 +7,20 @@ pub mod wiring;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
+use crate::journal::entry::JournalEntry;
+use crate::journal::extraction::JournalEntryExtractionResult;
+
 pub use delivery_config::DailyReviewDeliveryWorkerConfig;
 pub use generator::{ReviewConfig, RigOpenAiReviewGenerator};
 pub use prompt::{DailyReviewPrompt, DailyReviewPromptConfig, DailyReviewPromptError};
 pub use wiring::{DailyReviewRuntimeConfig, build_daily_review_service, configure_daily_review};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JournalEntryWithExtraction {
+    pub id: i64,
+    pub entry: JournalEntry,
+    pub extraction: Option<JournalEntryExtractionResult>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyReview {

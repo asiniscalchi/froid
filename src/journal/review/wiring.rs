@@ -4,6 +4,7 @@ use sqlx::SqlitePool;
 use tracing::warn;
 
 use crate::journal::{
+    extraction::repository::JournalEntryExtractionRepository,
     repository::JournalRepository,
     review::{
         DailyReviewPromptConfig, ReviewConfig, RigOpenAiReviewGenerator,
@@ -64,7 +65,8 @@ pub fn build_daily_review_service(
     )?;
     let daily_review_service = DailyReviewService::new(
         DailyReviewRepository::new(pool.clone()),
-        JournalRepository::new(pool),
+        JournalRepository::new(pool.clone()),
+        JournalEntryExtractionRepository::new(pool),
         review_generator,
     );
 

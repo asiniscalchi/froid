@@ -269,6 +269,7 @@ mod tests {
     use crate::{
         database,
         journal::{
+            extraction::repository::JournalEntryExtractionRepository,
             repository::JournalRepository,
             review::{
                 DailyReview, DailyReviewResult,
@@ -339,8 +340,13 @@ mod tests {
 
         let journal_entries = JournalRepository::new(pool.clone());
         let daily_reviews = DailyReviewRepository::new(pool.clone());
-        let service =
-            DailyReviewService::new(daily_reviews.clone(), journal_entries.clone(), generator);
+        let extractions = JournalEntryExtractionRepository::new(pool);
+        let service = DailyReviewService::new(
+            daily_reviews.clone(),
+            journal_entries.clone(),
+            extractions,
+            generator,
+        );
         let worker = DailyReviewDeliveryWorker::new(
             journal_entries.clone(),
             daily_reviews.clone(),

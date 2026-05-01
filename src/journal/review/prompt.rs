@@ -1,7 +1,7 @@
 use std::{env, error::Error, fmt, fs, path::PathBuf};
 
-pub const DEFAULT_REVIEW_PROMPT_PATH: &str = "prompts/daily_review_v1.md";
-pub const DEFAULT_REVIEW_PROMPT_VERSION: &str = "daily-review-v1";
+pub const DEFAULT_REVIEW_PROMPT_PATH: &str = "prompts/daily_review_with_entry_extractions_v1.md";
+pub const DEFAULT_REVIEW_PROMPT_VERSION: &str = "daily-review-with-extractions-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyReviewPrompt {
