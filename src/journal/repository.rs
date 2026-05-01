@@ -163,13 +163,13 @@ impl JournalRepository {
         &self,
         user_id: &str,
         date: NaiveDate,
-    ) -> Result<Vec<JournalEntry>, sqlx::Error> {
+    ) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
         let start = Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap());
         let end = start + Duration::days(1);
 
         let rows = sqlx::query(
             r#"
-            SELECT raw_text, received_at
+            SELECT id, raw_text, received_at
             FROM journal_entries
             WHERE user_id = ?
               AND received_at >= ?
@@ -183,7 +183,13 @@ impl JournalRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(map_entry).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| StoredJournalEntry {
+                id: row.get("id"),
+                entry: map_entry(row),
+            })
+            .collect())
     }
 
     pub async fn conversations_with_entries_for_date(
@@ -568,8 +574,8 @@ mod tests {
         let entries = repo.fetch_today("7", date()).await.unwrap();
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].text, "first");
-        assert_eq!(entries[1].text, "second");
+        assert_eq!(entries[0].entry.text, "first");
+        assert_eq!(entries[1].entry.text, "second");
     }
 
     #[tokio::test]

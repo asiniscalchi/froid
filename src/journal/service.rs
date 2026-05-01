@@ -256,6 +256,7 @@ mod tests {
             embedding::{
                 EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
             },
+            extraction::repository::JournalEntryExtractionRepository,
             extraction::service::JournalEntryExtractionServiceError,
             repository::JournalRepository,
             review::{
@@ -318,9 +319,11 @@ mod tests {
         sqlx::migrate!().run(&pool).await.unwrap();
         let journal_repo = JournalRepository::new(pool.clone());
         let daily_review_repo = DailyReviewRepository::new(pool.clone());
+        let extractions = JournalEntryExtractionRepository::new(pool.clone());
         let daily_review_service = DailyReviewService::new(
             daily_review_repo.clone(),
             JournalRepository::new(pool),
+            extractions,
             generator,
         );
         let service = JournalService::new(journal_repo.clone())

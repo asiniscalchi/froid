@@ -1,10 +1,11 @@
-use std::{error::Error, fmt};
+use std::{collections::HashMap, error::Error, fmt};
 
 use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
 use super::{
-    JournalEntryExtraction, JournalEntryExtractionCandidate, JournalEntryExtractionStatus,
+    JournalEntryExtraction, JournalEntryExtractionCandidate, JournalEntryExtractionResult,
+    JournalEntryExtractionStatus,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +63,42 @@ impl JournalEntryExtractionRepository {
         .await?;
 
         row.map(row_to_extraction).transpose()
+    }
+
+    pub async fn find_completed_by_journal_entry_ids(
+        &self,
+        journal_entry_ids: &[i64],
+    ) -> Result<HashMap<i64, JournalEntryExtractionResult>, JournalEntryExtractionRepositoryError> {
+        if journal_entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let placeholders = journal_entry_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            r#"
+            SELECT journal_entry_id, extraction_json
+            FROM journal_entry_extractions
+            WHERE status = 'completed' AND journal_entry_id IN ({placeholders})
+            "#
+        );
+
+        let mut query = sqlx::query(&sql);
+        for id in journal_entry_ids {
+            query = query.bind(id);
+        }
+
+        let rows = query.fetch_all(&self.pool).await?;
+
+        let mut results = HashMap::new();
+        for row in rows {
+            let id: i64 = row.get("journal_entry_id");
+            let json: String = row.get("extraction_json");
+            if let Ok(result) = serde_json::from_str(&json) {
+                results.insert(id, result);
+            }
+        }
+
+        Ok(results)
     }
 
     pub async fn insert_pending_if_absent(

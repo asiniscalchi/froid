@@ -220,8 +220,9 @@ impl JournalService {
             });
         }
 
+        let journal_entries: Vec<_> = entries.into_iter().map(|s| s.entry).collect();
         Ok(OutgoingMessage {
-            text: format_entries(&entries),
+            text: format_entries(&journal_entries),
         })
     }
 
