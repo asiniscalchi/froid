@@ -92,7 +92,12 @@ mod tests {
 
         let result: Result<JournalEntryExtractionResult, _> = serde_json::from_str(json);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unknown variant `blocked`"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unknown variant `blocked`")
+        );
     }
 
     #[test]
