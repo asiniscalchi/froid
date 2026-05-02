@@ -23,7 +23,6 @@ use crate::{
 
 use super::repository::JournalRepository;
 
-#[path = "service/commands.rs"]
 mod commands;
 
 #[derive(Clone)]
