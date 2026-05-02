@@ -3,7 +3,9 @@ use std::{collections::HashMap, error::Error, fmt};
 use async_trait::async_trait;
 
 use super::{
-    embedding::{Embedder, EmbedderError, EmbeddingIndex, EmbeddingRepositoryError},
+    embedding::{
+        Embedder, EmbedderError, EmbeddingIndex, EmbeddingRepositoryError, EmbeddingSearchResult,
+    },
     entry::JournalEntry,
     repository::JournalRepository,
 };
@@ -54,7 +56,7 @@ pub struct SemanticSearchService<I, E> {
 
 impl<I, E> SemanticSearchService<I, E>
 where
-    I: EmbeddingIndex,
+    I: EmbeddingIndex<i64>,
     E: Embedder,
 {
     pub fn new(index: I, embedder: E, repository: JournalRepository) -> Self {
@@ -69,7 +71,7 @@ where
 #[async_trait]
 impl<I, E> SearchService for SemanticSearchService<I, E>
 where
-    I: EmbeddingIndex + Send + Sync,
+    I: EmbeddingIndex<i64> + Send + Sync,
     E: Embedder + Send + Sync,
 {
     async fn search(
@@ -85,7 +87,7 @@ where
 
         let model = self.embedder.model();
 
-        let index_results = self
+        let index_results: Vec<EmbeddingSearchResult<i64>> = self
             .index
             .search_for_user(user_id, &embedding, model, MAX_SEARCH_LIMIT)
             .await
@@ -95,7 +97,7 @@ where
             return Ok(vec![]);
         }
 
-        let ids: Vec<i64> = index_results.iter().map(|r| r.journal_entry_id).collect();
+        let ids: Vec<i64> = index_results.iter().map(|r| r.id).collect();
 
         let loaded = self
             .repository
@@ -108,12 +110,10 @@ where
         let results = index_results
             .into_iter()
             .filter_map(|r| {
-                entry_map
-                    .get(&r.journal_entry_id)
-                    .map(|entry| SemanticSearchResult {
-                        journal_entry: entry.clone(),
-                        distance: r.distance,
-                    })
+                entry_map.get(&r.id).map(|entry| SemanticSearchResult {
+                    journal_entry: entry.clone(),
+                    distance: r.distance,
+                })
             })
             .take(DEFAULT_SEARCH_LIMIT)
             .collect();
@@ -166,9 +166,8 @@ mod tests {
         database,
         journal::{
             embedding::{
-                EmbedderError, Embedding, EmbeddingRepositoryError, EmbeddingSearchResult,
-                JournalEntryEmbeddingCandidate, SUPPORTED_EMBEDDING_DIMENSIONS,
-                SqliteEmbeddingRepository,
+                EmbedderError, Embedding, EmbeddingCandidate, EmbeddingRepositoryError,
+                EmbeddingSearchResult, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
             },
             repository::JournalRepository,
         },
@@ -266,14 +265,14 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeIndex {
-        results: Vec<EmbeddingSearchResult>,
+        results: Vec<EmbeddingSearchResult<i64>>,
     }
 
     #[async_trait]
-    impl EmbeddingIndex for FakeIndex {
+    impl EmbeddingIndex<i64> for FakeIndex {
         async fn store_embedding(
             &self,
-            _journal_entry_id: i64,
+            _id: i64,
             _embedding_model: &str,
             _embedding_dim: usize,
             _embedding: &Embedding,
@@ -283,7 +282,7 @@ mod tests {
 
         async fn record_embedding_failure(
             &self,
-            _journal_entry_id: i64,
+            _id: i64,
             _embedding_model: &str,
             _error_message: &str,
         ) -> Result<(), EmbeddingRepositoryError> {
@@ -292,7 +291,7 @@ mod tests {
 
         async fn delete_failed_embedding(
             &self,
-            _journal_entry_id: i64,
+            _id: i64,
             _embedding_model: &str,
         ) -> Result<bool, EmbeddingRepositoryError> {
             unreachable!("search tests do not delete through FakeIndex")
@@ -302,7 +301,7 @@ mod tests {
             &self,
             _embedding_model: &str,
             _limit: u32,
-        ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
+        ) -> Result<Vec<EmbeddingCandidate<i64>>, EmbeddingRepositoryError> {
             unreachable!("search tests do not backfill through FakeIndex")
         }
 
@@ -319,7 +318,7 @@ mod tests {
             _embedding: &Embedding,
             _embedding_model: &str,
             _limit: usize,
-        ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
+        ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
             Ok(self.results.clone())
         }
     }
@@ -549,11 +548,11 @@ mod tests {
         let index = FakeIndex {
             results: vec![
                 EmbeddingSearchResult {
-                    journal_entry_id: 99_999,
+                    id: 99_999,
                     distance: 0.1,
                 },
                 EmbeddingSearchResult {
-                    journal_entry_id: kept_id,
+                    id: kept_id,
                     distance: 0.2,
                 },
             ],

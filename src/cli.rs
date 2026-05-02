@@ -42,6 +42,27 @@ pub struct Cli {
     #[arg(long, env = "FROID_EMBEDDING_WORKER_INTERVAL_SECONDS", global = true)]
     embedding_worker_interval_seconds: Option<String>,
 
+    #[arg(
+        long,
+        env = "FROID_DAILY_REVIEW_EMBEDDING_WORKER_ENABLED",
+        global = true
+    )]
+    daily_review_embedding_worker_enabled: Option<String>,
+
+    #[arg(
+        long,
+        env = "FROID_DAILY_REVIEW_EMBEDDING_WORKER_BATCH_SIZE",
+        global = true
+    )]
+    daily_review_embedding_worker_batch_size: Option<String>,
+
+    #[arg(
+        long,
+        env = "FROID_DAILY_REVIEW_EMBEDDING_WORKER_INTERVAL_SECONDS",
+        global = true
+    )]
+    daily_review_embedding_worker_interval_seconds: Option<String>,
+
     #[arg(long, env = "FROID_EXTRACTION_WORKER_ENABLED", global = true)]
     extraction_worker_enabled: Option<String>,
 
@@ -86,6 +107,7 @@ pub struct ServeConfig {
     pub database_path: String,
     pub database_url: String,
     pub embedding_worker: EmbeddingWorkerConfig,
+    pub daily_review_embedding_worker: EmbeddingWorkerConfig,
     pub extraction_worker: ExtractionWorkerConfig,
     pub daily_review_delivery: DailyReviewDeliveryWorkerConfig,
     pub signal_worker: DailyReviewSignalWorkerConfig,
@@ -118,6 +140,13 @@ impl Cli {
         )
         .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
 
+        let daily_review_embedding_worker = EmbeddingWorkerConfig::from_values(
+            self.daily_review_embedding_worker_enabled.clone(),
+            self.daily_review_embedding_worker_batch_size.clone(),
+            self.daily_review_embedding_worker_interval_seconds.clone(),
+        )
+        .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
+
         let extraction_worker = ExtractionWorkerConfig::from_values(
             self.extraction_worker_enabled.clone(),
             self.extraction_worker_batch_size.clone(),
@@ -145,6 +174,7 @@ impl Cli {
             database_url: format!("sqlite:{database_path}"),
             database_path,
             embedding_worker,
+            daily_review_embedding_worker,
             extraction_worker,
             daily_review_delivery,
             signal_worker,
@@ -166,6 +196,9 @@ mod tests {
             embedding_worker_enabled: None,
             embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: None,
+            daily_review_embedding_worker_enabled: None,
+            daily_review_embedding_worker_batch_size: None,
+            daily_review_embedding_worker_interval_seconds: None,
             extraction_worker_enabled: None,
             extraction_worker_batch_size: None,
             extraction_worker_interval_seconds: None,

@@ -74,6 +74,64 @@ impl DailyReviewRepository {
         row.map(row_to_daily_review).transpose()
     }
 
+    pub async fn find_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<DailyReview>, DailyReviewRepositoryError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, user_id, review_date, review_text, model, prompt_version, status,
+                   error_message, delivered_at, delivery_error,
+                   signals_status, signals_error, signals_model, signals_prompt_version, signals_updated_at,
+                   created_at, updated_at
+            FROM daily_reviews
+            WHERE id = ?
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(row_to_daily_review).transpose()
+    }
+
+    pub async fn fetch_by_ids(
+        &self,
+        user_id: &str,
+        ids: &[i64],
+    ) -> Result<Vec<(i64, DailyReview)>, DailyReviewRepositoryError> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let query = format!(
+            r#"
+            SELECT id, user_id, review_date, review_text, model, prompt_version, status,
+                   error_message, delivered_at, delivery_error,
+                   signals_status, signals_error, signals_model, signals_prompt_version, signals_updated_at,
+                   created_at, updated_at
+            FROM daily_reviews
+            WHERE user_id = ? AND id IN ({})
+            "#,
+            vec!["?"; ids.len()].join(", ")
+        );
+
+        let mut q = sqlx::query(&query).bind(user_id);
+        for id in ids {
+            q = q.bind(id);
+        }
+
+        let rows = q.fetch_all(&self.pool).await?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let review = row_to_daily_review(row)?;
+            results.push((review.id, review));
+        }
+
+        Ok(results)
+    }
+
     pub async fn upsert_completed(
         &self,
         user_id: &str,

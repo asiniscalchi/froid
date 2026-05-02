@@ -13,24 +13,39 @@ impl Embedding {
                 actual: values.len(),
             });
         }
-
         Ok(Self(values))
     }
 
     pub fn values(&self) -> &[f32] {
         &self.0
     }
+
+    pub fn to_blob(&self) -> Vec<u8> {
+        let mut blob = Vec::with_capacity(self.0.len() * 4);
+        for value in &self.0 {
+            blob.extend_from_slice(&value.to_le_bytes());
+        }
+        blob
+    }
+
+    pub fn from_blob(blob: &[u8]) -> Self {
+        let values = blob
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+        Self(values)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JournalEntryEmbeddingCandidate {
-    pub journal_entry_id: i64,
+pub struct EmbeddingCandidate<ID> {
+    pub id: ID,
     pub raw_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct EmbeddingSearchResult {
-    pub journal_entry_id: i64,
+pub struct EmbeddingSearchResult<ID> {
+    pub id: ID,
     pub distance: f32,
 }
 

@@ -1,13 +1,13 @@
-use std::{error::Error, fmt, mem::size_of_val};
+use std::{error::Error, fmt};
 
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
-use super::{Embedding, EmbeddingSearchResult, JournalEntryEmbeddingCandidate};
+use super::{Embedding, EmbeddingCandidate, EmbeddingSearchResult};
 
-fn map_search_result(row: SqliteRow) -> EmbeddingSearchResult {
+fn map_search_result(row: SqliteRow) -> EmbeddingSearchResult<i64> {
     EmbeddingSearchResult {
-        journal_entry_id: row.get("journal_entry_id"),
+        id: row.get("journal_entry_id"),
         distance: row.get("distance"),
     }
 }
@@ -34,10 +34,10 @@ impl From<sqlx::Error> for EmbeddingRepositoryError {
 }
 
 #[async_trait]
-pub trait EmbeddingIndex: Send + Sync {
+pub trait EmbeddingIndex<ID>: Send + Sync {
     async fn store_embedding(
         &self,
-        journal_entry_id: i64,
+        id: ID,
         embedding_model: &str,
         embedding_dim: usize,
         embedding: &Embedding,
@@ -45,14 +45,14 @@ pub trait EmbeddingIndex: Send + Sync {
 
     async fn record_embedding_failure(
         &self,
-        journal_entry_id: i64,
+        id: ID,
         embedding_model: &str,
         error_message: &str,
     ) -> Result<(), EmbeddingRepositoryError>;
 
     async fn delete_failed_embedding(
         &self,
-        journal_entry_id: i64,
+        id: ID,
         embedding_model: &str,
     ) -> Result<bool, EmbeddingRepositoryError>;
 
@@ -60,7 +60,7 @@ pub trait EmbeddingIndex: Send + Sync {
         &self,
         embedding_model: &str,
         limit: u32,
-    ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError>;
+    ) -> Result<Vec<EmbeddingCandidate<ID>>, EmbeddingRepositoryError>;
 
     async fn count_entries_missing_or_failed_embedding(
         &self,
@@ -73,7 +73,7 @@ pub trait EmbeddingIndex: Send + Sync {
         embedding: &Embedding,
         embedding_model: &str,
         limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError>;
+    ) -> Result<Vec<EmbeddingSearchResult<ID>>, EmbeddingRepositoryError>;
 }
 
 #[async_trait]
@@ -97,7 +97,7 @@ impl SqliteEmbeddingRepository {
 
     pub async fn record_embedding_failure(
         &self,
-        journal_entry_id: i64,
+        id: i64,
         embedding_model: &str,
         error_message: &str,
     ) -> Result<(), sqlx::Error> {
@@ -108,7 +108,7 @@ impl SqliteEmbeddingRepository {
             VALUES (?, ?, 0, 'failed', ?)
             "#,
         )
-        .bind(journal_entry_id)
+        .bind(id)
         .bind(embedding_model)
         .bind(error_message)
         .execute(&self.pool)
@@ -119,7 +119,7 @@ impl SqliteEmbeddingRepository {
 
     pub async fn delete_failed_embedding(
         &self,
-        journal_entry_id: i64,
+        id: i64,
         embedding_model: &str,
     ) -> Result<bool, sqlx::Error> {
         let result = sqlx::query(
@@ -128,7 +128,7 @@ impl SqliteEmbeddingRepository {
             WHERE journal_entry_id = ? AND embedding_model = ? AND status = 'failed'
             "#,
         )
-        .bind(journal_entry_id)
+        .bind(id)
         .bind(embedding_model)
         .execute(&self.pool)
         .await?;
@@ -138,7 +138,7 @@ impl SqliteEmbeddingRepository {
 
     pub async fn store_embedding(
         &self,
-        journal_entry_id: i64,
+        id: i64,
         embedding_model: &str,
         embedding_dim: usize,
         embedding: &Embedding,
@@ -152,7 +152,7 @@ impl SqliteEmbeddingRepository {
             VALUES (?, ?, ?)
             "#,
         )
-        .bind(journal_entry_id)
+        .bind(id)
         .bind(embedding_model)
         .bind(embedding_dim as i64)
         .execute(&mut *tx)
@@ -170,7 +170,7 @@ impl SqliteEmbeddingRepository {
             "#,
         )
         .bind(result.last_insert_rowid())
-        .bind(embedding_to_blob(embedding))
+        .bind(embedding.to_blob())
         .execute(&mut *tx)
         .await?;
 
@@ -182,7 +182,7 @@ impl SqliteEmbeddingRepository {
     #[cfg(test)]
     pub(crate) async fn has_embedding(
         &self,
-        journal_entry_id: i64,
+        id: i64,
         embedding_model: &str,
     ) -> Result<bool, sqlx::Error> {
         let exists: bool = sqlx::query_scalar(
@@ -195,7 +195,7 @@ impl SqliteEmbeddingRepository {
             )
             "#,
         )
-        .bind(journal_entry_id)
+        .bind(id)
         .bind(embedding_model)
         .fetch_one(&self.pool)
         .await?;
@@ -207,7 +207,7 @@ impl SqliteEmbeddingRepository {
         &self,
         embedding_model: &str,
         limit: u32,
-    ) -> Result<Vec<JournalEntryEmbeddingCandidate>, sqlx::Error> {
+    ) -> Result<Vec<EmbeddingCandidate<i64>>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT journal_entries.id, journal_entries.raw_text
@@ -228,8 +228,8 @@ impl SqliteEmbeddingRepository {
 
         Ok(rows
             .into_iter()
-            .map(|row| JournalEntryEmbeddingCandidate {
-                journal_entry_id: row.get("id"),
+            .map(|row| EmbeddingCandidate {
+                id: row.get("id"),
                 raw_text: row.get("raw_text"),
             })
             .collect())
@@ -286,7 +286,7 @@ impl SqliteEmbeddingRepository {
         embedding: &Embedding,
         embedding_model: &str,
         limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult>, sqlx::Error> {
+    ) -> Result<Vec<EmbeddingSearchResult<i64>>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -299,7 +299,7 @@ impl SqliteEmbeddingRepository {
             LIMIT ?
             "#,
         )
-        .bind(embedding_to_blob(embedding))
+        .bind(embedding.to_blob())
         .bind(embedding_model)
         .bind(limit as i64)
         .fetch_all(&self.pool)
@@ -314,7 +314,7 @@ impl SqliteEmbeddingRepository {
         embedding: &Embedding,
         embedding_model: &str,
         limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult>, sqlx::Error> {
+    ) -> Result<Vec<EmbeddingSearchResult<i64>>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -329,7 +329,7 @@ impl SqliteEmbeddingRepository {
             LIMIT ?
             "#,
         )
-        .bind(embedding_to_blob(embedding))
+        .bind(embedding.to_blob())
         .bind(embedding_model)
         .bind(user_id)
         .bind(limit as i64)
@@ -342,7 +342,7 @@ impl SqliteEmbeddingRepository {
     #[cfg(test)]
     pub(crate) async fn stored_embedding(
         &self,
-        journal_entry_id: i64,
+        id: i64,
         embedding_model: &str,
     ) -> Result<Option<StoredEmbedding>, sqlx::Error> {
         let row = sqlx::query(
@@ -360,7 +360,7 @@ impl SqliteEmbeddingRepository {
               AND metadata.embedding_model = ?
             "#,
         )
-        .bind(journal_entry_id)
+        .bind(id)
         .bind(embedding_model)
         .fetch_optional(&self.pool)
         .await?;
@@ -368,14 +368,10 @@ impl SqliteEmbeddingRepository {
         row.map(|row| {
             Ok(StoredEmbedding {
                 metadata_id: row.get("id"),
-                journal_entry_id: row.get("journal_entry_id"),
+                id: row.get("journal_entry_id"),
                 embedding_model: row.get("embedding_model"),
                 embedding_dim: row.get("embedding_dim"),
-                embedding: Embedding::new(
-                    blob_to_embedding_values(&row.get::<Vec<u8>, _>("embedding")),
-                    row.get::<i64, _>("embedding_dim") as usize,
-                )
-                .map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
+                embedding: Embedding::from_blob(&row.get::<Vec<u8>, _>("embedding")),
             })
         })
         .transpose()
@@ -383,17 +379,17 @@ impl SqliteEmbeddingRepository {
 }
 
 #[async_trait]
-impl EmbeddingIndex for SqliteEmbeddingRepository {
+impl EmbeddingIndex<i64> for SqliteEmbeddingRepository {
     async fn store_embedding(
         &self,
-        journal_entry_id: i64,
+        id: i64,
         embedding_model: &str,
         embedding_dim: usize,
         embedding: &Embedding,
     ) -> Result<bool, EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::store_embedding(
             self,
-            journal_entry_id,
+            id,
             embedding_model,
             embedding_dim,
             embedding,
@@ -404,13 +400,13 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
 
     async fn record_embedding_failure(
         &self,
-        journal_entry_id: i64,
+        id: i64,
         embedding_model: &str,
         error_message: &str,
     ) -> Result<(), EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::record_embedding_failure(
             self,
-            journal_entry_id,
+            id,
             embedding_model,
             error_message,
         )
@@ -420,10 +416,10 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
 
     async fn delete_failed_embedding(
         &self,
-        journal_entry_id: i64,
+        id: i64,
         embedding_model: &str,
     ) -> Result<bool, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::delete_failed_embedding(self, journal_entry_id, embedding_model)
+        SqliteEmbeddingRepository::delete_failed_embedding(self, id, embedding_model)
             .await
             .map_err(Into::into)
     }
@@ -432,7 +428,7 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
         &self,
         embedding_model: &str,
         limit: u32,
-    ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
+    ) -> Result<Vec<EmbeddingCandidate<i64>>, EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::find_entries_missing_or_failed_embedding(
             self,
             embedding_model,
@@ -457,7 +453,7 @@ impl EmbeddingIndex for SqliteEmbeddingRepository {
         embedding: &Embedding,
         embedding_model: &str,
         limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
+    ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::search_for_user(self, user_id, embedding, embedding_model, limit)
             .await
             .map_err(Into::into)
@@ -485,27 +481,10 @@ impl PendingEmbeddingCounter for SqliteEmbeddingRepository {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StoredEmbedding {
     pub(crate) metadata_id: i64,
-    pub(crate) journal_entry_id: i64,
+    pub(crate) id: i64,
     pub(crate) embedding_model: String,
     pub(crate) embedding_dim: i64,
     pub(crate) embedding: Embedding,
-}
-
-fn embedding_to_blob(embedding: &Embedding) -> Vec<u8> {
-    let mut blob = Vec::with_capacity(size_of_val(embedding.values()));
-
-    for value in embedding.values() {
-        blob.extend_from_slice(&value.to_le_bytes());
-    }
-
-    blob
-}
-
-#[cfg(test)]
-fn blob_to_embedding_values(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(std::mem::size_of::<f32>())
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
-        .collect()
 }
 
 #[cfg(test)]
@@ -624,7 +603,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(stored.journal_entry_id, journal_entry_id);
+        assert_eq!(stored.id, journal_entry_id);
         assert_eq!(stored.embedding_model, TEST_EMBEDDING_MODEL);
         assert_eq!(stored.embedding_dim, TEST_EMBEDDING_DIMENSIONS as i64);
         assert_eq!(stored.embedding, embedding(1.0));
@@ -744,12 +723,12 @@ mod tests {
         assert_eq!(
             candidates,
             vec![
-                JournalEntryEmbeddingCandidate {
-                    journal_entry_id: first,
+                EmbeddingCandidate {
+                    id: first,
                     raw_text: "first".to_string(),
                 },
-                JournalEntryEmbeddingCandidate {
-                    journal_entry_id: third,
+                EmbeddingCandidate {
+                    id: third,
                     raw_text: "third".to_string(),
                 },
             ]
@@ -769,7 +748,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(candidates.len(), 2);
-        assert_eq!(candidates[0].journal_entry_id, first);
+        assert_eq!(candidates[0].id, first);
     }
 
     #[tokio::test]
@@ -980,7 +959,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0].journal_entry_id, second);
+        assert_eq!(results[0].id, second);
         assert!(results[0].distance <= results[1].distance);
         assert!(results[1].distance <= results[2].distance);
     }

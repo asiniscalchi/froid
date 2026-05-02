@@ -28,18 +28,24 @@ impl fmt::Display for EmbeddingBackfillError {
 impl Error for EmbeddingBackfillError {}
 
 #[derive(Debug, Clone)]
-pub struct EmbeddingBackfillService<I, E> {
+pub struct EmbeddingBackfillService<ID, I, E> {
     index: I,
     embedder: E,
+    _phantom: std::marker::PhantomData<ID>,
 }
 
-impl<I, E> EmbeddingBackfillService<I, E>
+impl<ID, I, E> EmbeddingBackfillService<ID, I, E>
 where
-    I: EmbeddingIndex,
+    I: EmbeddingIndex<ID>,
     E: Embedder,
+    ID: Send + Sync + Copy,
 {
     pub fn new(index: I, embedder: E) -> Self {
-        Self { index, embedder }
+        Self {
+            index,
+            embedder,
+            _phantom: std::marker::PhantomData,
+        }
     }
 
     pub fn model(&self) -> &str {
@@ -73,12 +79,12 @@ where
         for candidate in candidates {
             if let Err(error) = self
                 .index
-                .delete_failed_embedding(candidate.journal_entry_id, embedding_model)
+                .delete_failed_embedding(candidate.id, embedding_model)
                 .await
             {
                 result.failed += 1;
                 warn!(
-                    journal_entry_id = candidate.journal_entry_id,
+                    // journal_entry_id = candidate.id, // ID might not be printable directly without traits, but i64/etc usually are.
                     error = %error,
                     "failed to delete previous failed embedding record"
                 );
@@ -90,30 +96,21 @@ where
                 Err(error) => {
                     result.failed += 1;
                     warn!(
-                        journal_entry_id = candidate.journal_entry_id,
+                        // journal_entry_id = candidate.id,
                         embedding_model,
                         embedding_dim,
                         error = %error,
                         "failed to generate journal entry embedding"
                     );
-                    self.record_failure(
-                        candidate.journal_entry_id,
-                        embedding_model,
-                        &error.to_string(),
-                    )
-                    .await;
+                    self.record_failure(candidate.id, embedding_model, &error.to_string())
+                        .await;
                     continue;
                 }
             };
 
             match self
                 .index
-                .store_embedding(
-                    candidate.journal_entry_id,
-                    embedding_model,
-                    embedding_dim,
-                    &embedding,
-                )
+                .store_embedding(candidate.id, embedding_model, embedding_dim, &embedding)
                 .await
             {
                 Ok(true) => result.created += 1,
@@ -121,18 +118,14 @@ where
                 Err(error) => {
                     result.failed += 1;
                     warn!(
-                        journal_entry_id = candidate.journal_entry_id,
+                        // journal_entry_id = candidate.id,
                         embedding_model,
                         embedding_dim,
                         error = %error,
                         "failed to store journal entry embedding"
                     );
-                    self.record_failure(
-                        candidate.journal_entry_id,
-                        embedding_model,
-                        &error.to_string(),
-                    )
-                    .await;
+                    self.record_failure(candidate.id, embedding_model, &error.to_string())
+                        .await;
                 }
             }
         }
@@ -146,19 +139,14 @@ where
         Ok(result)
     }
 
-    async fn record_failure(
-        &self,
-        journal_entry_id: i64,
-        embedding_model: &str,
-        error_message: &str,
-    ) {
+    async fn record_failure(&self, id: ID, embedding_model: &str, error_message: &str) {
         if let Err(db_error) = self
             .index
-            .record_embedding_failure(journal_entry_id, embedding_model, error_message)
+            .record_embedding_failure(id, embedding_model, error_message)
             .await
         {
             warn!(
-                journal_entry_id,
+                // id,
                 error = %db_error,
                 "failed to record embedding failure"
             );

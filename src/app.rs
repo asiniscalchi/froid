@@ -59,6 +59,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let signal_runtime_config = DailyReviewSignalRuntimeConfig::from_env();
 
     spawn_embedding_worker(&pool, &config, embedding_config.as_ref())?;
+    spawn_daily_review_embedding_worker(&pool, &config, embedding_config.as_ref())?;
     spawn_extraction_worker(&pool, &config, &entry_extraction_config)?;
     let delivery_configured =
         spawn_daily_review_delivery_worker(&pool, &config, daily_review_config.clone())?;
@@ -91,6 +92,30 @@ fn spawn_embedding_worker(
         let backfill_service = EmbeddingBackfillService::new(index, embedder);
         let worker =
             EmbeddingReconciliationWorker::new(backfill_service, config.embedding_worker.clone());
+        tokio::spawn(async move { worker.run_forever().await });
+    }
+
+    Ok(())
+}
+
+fn spawn_daily_review_embedding_worker(
+    pool: &SqlitePool,
+    config: &ServeConfig,
+    embedding_config: Option<&EmbeddingConfig>,
+) -> Result<(), Box<dyn Error>> {
+    if config.daily_review_embedding_worker.enabled
+        && let Some(cfg) = embedding_config
+    {
+        let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
+        let index =
+            crate::journal::review::embedding_repository::SqliteDailyReviewEmbeddingRepository::new(
+                pool.clone(),
+            );
+        let backfill_service = EmbeddingBackfillService::new(index, embedder);
+        let worker = EmbeddingReconciliationWorker::new(
+            backfill_service,
+            config.daily_review_embedding_worker.clone(),
+        );
         tokio::spawn(async move { worker.run_forever().await });
     }
 
@@ -201,17 +226,32 @@ fn build_journal_service(
     if let Some(cfg) = embedding_config
         && let Ok(search_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
         && let Ok(capture_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
+        && let Ok(review_search_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
     {
         let search_index = SqliteEmbeddingRepository::new(pool.clone());
         let capture_index = SqliteEmbeddingRepository::new(pool.clone());
         let status_index = SqliteEmbeddingRepository::new(pool.clone());
+        let review_search_index =
+            crate::journal::review::embedding_repository::SqliteDailyReviewEmbeddingRepository::new(
+                pool.clone(),
+            );
         let status_config = EmbeddingStatusConfig {
             model: cfg.model,
             dimensions: cfg.dimensions,
         };
-        let search =
-            SemanticSearchService::new(search_index, search_embedder, JournalRepository::new(pool));
+        let search = SemanticSearchService::new(
+            search_index,
+            search_embedder,
+            JournalRepository::new(pool.clone()),
+        );
+        let review_search = crate::journal::review::search::SemanticDailyReviewSearchService::new(
+            review_search_index,
+            review_search_embedder,
+            crate::journal::review::repository::DailyReviewRepository::new(pool.clone()),
+        );
+
         journal_service = journal_service.with_search(search);
+        journal_service = journal_service.with_daily_review_search(review_search);
         journal_service = journal_service.with_capture_embedding(capture_index, capture_embedder);
         journal_service = journal_service.with_embedding_status_config(status_config);
         journal_service = journal_service.with_pending_embedding_counter(status_index);
