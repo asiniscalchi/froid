@@ -32,6 +32,7 @@ where
 
     pub async fn run_forever(self) {
         info!(
+            enabled = self.config.enabled,
             model = self.backfill_service.model(),
             prompt_version = self.backfill_service.prompt_version(),
             batch_size = self.config.batch_size,
@@ -42,12 +43,14 @@ where
         loop {
             match self.run_once().await {
                 Ok(result) => {
-                    info!(
-                        attempted = result.attempted,
-                        errored = result.errored,
-                        remaining = result.remaining,
-                        "extraction reconciliation cycle completed"
-                    );
+                    if result.attempted > 0 || result.errored > 0 {
+                        info!(
+                            attempted = result.attempted,
+                            errored = result.errored,
+                            remaining = result.remaining,
+                            "extraction reconciliation cycle completed"
+                        );
+                    }
                 }
                 Err(err) => {
                     error!(error = %err, "extraction reconciliation cycle failed");
