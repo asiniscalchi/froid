@@ -16,7 +16,7 @@ Froid is a journaling backend that receives user messages through external chann
 Copy the example environment file and fill in your values:
 
 ```bash
-cp data/.env.example .env
+cp .env.example .env
 ```
 
 Key variables:
