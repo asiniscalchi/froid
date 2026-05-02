@@ -1,11 +1,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::{
-    journal::{
-        extraction::ExtractionWorkerConfig,
-        review::{
-            DailyReviewDeliveryWorkerConfig, signals::worker_config::DailyReviewSignalWorkerConfig,
-        },
+    journal::review::{
+        DailyReviewDeliveryWorkerConfig, signals::worker_config::DailyReviewSignalWorkerConfig,
     },
     version,
     workers::{ReconciliationWorkerConfig, WorkerEnvLabels},
@@ -19,6 +16,11 @@ const EMBEDDING_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
 const DAILY_REVIEW_EMBEDDING_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
     batch_size: "FROID_DAILY_REVIEW_EMBEDDING_WORKER_BATCH_SIZE",
     interval_seconds: "FROID_DAILY_REVIEW_EMBEDDING_WORKER_INTERVAL_SECONDS",
+};
+
+const EXTRACTION_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
+    batch_size: "FROID_EXTRACTION_WORKER_BATCH_SIZE",
+    interval_seconds: "FROID_EXTRACTION_WORKER_INTERVAL_SECONDS",
 };
 
 #[derive(Debug, Parser)]
@@ -118,7 +120,7 @@ pub struct ServeConfig {
     pub database_url: String,
     pub embedding_worker: ReconciliationWorkerConfig,
     pub daily_review_embedding_worker: ReconciliationWorkerConfig,
-    pub extraction_worker: ExtractionWorkerConfig,
+    pub extraction_worker: ReconciliationWorkerConfig,
     pub daily_review_delivery: DailyReviewDeliveryWorkerConfig,
     pub signal_worker: DailyReviewSignalWorkerConfig,
 }
@@ -159,7 +161,8 @@ impl Cli {
         )
         .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
 
-        let extraction_worker = ExtractionWorkerConfig::from_values(
+        let extraction_worker = ReconciliationWorkerConfig::from_values(
+            EXTRACTION_WORKER_LABELS,
             self.extraction_worker_enabled.clone(),
             self.extraction_worker_batch_size.clone(),
             self.extraction_worker_interval_seconds.clone(),

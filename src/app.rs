@@ -36,7 +36,7 @@ use crate::{
         ReconciliationWorker,
         daily_review::{DailyReviewDeliveryWorker, TelegramDailyReviewSender},
         embedding::EmbeddingCycle,
-        extraction::ExtractionReconciliationWorker,
+        extraction::ExtractionCycle,
         signals::DailyReviewSignalReconciliationWorker,
     },
 };
@@ -152,7 +152,10 @@ fn spawn_extraction_worker(
     let repository = JournalEntryExtractionRepository::new(pool.clone());
     let runner = JournalEntryExtractionService::new(repository.clone(), generator);
     let backfill = ExtractionBackfillService::new(repository, runner);
-    let worker = ExtractionReconciliationWorker::new(backfill, config.extraction_worker.clone());
+    let worker = ReconciliationWorker::new(
+        ExtractionCycle::new(backfill),
+        config.extraction_worker.clone(),
+    );
     tokio::spawn(async move { worker.run_forever().await });
 
     Ok(())
