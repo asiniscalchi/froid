@@ -1,4 +1,5 @@
 mod delivery_config;
+pub mod embedding_repository;
 pub mod generator;
 pub mod prompt;
 pub mod repository;
