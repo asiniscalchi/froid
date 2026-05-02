@@ -19,7 +19,14 @@ use crate::{
             service::JournalEntryExtractionService,
         },
         repository::JournalRepository,
-        review::{DailyReviewRuntimeConfig, build_daily_review_service, configure_daily_review},
+        review::{
+            DailyReviewRuntimeConfig, build_daily_review_service, configure_daily_review,
+            signals::{
+                backfill::DailyReviewSignalBackfillService,
+                repository::DailyReviewSignalRepository,
+                wiring::{DailyReviewSignalRuntimeConfig, build_signal_service},
+            },
+        },
         search::SemanticSearchService,
         service::JournalService,
         status::EmbeddingStatusConfig,
@@ -29,6 +36,7 @@ use crate::{
         daily_review::{DailyReviewDeliveryWorker, TelegramDailyReviewSender},
         embedding::EmbeddingReconciliationWorker,
         extraction::ExtractionReconciliationWorker,
+        signals::DailyReviewSignalReconciliationWorker,
     },
 };
 
@@ -48,11 +56,13 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let embedding_config = EmbeddingConfig::from_env().ok();
     let daily_review_config = DailyReviewRuntimeConfig::from_env();
     let entry_extraction_config = JournalEntryExtractionRuntimeConfig::from_env();
+    let signal_runtime_config = DailyReviewSignalRuntimeConfig::from_env();
 
     spawn_embedding_worker(&pool, &config, embedding_config.as_ref())?;
     spawn_extraction_worker(&pool, &config, &entry_extraction_config)?;
     let delivery_configured =
         spawn_daily_review_delivery_worker(&pool, &config, daily_review_config.clone())?;
+    spawn_signal_worker(&pool, &config, signal_runtime_config)?;
     let journal_service = build_journal_service(
         pool,
         embedding_config,
@@ -144,6 +154,30 @@ fn spawn_daily_review_delivery_worker(
     tokio::spawn(async move { worker.run_forever().await });
 
     Ok(true)
+}
+
+fn spawn_signal_worker(
+    pool: &SqlitePool,
+    config: &ServeConfig,
+    signal_config: DailyReviewSignalRuntimeConfig,
+) -> Result<(), Box<dyn Error>> {
+    if !config.signal_worker.enabled {
+        return Ok(());
+    }
+
+    let Some(service) = build_signal_service(pool.clone(), signal_config)? else {
+        warn!("signal reconciliation worker is enabled but OPENAI_API_KEY is not configured");
+        return Ok(());
+    };
+
+    let backfill = DailyReviewSignalBackfillService::new(
+        DailyReviewSignalRepository::new(pool.clone()),
+        service,
+    );
+    let worker = DailyReviewSignalReconciliationWorker::new(backfill, config.signal_worker.clone());
+    tokio::spawn(async move { worker.run_forever().await });
+
+    Ok(())
 }
 
 fn build_journal_service(

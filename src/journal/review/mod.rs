@@ -3,6 +3,7 @@ pub mod generator;
 pub mod prompt;
 pub mod repository;
 pub mod service;
+pub(crate) mod signals;
 pub mod wiring;
 
 use chrono::{DateTime, NaiveDate, Utc};
