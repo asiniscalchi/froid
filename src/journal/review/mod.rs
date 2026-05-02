@@ -3,6 +3,7 @@ pub mod embedding_repository;
 pub mod generator;
 pub mod prompt;
 pub mod repository;
+pub mod search;
 pub mod service;
 pub(crate) mod signals;
 pub mod wiring;
@@ -43,6 +44,12 @@ pub struct DailyReview {
     pub signals_updated_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DailyReviewSearchResult {
+    pub review: DailyReview,
+    pub distance: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

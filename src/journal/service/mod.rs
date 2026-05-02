@@ -13,7 +13,10 @@ use crate::{
         },
         extraction::service::JournalEntryExtractionRunner,
         responses::message_saved_response,
-        review::service::DailyReviewRunner,
+        review::{
+            search::{DailyReviewSearchService, SemanticDailyReviewSearchService},
+            service::DailyReviewRunner,
+        },
         search::{SearchService, SemanticSearchService},
         status::EmbeddingStatusConfig,
         store::JournalEntryStore,
@@ -30,6 +33,7 @@ pub struct JournalService {
     repository: JournalRepository,
     store: JournalEntryStore,
     search: Option<Arc<dyn SearchService>>,
+    daily_review_search: Option<Arc<dyn DailyReviewSearchService>>,
     capture_embedding: Option<Arc<dyn CaptureEmbeddingService>>,
     entry_extraction: Option<Arc<dyn JournalEntryExtractionRunner>>,
     daily_review: Option<Arc<dyn DailyReviewRunner>>,
@@ -46,6 +50,7 @@ impl JournalService {
             repository,
             store,
             search: None,
+            daily_review_search: None,
             capture_embedding: None,
             entry_extraction: None,
             daily_review: None,
@@ -62,6 +67,18 @@ impl JournalService {
         E: Embedder + Send + Sync + 'static,
     {
         self.search = Some(Arc::new(search));
+        self
+    }
+
+    pub fn with_daily_review_search<I, E>(
+        mut self,
+        search: SemanticDailyReviewSearchService<I, E>,
+    ) -> Self
+    where
+        I: EmbeddingIndex<i64> + Send + Sync + 'static,
+        E: Embedder + Send + Sync + 'static,
+    {
+        self.daily_review_search = Some(Arc::new(search));
         self
     }
 
