@@ -3,7 +3,6 @@ pub mod generator;
 pub mod prompt;
 pub mod repository;
 pub mod service;
-#[allow(dead_code)]
 pub(crate) mod signals;
 pub mod wiring;
 
