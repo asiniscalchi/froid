@@ -58,7 +58,7 @@ impl JournalService {
 
     pub fn with_search<I, E>(mut self, search: SemanticSearchService<I, E>) -> Self
     where
-        I: EmbeddingIndex + Send + Sync + 'static,
+        I: EmbeddingIndex<i64> + Send + Sync + 'static,
         E: Embedder + Send + Sync + 'static,
     {
         self.search = Some(Arc::new(search));
@@ -80,7 +80,7 @@ impl JournalService {
 
     pub fn with_capture_embedding<I, E>(mut self, index: I, embedder: E) -> Self
     where
-        I: EmbeddingIndex + Send + Sync + 'static,
+        I: EmbeddingIndex<i64> + Send + Sync + 'static,
         E: Embedder + Send + Sync + 'static,
     {
         self.capture_embedding = Some(Arc::new(ImmediateCaptureEmbeddingService::new(
@@ -196,7 +196,7 @@ impl<I, E> ImmediateCaptureEmbeddingService<I, E> {
 #[async_trait]
 impl<I, E> CaptureEmbeddingService for ImmediateCaptureEmbeddingService<I, E>
 where
-    I: EmbeddingIndex + Send + Sync,
+    I: EmbeddingIndex<i64> + Send + Sync,
     E: Embedder + Send + Sync,
 {
     async fn embed_entry(

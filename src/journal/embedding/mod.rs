@@ -12,7 +12,7 @@ pub use repository::{
     EmbeddingIndex, EmbeddingRepositoryError, PendingEmbeddingCounter, SqliteEmbeddingRepository,
 };
 pub use types::{
-    Embedder, EmbedderError, Embedding, EmbeddingSearchResult, JournalEntryEmbeddingCandidate,
+    Embedder, EmbedderError, Embedding, EmbeddingCandidate, EmbeddingSearchResult,
 };
 pub use worker_config::EmbeddingWorkerConfig;
 
@@ -117,7 +117,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl EmbeddingIndex for StorageFailingIndex {
+    impl EmbeddingIndex<i64> for StorageFailingIndex {
         async fn store_embedding(
             &self,
             journal_entry_id: i64,
@@ -164,7 +164,7 @@ mod tests {
             &self,
             embedding_model: &str,
             limit: u32,
-        ) -> Result<Vec<JournalEntryEmbeddingCandidate>, EmbeddingRepositoryError> {
+        ) -> Result<Vec<EmbeddingCandidate<i64>>, EmbeddingRepositoryError> {
             self.inner
                 .find_entries_missing_or_failed_embedding(embedding_model, limit)
                 .await
@@ -187,7 +187,7 @@ mod tests {
             embedding: &Embedding,
             embedding_model: &str,
             limit: usize,
-        ) -> Result<Vec<EmbeddingSearchResult>, EmbeddingRepositoryError> {
+        ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
             self.inner
                 .search_for_user(user_id, embedding, embedding_model, limit)
                 .await

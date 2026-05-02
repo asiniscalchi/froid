@@ -23,14 +23,14 @@ impl Embedding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JournalEntryEmbeddingCandidate {
-    pub journal_entry_id: i64,
+pub struct EmbeddingCandidate<ID> {
+    pub id: ID,
     pub raw_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct EmbeddingSearchResult {
-    pub journal_entry_id: i64,
+pub struct EmbeddingSearchResult<ID> {
+    pub id: ID,
     pub distance: f32,
 }
 

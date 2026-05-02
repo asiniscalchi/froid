@@ -5,18 +5,19 @@ use crate::journal::embedding::{
     EmbeddingWorkerConfig,
 };
 
-pub struct EmbeddingReconciliationWorker<I, E> {
-    backfill_service: EmbeddingBackfillService<I, E>,
+pub struct EmbeddingReconciliationWorker<ID, I, E> {
+    backfill_service: EmbeddingBackfillService<ID, I, E>,
     config: EmbeddingWorkerConfig,
 }
 
-impl<I, E> EmbeddingReconciliationWorker<I, E>
+impl<ID, I, E> EmbeddingReconciliationWorker<ID, I, E>
 where
-    I: EmbeddingIndex,
+    I: EmbeddingIndex<ID>,
     E: Embedder,
+    ID: Send + Sync + Copy,
 {
     pub fn new(
-        backfill_service: EmbeddingBackfillService<I, E>,
+        backfill_service: EmbeddingBackfillService<ID, I, E>,
         config: EmbeddingWorkerConfig,
     ) -> Self {
         Self {
@@ -158,7 +159,7 @@ mod tests {
     fn worker_with_batch_size(
         embedding_repository: SqliteEmbeddingRepository,
         batch_size: u32,
-    ) -> EmbeddingReconciliationWorker<SqliteEmbeddingRepository, FakeEmbedder> {
+    ) -> EmbeddingReconciliationWorker<i64, SqliteEmbeddingRepository, FakeEmbedder> {
         let backfill_service = EmbeddingBackfillService::new(embedding_repository, FakeEmbedder);
         EmbeddingReconciliationWorker::new(
             backfill_service,
