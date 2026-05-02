@@ -142,7 +142,9 @@ impl JournalService {
             }
 
             if let Some(entry_extraction) = entry_extraction
-                && let Err(error) = entry_extraction.extract_entry(journal_entry_id, &text).await
+                && let Err(error) = entry_extraction
+                    .extract_entry(journal_entry_id, &text)
+                    .await
             {
                 warn!(
                     journal_entry_id,
@@ -242,7 +244,6 @@ impl MessageHandler for JournalService {
             .map_err(Into::into)
     }
 }
-
 
 #[cfg(test)]
 mod tests;
