@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
-use std::{fmt};
+use std::fmt;
 
 use crate::journal::embedding::{
     Embedding, EmbeddingCandidate, EmbeddingIndex, EmbeddingRepositoryError, EmbeddingSearchResult,
@@ -269,7 +269,9 @@ mod tests {
     use super::*;
     use crate::{
         database,
-        journal::{embedding::SUPPORTED_EMBEDDING_DIMENSIONS, review::repository::DailyReviewRepository},
+        journal::{
+            embedding::SUPPORTED_EMBEDDING_DIMENSIONS, review::repository::DailyReviewRepository,
+        },
     };
 
     async fn setup() -> (DailyReviewRepository, SqliteDailyReviewEmbeddingRepository) {
@@ -416,15 +418,30 @@ mod tests {
 
         // Directional embeddings: 1 is closest to query 1, then 2, then 3 is furthest.
         embedding_repo
-            .store_embedding(review1.id, TEST_EMBEDDING_MODEL, TEST_EMBEDDING_DIMENSIONS, &directional_embedding(1))
+            .store_embedding(
+                review1.id,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(1),
+            )
             .await
             .unwrap();
         embedding_repo
-            .store_embedding(review2.id, TEST_EMBEDDING_MODEL, TEST_EMBEDDING_DIMENSIONS, &directional_embedding(2))
+            .store_embedding(
+                review2.id,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(2),
+            )
             .await
             .unwrap();
         embedding_repo
-            .store_embedding(review3.id, TEST_EMBEDDING_MODEL, TEST_EMBEDDING_DIMENSIONS, &directional_embedding(3))
+            .store_embedding(
+                review3.id,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(3),
+            )
             .await
             .unwrap();
 

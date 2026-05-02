@@ -103,7 +103,9 @@ fn spawn_daily_review_embedding_worker(
     config: &ServeConfig,
     embedding_config: Option<&EmbeddingConfig>,
 ) -> Result<(), Box<dyn Error>> {
-    if config.daily_review_embedding_worker.enabled && let Some(cfg) = embedding_config {
+    if config.daily_review_embedding_worker.enabled
+        && let Some(cfg) = embedding_config
+    {
         let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
         let index =
             crate::journal::review::embedding_repository::SqliteDailyReviewEmbeddingRepository::new(
@@ -237,8 +239,11 @@ fn build_journal_service(
             model: cfg.model,
             dimensions: cfg.dimensions,
         };
-        let search =
-            SemanticSearchService::new(search_index, search_embedder, JournalRepository::new(pool.clone()));
+        let search = SemanticSearchService::new(
+            search_index,
+            search_embedder,
+            JournalRepository::new(pool.clone()),
+        );
         let review_search = crate::journal::review::search::SemanticDailyReviewSearchService::new(
             review_search_index,
             review_search_embedder,

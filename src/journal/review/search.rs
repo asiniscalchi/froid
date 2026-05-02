@@ -3,7 +3,9 @@ use std::{collections::HashMap, error::Error, fmt};
 use async_trait::async_trait;
 
 use crate::journal::{
-    embedding::{Embedder, EmbedderError, EmbeddingIndex, EmbeddingRepositoryError, EmbeddingSearchResult},
+    embedding::{
+        Embedder, EmbedderError, EmbeddingIndex, EmbeddingRepositoryError, EmbeddingSearchResult,
+    },
     review::{DailyReview, DailyReviewSearchResult, repository::DailyReviewRepository},
 };
 
@@ -119,7 +121,8 @@ mod tests {
         database,
         journal::{
             embedding::{
-                Embedder, EmbedderError, Embedding, EmbeddingCandidate, SUPPORTED_EMBEDDING_DIMENSIONS,
+                Embedder, EmbedderError, Embedding, EmbeddingCandidate,
+                SUPPORTED_EMBEDDING_DIMENSIONS,
             },
             review::repository::DailyReviewRepository,
         },
@@ -264,7 +267,10 @@ mod tests {
         let results = service.search("user-1", "query").await.unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].review.review_text, Some("review text".to_string()));
+        assert_eq!(
+            results[0].review.review_text,
+            Some("review text".to_string())
+        );
         assert_eq!(results[0].distance, 0.1);
     }
 
@@ -311,11 +317,8 @@ mod tests {
     #[tokio::test]
     async fn search_returns_error_when_embedder_fails() {
         let (repo, index) = setup().await;
-        let service = SemanticDailyReviewSearchService::new(
-            index,
-            FakeEmbedder::fails(TEST_MODEL),
-            repo,
-        );
+        let service =
+            SemanticDailyReviewSearchService::new(index, FakeEmbedder::fails(TEST_MODEL), repo);
 
         let err = service.search("user-1", "query").await.unwrap_err();
 

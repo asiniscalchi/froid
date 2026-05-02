@@ -11,9 +11,7 @@ pub use provider::RigOpenAiEmbedder;
 pub use repository::{
     EmbeddingIndex, EmbeddingRepositoryError, PendingEmbeddingCounter, SqliteEmbeddingRepository,
 };
-pub use types::{
-    Embedder, EmbedderError, Embedding, EmbeddingCandidate, EmbeddingSearchResult,
-};
+pub use types::{Embedder, EmbedderError, Embedding, EmbeddingCandidate, EmbeddingSearchResult};
 pub use worker_config::EmbeddingWorkerConfig;
 
 pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";

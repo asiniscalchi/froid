@@ -42,7 +42,11 @@ pub struct Cli {
     #[arg(long, env = "FROID_EMBEDDING_WORKER_INTERVAL_SECONDS", global = true)]
     embedding_worker_interval_seconds: Option<String>,
 
-    #[arg(long, env = "FROID_DAILY_REVIEW_EMBEDDING_WORKER_ENABLED", global = true)]
+    #[arg(
+        long,
+        env = "FROID_DAILY_REVIEW_EMBEDDING_WORKER_ENABLED",
+        global = true
+    )]
     daily_review_embedding_worker_enabled: Option<String>,
 
     #[arg(
