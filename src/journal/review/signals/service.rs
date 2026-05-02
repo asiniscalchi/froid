@@ -11,7 +11,10 @@ use crate::journal::{
         repository::DailyReviewRepository,
         signals::{
             generator::DailyReviewSignalGenerator,
-            repository::{DailyReviewSignalJobRepository, DailyReviewSignalRepository, DailyReviewSignalRepositoryError},
+            repository::{
+                DailyReviewSignalJobRepository, DailyReviewSignalRepository,
+                DailyReviewSignalRepositoryError,
+            },
             types::DailyReviewSignal,
             validation::validate_signal,
         },
@@ -20,14 +23,20 @@ use crate::journal::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DailyReviewSignalServiceError {
-    NoDailyReview { user_id: String, review_date: NaiveDate },
+    NoDailyReview {
+        user_id: String,
+        review_date: NaiveDate,
+    },
     Storage(String),
 }
 
 impl fmt::Display for DailyReviewSignalServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoDailyReview { user_id, review_date } => write!(
+            Self::NoDailyReview {
+                user_id,
+                review_date,
+            } => write!(
                 f,
                 "no completed daily review found for user '{user_id}' on {review_date}"
             ),
@@ -196,8 +205,7 @@ impl DailyReviewSignalService {
                 let count = signals.len();
                 info!(
                     daily_review_id = review.id,
-                    count,
-                    "daily review signals generated and stored"
+                    count, "daily review signals generated and stored"
                 );
                 Ok(DailyReviewSignalResult::Generated { count })
             }
@@ -241,11 +249,13 @@ impl DailyReviewSignalService {
 
         Ok(entries
             .into_iter()
-            .map(|stored| crate::journal::review::JournalEntryWithExtraction {
-                id: stored.id,
-                entry: stored.entry,
-                extraction: completed_extractions.remove(&stored.id),
-            })
+            .map(
+                |stored| crate::journal::review::JournalEntryWithExtraction {
+                    id: stored.id,
+                    entry: stored.entry,
+                    extraction: completed_extractions.remove(&stored.id),
+                },
+            )
             .collect())
     }
 }
@@ -275,7 +285,11 @@ mod tests {
 
     async fn setup(
         generator: FakeSignalGenerator,
-    ) -> (DailyReviewSignalService, DailyReviewRepository, JournalRepository) {
+    ) -> (
+        DailyReviewSignalService,
+        DailyReviewRepository,
+        JournalRepository,
+    ) {
         database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
@@ -344,8 +358,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_no_daily_review_when_review_does_not_exist() {
-        let (service, _, _) =
-            setup(FakeSignalGenerator::succeeding(output_with(vec![]))).await;
+        let (service, _, _) = setup(FakeSignalGenerator::succeeding(output_with(vec![]))).await;
 
         let result = service
             .generate_signals_for_review("user-1", date())
@@ -376,7 +389,10 @@ mod tests {
     async fn generates_and_stores_signals_for_completed_review() {
         let generator = FakeSignalGenerator::succeeding(output_with(vec![theme_signal()]));
         let (service, reviews, entries) = setup(generator).await;
-        entries.store(&incoming("user-1", "entry text")).await.unwrap();
+        entries
+            .store(&incoming("user-1", "entry text"))
+            .await
+            .unwrap();
         reviews
             .upsert_completed("user-1", date(), "review text", "model", "v1")
             .await
@@ -448,8 +464,7 @@ mod tests {
             label: "  ".to_string(), // empty label — invalid
             ..theme_signal()
         };
-        let generator =
-            FakeSignalGenerator::succeeding(output_with(vec![invalid, need_signal()]));
+        let generator = FakeSignalGenerator::succeeding(output_with(vec![invalid, need_signal()]));
         let (service, reviews, _) = setup(generator).await;
         reviews
             .upsert_completed("user-1", date(), "review text", "model", "v1")
@@ -477,13 +492,7 @@ mod tests {
             .await
             .unwrap();
         reviews
-            .upsert_completed(
-                "user-2",
-                date(),
-                "user two review",
-                "model",
-                "v1",
-            )
+            .upsert_completed("user-2", date(), "user two review", "model", "v1")
             .await
             .unwrap();
 

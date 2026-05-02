@@ -146,12 +146,10 @@ impl DailyReviewSignalRepository {
     }
 }
 
-fn row_to_signal(
-    row: SqliteRow,
-) -> Result<DailyReviewSignal, DailyReviewSignalRepositoryError> {
+fn row_to_signal(row: SqliteRow) -> Result<DailyReviewSignal, DailyReviewSignalRepositoryError> {
     let signal_type_str = row.get::<String, _>("signal_type");
     let signal_type = SignalType::from_str(&signal_type_str)
-        .ok_or_else(|| DailyReviewSignalRepositoryError::InvalidSignalType(signal_type_str))?;
+        .ok_or(DailyReviewSignalRepositoryError::InvalidSignalType(signal_type_str))?;
 
     let review_date_str = row.get::<String, _>("review_date");
     let review_date = NaiveDate::parse_from_str(&review_date_str, "%Y-%m-%d")
@@ -195,9 +193,7 @@ fn need_status_to_str(status: &NeedStatus) -> &'static str {
     }
 }
 
-fn need_status_from_str(
-    s: &str,
-) -> Result<NeedStatus, DailyReviewSignalRepositoryError> {
+fn need_status_from_str(s: &str) -> Result<NeedStatus, DailyReviewSignalRepositoryError> {
     match s {
         "activated" => Ok(NeedStatus::Activated),
         "unmet" => Ok(NeedStatus::Unmet),
@@ -219,9 +215,7 @@ fn behavior_valence_to_str(valence: &BehaviorValence) -> &'static str {
     }
 }
 
-fn behavior_valence_from_str(
-    s: &str,
-) -> Result<BehaviorValence, DailyReviewSignalRepositoryError> {
+fn behavior_valence_from_str(s: &str) -> Result<BehaviorValence, DailyReviewSignalRepositoryError> {
     match s {
         "positive" => Ok(BehaviorValence::Positive),
         "negative" => Ok(BehaviorValence::Negative),
@@ -261,9 +255,9 @@ impl DailyReviewSignalJobRepository {
         .fetch_one(&self.pool)
         .await?;
 
-        self.find_by_id(id)
-            .await?
-            .ok_or_else(|| DailyReviewSignalRepositoryError::Storage("job not found after insert".into()))
+        self.find_by_id(id).await?.ok_or_else(|| {
+            DailyReviewSignalRepositoryError::Storage("job not found after insert".into())
+        })
     }
 
     pub async fn mark_started(
@@ -354,9 +348,7 @@ impl DailyReviewSignalJobRepository {
     }
 }
 
-fn row_to_job(
-    row: SqliteRow,
-) -> Result<DailyReviewSignalJob, DailyReviewSignalRepositoryError> {
+fn row_to_job(row: SqliteRow) -> Result<DailyReviewSignalJob, DailyReviewSignalRepositoryError> {
     let status_str = row.get::<String, _>("status");
     let status = match status_str.as_str() {
         "pending" => SignalJobStatus::Pending,
@@ -605,10 +597,7 @@ mod tests {
 
         let found = repo.find_by_user_and_date("user-1", date()).await.unwrap();
         let not_found = repo
-            .find_by_user_and_date(
-                "user-1",
-                NaiveDate::from_ymd_opt(2026, 4, 29).unwrap(),
-            )
+            .find_by_user_and_date("user-1", NaiveDate::from_ymd_opt(2026, 4, 29).unwrap())
             .await
             .unwrap();
         let other_user = repo.find_by_user_and_date("user-2", date()).await.unwrap();
@@ -634,10 +623,7 @@ mod tests {
         .await
         .unwrap();
 
-        let found = repo
-            .find_by_daily_review_id(review_id)
-            .await
-            .unwrap();
+        let found = repo.find_by_daily_review_id(review_id).await.unwrap();
         assert_eq!(found.len(), 2);
     }
 

@@ -27,11 +27,15 @@ pub fn validate_signal(
     signal: &DailyReviewSignalCandidate,
 ) -> Result<(), DailyReviewSignalValidationError> {
     if signal.label.trim().is_empty() {
-        return Err(DailyReviewSignalValidationError::new("label must not be empty"));
+        return Err(DailyReviewSignalValidationError::new(
+            "label must not be empty",
+        ));
     }
 
     if signal.evidence.trim().is_empty() {
-        return Err(DailyReviewSignalValidationError::new("evidence must not be empty"));
+        return Err(DailyReviewSignalValidationError::new(
+            "evidence must not be empty",
+        ));
     }
 
     if !(0.0..=1.0).contains(&signal.strength) {
@@ -151,7 +155,10 @@ mod tests {
             ..candidate(SignalType::Theme)
         };
         let err = validate_signal(&signal).unwrap_err();
-        assert!(err.to_string().contains("strength must be between 0.0 and 1.0"));
+        assert!(
+            err.to_string()
+                .contains("strength must be between 0.0 and 1.0")
+        );
     }
 
     #[test]
@@ -161,7 +168,10 @@ mod tests {
             ..candidate(SignalType::Theme)
         };
         let err = validate_signal(&signal).unwrap_err();
-        assert!(err.to_string().contains("strength must be between 0.0 and 1.0"));
+        assert!(
+            err.to_string()
+                .contains("strength must be between 0.0 and 1.0")
+        );
     }
 
     #[test]
@@ -171,7 +181,10 @@ mod tests {
             ..candidate(SignalType::Emotion)
         };
         let err = validate_signal(&signal).unwrap_err();
-        assert!(err.to_string().contains("confidence must be between 0.0 and 1.0"));
+        assert!(
+            err.to_string()
+                .contains("confidence must be between 0.0 and 1.0")
+        );
     }
 
     #[test]
@@ -181,7 +194,10 @@ mod tests {
             ..candidate(SignalType::Emotion)
         };
         let err = validate_signal(&signal).unwrap_err();
-        assert!(err.to_string().contains("confidence must be between 0.0 and 1.0"));
+        assert!(
+            err.to_string()
+                .contains("confidence must be between 0.0 and 1.0")
+        );
     }
 
     #[test]
@@ -205,7 +221,10 @@ mod tests {
     fn rejects_behavior_signal_without_valence() {
         let signal = candidate(SignalType::Behavior);
         let err = validate_signal(&signal).unwrap_err();
-        assert!(err.to_string().contains("behavior signal must have a valence"));
+        assert!(
+            err.to_string()
+                .contains("behavior signal must have a valence")
+        );
     }
 
     #[test]

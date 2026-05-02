@@ -6,7 +6,9 @@ use rig::{
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::review::{JournalEntryWithExtraction, signals::types::DailyReviewSignalsOutput};
+use crate::journal::review::{
+    JournalEntryWithExtraction, signals::types::DailyReviewSignalsOutput,
+};
 
 use super::prompt::DailyReviewSignalPrompt;
 
@@ -125,9 +127,8 @@ struct RigOpenAiSignalProvider {
 
 impl RigOpenAiSignalProvider {
     fn new(api_key: &str) -> Result<Self, RigOpenAiDailyReviewSignalGeneratorError> {
-        let client = OpenAiClient::new(api_key).map_err(|error| {
-            RigOpenAiDailyReviewSignalGeneratorError::Client(error.to_string())
-        })?;
+        let client = OpenAiClient::new(api_key)
+            .map_err(|error| RigOpenAiDailyReviewSignalGeneratorError::Client(error.to_string()))?;
         Ok(Self { client })
     }
 }
@@ -502,17 +503,18 @@ mod tests {
             provider,
         );
 
-        let output = generator.generate_signals("review text", &[]).await.unwrap();
+        let output = generator
+            .generate_signals("review text", &[])
+            .await
+            .unwrap();
 
         assert!(output.signals.is_empty());
     }
 
     #[test]
     fn build_prompt_includes_review_and_entries() {
-        let prompt = build_signal_extraction_prompt(
-            "Today was hard.",
-            &[entry("Felt anxious at work.")],
-        );
+        let prompt =
+            build_signal_extraction_prompt("Today was hard.", &[entry("Felt anxious at work.")]);
 
         assert!(prompt.contains("Today was hard."));
         assert!(prompt.contains("Felt anxious at work."));
