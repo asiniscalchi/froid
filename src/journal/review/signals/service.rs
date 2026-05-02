@@ -116,6 +116,14 @@ impl DailyReviewSignalService {
         }
     }
 
+    pub fn model(&self) -> &str {
+        self.generator.model()
+    }
+
+    pub fn prompt_version(&self) -> &str {
+        self.generator.prompt_version()
+    }
+
     pub async fn generate_signals_for_review(
         &self,
         user_id: &str,

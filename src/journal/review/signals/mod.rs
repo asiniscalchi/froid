@@ -1,3 +1,4 @@
+pub(crate) mod backfill;
 pub(crate) mod generator;
 pub(crate) mod prompt;
 pub(crate) mod repository;
