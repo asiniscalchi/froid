@@ -92,13 +92,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch conventions, project structure
 
 ## Documentation
 
-The [project wiki](../../wiki) covers:
-
-- [Architecture](../../wiki/Architecture) — system design and component layers
-- [Information Model](../../wiki/Information-Model) — how entries are analysed and what is extracted
-- [Data Model](../../wiki/Data-Model) — database schema and relationships
-- [Processing Pipeline](../../wiki/Processing-Pipeline) — entry lifecycle from capture to review
-- [Workers](../../wiki/Workers) — background reconciliation tasks and configuration
+The [project wiki](https://github.com/asiniscalchi/froid/wiki) covers system design, the information model, database schema, the entry processing pipeline, and worker configuration.
 
 ## License
 
