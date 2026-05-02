@@ -232,6 +232,7 @@ where
 
     pub async fn run_forever(self) {
         info!(
+            enabled = self.config.enabled,
             interval_seconds = self.config.interval.as_secs(),
             "daily review delivery worker started"
         );
@@ -239,13 +240,15 @@ where
         loop {
             match self.run_once(Utc::now()).await {
                 Ok(result) => {
-                    info!(
-                        attempted = result.attempted,
-                        delivered = result.delivered,
-                        skipped = result.skipped,
-                        failed = result.failed,
-                        "daily review delivery cycle completed"
-                    );
+                    if result.attempted > 0 && (result.delivered > 0 || result.failed > 0) {
+                        info!(
+                            attempted = result.attempted,
+                            delivered = result.delivered,
+                            skipped = result.skipped,
+                            failed = result.failed,
+                            "daily review delivery cycle completed"
+                        );
+                    }
                 }
                 Err(err) => {
                     error!(error = %err, "daily review delivery cycle failed");

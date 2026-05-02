@@ -34,6 +34,7 @@ where
 
     pub async fn run_forever(self) {
         info!(
+            enabled = self.config.enabled,
             model = self.backfill_service.model(),
             dimensions = self.backfill_service.dimensions(),
             batch_size = self.config.batch_size,
@@ -44,13 +45,15 @@ where
         loop {
             match self.run_once().await {
                 Ok(result) => {
-                    info!(
-                        attempted = result.attempted,
-                        created = result.created,
-                        failed = result.failed,
-                        remaining = result.remaining,
-                        "embedding reconciliation cycle completed"
-                    );
+                    if result.attempted > 0 || result.created > 0 {
+                        info!(
+                            attempted = result.attempted,
+                            created = result.created,
+                            failed = result.failed,
+                            remaining = result.remaining,
+                            "embedding reconciliation cycle completed"
+                        );
+                    }
                 }
                 Err(err) => {
                     error!(error = %err, "embedding reconciliation cycle failed");
