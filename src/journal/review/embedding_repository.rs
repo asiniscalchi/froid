@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
-use std::fmt;
 
 use crate::journal::embedding::{
     Embedding, EmbeddingCandidate, EmbeddingIndex, EmbeddingRepositoryError, EmbeddingSearchResult,
