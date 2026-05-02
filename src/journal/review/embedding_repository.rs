@@ -351,4 +351,108 @@ mod tests {
         assert_eq!(candidates[0].id, review.id);
         assert_eq!(candidates[0].raw_text, "review text");
     }
+
+    #[tokio::test]
+    async fn records_embedding_failure_inserts_failed_row() {
+        let (review_repo, embedding_repo) = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
+        let review = review_repo
+            .upsert_completed("user-1", date, "review text", "model", "v1")
+            .await
+            .unwrap();
+
+        embedding_repo
+            .record_embedding_failure(review.id, TEST_EMBEDDING_MODEL, "provider error")
+            .await
+            .unwrap();
+
+        let candidates = embedding_repo
+            .find_entries_missing_or_failed_embedding(TEST_EMBEDDING_MODEL, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, review.id);
+    }
+
+    #[tokio::test]
+    async fn delete_failed_embedding_removes_failed_row() {
+        let (review_repo, embedding_repo) = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
+        let review = review_repo
+            .upsert_completed("user-1", date, "review text", "model", "v1")
+            .await
+            .unwrap();
+
+        embedding_repo
+            .record_embedding_failure(review.id, TEST_EMBEDDING_MODEL, "provider error")
+            .await
+            .unwrap();
+
+        let deleted = embedding_repo
+            .delete_failed_embedding(review.id, TEST_EMBEDDING_MODEL)
+            .await
+            .unwrap();
+
+        assert!(deleted);
+
+        let candidates = embedding_repo
+            .find_entries_missing_or_failed_embedding(TEST_EMBEDDING_MODEL, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(candidates.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn search_returns_results_ordered_by_cosine_distance() {
+        let (review_repo, embedding_repo) = setup().await;
+        let date1 = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
+        let date2 = NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
+        let date3 = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
+
+        let review1 = review_repo
+            .upsert_completed("user-1", date1, "review 1", "model", "v1")
+            .await
+            .unwrap();
+        let review2 = review_repo
+            .upsert_completed("user-1", date2, "review 2", "model", "v1")
+            .await
+            .unwrap();
+        let review3 = review_repo
+            .upsert_completed("user-1", date3, "review 3", "model", "v1")
+            .await
+            .unwrap();
+
+        // Directional embeddings: 1 is closest to query 1, then 2, then 3 is furthest.
+        embedding_repo
+            .store_embedding(review1.id, TEST_EMBEDDING_MODEL, TEST_EMBEDDING_DIMENSIONS, &directional_embedding(1))
+            .await
+            .unwrap();
+        embedding_repo
+            .store_embedding(review2.id, TEST_EMBEDDING_MODEL, TEST_EMBEDDING_DIMENSIONS, &directional_embedding(2))
+            .await
+            .unwrap();
+        embedding_repo
+            .store_embedding(review3.id, TEST_EMBEDDING_MODEL, TEST_EMBEDDING_DIMENSIONS, &directional_embedding(3))
+            .await
+            .unwrap();
+
+        let query = directional_embedding(1);
+        let results = embedding_repo
+            .search_for_user("user-1", &query, TEST_EMBEDDING_MODEL, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].id, review1.id);
+        assert_eq!(results[1].id, review2.id);
+        assert_eq!(results[2].id, review3.id);
+    }
+
+    fn directional_embedding(nonzero_dim: usize) -> Embedding {
+        let mut values = vec![0.0f32; TEST_EMBEDDING_DIMENSIONS];
+        values[nonzero_dim] = 1.0;
+        Embedding::new(values, TEST_EMBEDDING_DIMENSIONS).unwrap()
+    }
 }
