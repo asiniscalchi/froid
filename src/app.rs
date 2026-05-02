@@ -37,7 +37,7 @@ use crate::{
         daily_review::{DailyReviewDeliveryWorker, TelegramDailyReviewSender},
         embedding::EmbeddingCycle,
         extraction::ExtractionCycle,
-        signals::DailyReviewSignalReconciliationWorker,
+        signals::DailyReviewSignalCycle,
     },
 };
 
@@ -205,7 +205,10 @@ fn spawn_signal_worker(
         DailyReviewSignalRepository::new(pool.clone()),
         service,
     );
-    let worker = DailyReviewSignalReconciliationWorker::new(backfill, config.signal_worker.clone());
+    let worker = ReconciliationWorker::new(
+        DailyReviewSignalCycle::new(backfill),
+        config.signal_worker.clone(),
+    );
     tokio::spawn(async move { worker.run_forever().await });
 
     Ok(())

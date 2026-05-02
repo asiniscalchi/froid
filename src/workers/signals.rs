@@ -1,67 +1,65 @@
-use tracing::{error, info};
+use tracing::info;
 
-use crate::journal::review::signals::{
-    backfill::{
+use crate::{
+    journal::review::signals::backfill::{
         DailyReviewSignalBackfillError, DailyReviewSignalBackfillResult,
         DailyReviewSignalBackfillService,
     },
-    worker_config::DailyReviewSignalWorkerConfig,
+    workers::{
+        ReconciliationWorker, config::ReconciliationWorkerConfig,
+        reconciliation::ReconciliationCycle,
+    },
 };
 
-pub struct DailyReviewSignalReconciliationWorker {
+pub struct DailyReviewSignalCycle {
     backfill_service: DailyReviewSignalBackfillService,
-    config: DailyReviewSignalWorkerConfig,
 }
 
-impl DailyReviewSignalReconciliationWorker {
-    pub fn new(
-        backfill_service: DailyReviewSignalBackfillService,
-        config: DailyReviewSignalWorkerConfig,
-    ) -> Self {
-        Self {
-            backfill_service,
-            config,
-        }
+impl DailyReviewSignalCycle {
+    pub fn new(backfill_service: DailyReviewSignalBackfillService) -> Self {
+        Self { backfill_service }
+    }
+}
+
+impl ReconciliationCycle for DailyReviewSignalCycle {
+    type Outcome = DailyReviewSignalBackfillResult;
+    type Error = DailyReviewSignalBackfillError;
+
+    fn worker_label(&self) -> &'static str {
+        "signal"
     }
 
-    pub async fn run_once(
-        &self,
-    ) -> Result<DailyReviewSignalBackfillResult, DailyReviewSignalBackfillError> {
-        self.backfill_service
-            .backfill_missing_signals(self.config.batch_size)
-            .await
-    }
-
-    pub async fn run_forever(self) {
+    fn log_startup(&self, config: &ReconciliationWorkerConfig) {
         info!(
-            enabled = self.config.enabled,
+            enabled = config.enabled,
             model = self.backfill_service.model(),
             prompt_version = self.backfill_service.prompt_version(),
-            batch_size = self.config.batch_size,
-            interval_seconds = self.config.interval.as_secs(),
-            "signal reconciliation worker started"
+            batch_size = config.batch_size,
+            interval_seconds = config.interval.as_secs(),
+            "signal reconciliation worker started",
         );
+    }
 
-        loop {
-            match self.run_once().await {
-                Ok(result) => {
-                    if result.attempted > 0 || result.errored > 0 {
-                        info!(
-                            attempted = result.attempted,
-                            errored = result.errored,
-                            remaining = result.remaining,
-                            "signal reconciliation cycle completed"
-                        );
-                    }
-                }
-                Err(err) => {
-                    error!(error = %err, "signal reconciliation cycle failed");
-                }
-            }
-            tokio::time::sleep(self.config.interval).await;
+    fn log_cycle_complete(&self, outcome: &Self::Outcome) {
+        if outcome.attempted == 0 {
+            return;
         }
+        info!(
+            attempted = outcome.attempted,
+            errored = outcome.errored,
+            remaining = outcome.remaining,
+            "signal reconciliation cycle completed",
+        );
+    }
+
+    async fn run_once(&self, batch_size: u32) -> Result<Self::Outcome, Self::Error> {
+        self.backfill_service
+            .backfill_missing_signals(batch_size)
+            .await
     }
 }
+
+pub type DailyReviewSignalReconciliationWorker = ReconciliationWorker<DailyReviewSignalCycle>;
 
 #[cfg(test)]
 mod tests {
@@ -83,11 +81,11 @@ mod tests {
                     repository::DailyReviewSignalRepository,
                     service::DailyReviewSignalService,
                     types::{DailyReviewSignalCandidate, DailyReviewSignalsOutput, SignalType},
-                    worker_config::DailyReviewSignalWorkerConfig,
                 },
             },
         },
         messages::{IncomingMessage, MessageSource},
+        workers::ReconciliationWorker,
     };
 
     async fn setup(
@@ -113,9 +111,9 @@ mod tests {
             generator,
         );
         let backfill = DailyReviewSignalBackfillService::new(signals, service);
-        let worker = DailyReviewSignalReconciliationWorker::new(
-            backfill,
-            DailyReviewSignalWorkerConfig {
+        let worker = ReconciliationWorker::new(
+            DailyReviewSignalCycle::new(backfill),
+            ReconciliationWorkerConfig {
                 enabled: true,
                 batch_size: 20,
                 interval: Duration::from_secs(300),
