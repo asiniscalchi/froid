@@ -1,6 +1,7 @@
 use std::error::Error;
 
 use sqlx::SqlitePool;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use tracing::warn;
@@ -95,7 +96,7 @@ fn spawn_embedding_worker(
             EmbeddingCycle::new(backfill_service),
             config.embedding_worker.clone(),
         );
-        tokio::spawn(async move { worker.run_forever().await });
+        tokio::spawn(async move { worker.run_forever(CancellationToken::new()).await });
     }
 
     Ok(())
@@ -119,7 +120,7 @@ fn spawn_daily_review_embedding_worker(
             EmbeddingCycle::new(backfill_service),
             config.daily_review_embedding_worker.clone(),
         );
-        tokio::spawn(async move { worker.run_forever().await });
+        tokio::spawn(async move { worker.run_forever(CancellationToken::new()).await });
     }
 
     Ok(())
@@ -156,7 +157,7 @@ fn spawn_extraction_worker(
         ExtractionCycle::new(backfill),
         config.extraction_worker.clone(),
     );
-    tokio::spawn(async move { worker.run_forever().await });
+    tokio::spawn(async move { worker.run_forever(CancellationToken::new()).await });
 
     Ok(())
 }
@@ -209,7 +210,7 @@ fn spawn_signal_worker(
         DailyReviewSignalCycle::new(backfill),
         config.signal_worker.clone(),
     );
-    tokio::spawn(async move { worker.run_forever().await });
+    tokio::spawn(async move { worker.run_forever(CancellationToken::new()).await });
 
     Ok(())
 }

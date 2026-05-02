@@ -1,5 +1,6 @@
 use std::{error::Error, future::Future};
 
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use crate::workers::config::ReconciliationWorkerConfig;
@@ -47,10 +48,14 @@ where
         self.cycle.run_once(self.config.batch_size).await
     }
 
-    pub async fn run_forever(self) {
+    pub async fn run_forever(self, shutdown: CancellationToken) {
         self.cycle.log_startup(&self.config);
 
         loop {
+            if shutdown.is_cancelled() {
+                return;
+            }
+
             match self.cycle.run_once(self.config.batch_size).await {
                 Ok(outcome) => self.cycle.log_cycle_complete(&outcome),
                 Err(err) => {
@@ -61,7 +66,11 @@ where
                     );
                 }
             }
-            tokio::time::sleep(self.config.interval).await;
+
+            tokio::select! {
+                _ = tokio::time::sleep(self.config.interval) => {}
+                _ = shutdown.cancelled() => return,
+            }
         }
     }
 }
@@ -146,11 +155,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_forever_logs_startup_once_and_cycle_completion_each_pass() {
-        // Use a tiny interval so the loop iterates a few times before we abort it.
-        let cycle = FakeCycle::new();
+    async fn run_forever_exits_when_cancellation_token_fires() {
+        // Use a tiny interval so the loop iterates a few times before we cancel it.
         let worker = ReconciliationWorker::new(
-            cycle,
+            FakeCycle::new(),
             ReconciliationWorkerConfig {
                 enabled: true,
                 batch_size: 10,
@@ -158,12 +166,36 @@ mod tests {
             },
         );
 
-        let handle = tokio::spawn(async move {
-            worker.run_forever().await;
+        let shutdown = CancellationToken::new();
+        let handle = tokio::spawn({
+            let shutdown = shutdown.clone();
+            async move {
+                worker.run_forever(shutdown).await;
+            }
         });
 
         tokio::time::sleep(Duration::from_millis(20)).await;
-        handle.abort();
-        let _ = handle.await;
+        shutdown.cancel();
+        // The task must terminate on its own once the token is cancelled —
+        // never call abort(), because that would mask a wedged loop.
+        handle.await.expect("worker task ran to completion");
+    }
+
+    #[tokio::test]
+    async fn run_forever_returns_immediately_when_token_already_cancelled() {
+        let cycle = FakeCycle::new();
+        let worker = ReconciliationWorker::new(
+            cycle,
+            ReconciliationWorkerConfig {
+                enabled: true,
+                batch_size: 10,
+                interval: Duration::from_secs(60),
+            },
+        );
+
+        let shutdown = CancellationToken::new();
+        shutdown.cancel();
+
+        worker.run_forever(shutdown).await;
     }
 }
