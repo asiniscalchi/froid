@@ -1,14 +1,29 @@
 use clap::{Parser, Subcommand};
 
 use crate::{
-    journal::{
-        embedding::EmbeddingWorkerConfig,
-        extraction::ExtractionWorkerConfig,
-        review::{
-            DailyReviewDeliveryWorkerConfig, signals::worker_config::DailyReviewSignalWorkerConfig,
-        },
-    },
+    journal::review::DailyReviewDeliveryWorkerConfig,
     version,
+    workers::{ReconciliationWorkerConfig, WorkerEnvLabels},
+};
+
+const EMBEDDING_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
+    batch_size: "FROID_EMBEDDING_WORKER_BATCH_SIZE",
+    interval_seconds: "FROID_EMBEDDING_WORKER_INTERVAL_SECONDS",
+};
+
+const DAILY_REVIEW_EMBEDDING_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
+    batch_size: "FROID_DAILY_REVIEW_EMBEDDING_WORKER_BATCH_SIZE",
+    interval_seconds: "FROID_DAILY_REVIEW_EMBEDDING_WORKER_INTERVAL_SECONDS",
+};
+
+const EXTRACTION_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
+    batch_size: "FROID_EXTRACTION_WORKER_BATCH_SIZE",
+    interval_seconds: "FROID_EXTRACTION_WORKER_INTERVAL_SECONDS",
+};
+
+const SIGNAL_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
+    batch_size: "FROID_SIGNAL_WORKER_BATCH_SIZE",
+    interval_seconds: "FROID_SIGNAL_WORKER_INTERVAL_SECONDS",
 };
 
 #[derive(Debug, Parser)]
@@ -106,11 +121,11 @@ pub struct ServeConfig {
     pub telegram_bot_token: String,
     pub database_path: String,
     pub database_url: String,
-    pub embedding_worker: EmbeddingWorkerConfig,
-    pub daily_review_embedding_worker: EmbeddingWorkerConfig,
-    pub extraction_worker: ExtractionWorkerConfig,
+    pub embedding_worker: ReconciliationWorkerConfig,
+    pub daily_review_embedding_worker: ReconciliationWorkerConfig,
+    pub extraction_worker: ReconciliationWorkerConfig,
     pub daily_review_delivery: DailyReviewDeliveryWorkerConfig,
-    pub signal_worker: DailyReviewSignalWorkerConfig,
+    pub signal_worker: ReconciliationWorkerConfig,
 }
 
 impl Cli {
@@ -133,21 +148,24 @@ impl Cli {
             ));
         }
 
-        let embedding_worker = EmbeddingWorkerConfig::from_values(
+        let embedding_worker = ReconciliationWorkerConfig::from_values(
+            EMBEDDING_WORKER_LABELS,
             self.embedding_worker_enabled.clone(),
             self.embedding_worker_batch_size.clone(),
             self.embedding_worker_interval_seconds.clone(),
         )
         .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
 
-        let daily_review_embedding_worker = EmbeddingWorkerConfig::from_values(
+        let daily_review_embedding_worker = ReconciliationWorkerConfig::from_values(
+            DAILY_REVIEW_EMBEDDING_WORKER_LABELS,
             self.daily_review_embedding_worker_enabled.clone(),
             self.daily_review_embedding_worker_batch_size.clone(),
             self.daily_review_embedding_worker_interval_seconds.clone(),
         )
         .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
 
-        let extraction_worker = ExtractionWorkerConfig::from_values(
+        let extraction_worker = ReconciliationWorkerConfig::from_values(
+            EXTRACTION_WORKER_LABELS,
             self.extraction_worker_enabled.clone(),
             self.extraction_worker_batch_size.clone(),
             self.extraction_worker_interval_seconds.clone(),
@@ -160,7 +178,8 @@ impl Cli {
         )
         .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
 
-        let signal_worker = DailyReviewSignalWorkerConfig::from_values(
+        let signal_worker = ReconciliationWorkerConfig::from_values(
+            SIGNAL_WORKER_LABELS,
             self.signal_worker_enabled.clone(),
             self.signal_worker_batch_size.clone(),
             self.signal_worker_interval_seconds.clone(),

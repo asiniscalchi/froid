@@ -33,10 +33,11 @@ use crate::{
     },
     version,
     workers::{
+        ReconciliationWorker,
         daily_review::{DailyReviewDeliveryWorker, TelegramDailyReviewSender},
-        embedding::EmbeddingReconciliationWorker,
-        extraction::ExtractionReconciliationWorker,
-        signals::DailyReviewSignalReconciliationWorker,
+        embedding::EmbeddingCycle,
+        extraction::ExtractionCycle,
+        signals::DailyReviewSignalCycle,
     },
 };
 
@@ -90,8 +91,10 @@ fn spawn_embedding_worker(
         let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
         let index = SqliteEmbeddingRepository::new(pool.clone());
         let backfill_service = EmbeddingBackfillService::new(index, embedder);
-        let worker =
-            EmbeddingReconciliationWorker::new(backfill_service, config.embedding_worker.clone());
+        let worker = ReconciliationWorker::new(
+            EmbeddingCycle::new(backfill_service),
+            config.embedding_worker.clone(),
+        );
         tokio::spawn(async move { worker.run_forever().await });
     }
 
@@ -112,8 +115,8 @@ fn spawn_daily_review_embedding_worker(
                 pool.clone(),
             );
         let backfill_service = EmbeddingBackfillService::new(index, embedder);
-        let worker = EmbeddingReconciliationWorker::new(
-            backfill_service,
+        let worker = ReconciliationWorker::new(
+            EmbeddingCycle::new(backfill_service),
             config.daily_review_embedding_worker.clone(),
         );
         tokio::spawn(async move { worker.run_forever().await });
@@ -149,7 +152,10 @@ fn spawn_extraction_worker(
     let repository = JournalEntryExtractionRepository::new(pool.clone());
     let runner = JournalEntryExtractionService::new(repository.clone(), generator);
     let backfill = ExtractionBackfillService::new(repository, runner);
-    let worker = ExtractionReconciliationWorker::new(backfill, config.extraction_worker.clone());
+    let worker = ReconciliationWorker::new(
+        ExtractionCycle::new(backfill),
+        config.extraction_worker.clone(),
+    );
     tokio::spawn(async move { worker.run_forever().await });
 
     Ok(())
@@ -199,7 +205,10 @@ fn spawn_signal_worker(
         DailyReviewSignalRepository::new(pool.clone()),
         service,
     );
-    let worker = DailyReviewSignalReconciliationWorker::new(backfill, config.signal_worker.clone());
+    let worker = ReconciliationWorker::new(
+        DailyReviewSignalCycle::new(backfill),
+        config.signal_worker.clone(),
+    );
     tokio::spawn(async move { worker.run_forever().await });
 
     Ok(())

@@ -1,68 +1,70 @@
-use tracing::{error, info};
+use tracing::info;
 
-use crate::journal::embedding::{
-    BackfillResult, Embedder, EmbeddingBackfillError, EmbeddingBackfillService, EmbeddingIndex,
-    EmbeddingWorkerConfig,
+use crate::{
+    journal::embedding::{
+        BackfillResult, Embedder, EmbeddingBackfillError, EmbeddingBackfillService, EmbeddingIndex,
+    },
+    workers::{
+        ReconciliationWorker, config::ReconciliationWorkerConfig,
+        reconciliation::ReconciliationCycle,
+    },
 };
 
-pub struct EmbeddingReconciliationWorker<ID, I, E> {
+pub struct EmbeddingCycle<ID, I, E> {
     backfill_service: EmbeddingBackfillService<ID, I, E>,
-    config: EmbeddingWorkerConfig,
 }
 
-impl<ID, I, E> EmbeddingReconciliationWorker<ID, I, E>
+impl<ID, I, E> EmbeddingCycle<ID, I, E> {
+    pub fn new(backfill_service: EmbeddingBackfillService<ID, I, E>) -> Self {
+        Self { backfill_service }
+    }
+}
+
+impl<ID, I, E> ReconciliationCycle for EmbeddingCycle<ID, I, E>
 where
-    I: EmbeddingIndex<ID>,
-    E: Embedder,
-    ID: Send + Sync + Copy,
+    I: EmbeddingIndex<ID> + Send + Sync + 'static,
+    E: Embedder + Send + Sync + 'static,
+    ID: Send + Sync + Copy + 'static,
 {
-    pub fn new(
-        backfill_service: EmbeddingBackfillService<ID, I, E>,
-        config: EmbeddingWorkerConfig,
-    ) -> Self {
-        Self {
-            backfill_service,
-            config,
-        }
+    type Outcome = BackfillResult;
+    type Error = EmbeddingBackfillError;
+
+    fn worker_label(&self) -> &'static str {
+        "embedding"
     }
 
-    pub async fn run_once(&self) -> Result<BackfillResult, EmbeddingBackfillError> {
-        self.backfill_service
-            .backfill_missing_or_failed_embeddings(self.config.batch_size)
-            .await
-    }
-
-    pub async fn run_forever(self) {
+    fn log_startup(&self, config: &ReconciliationWorkerConfig) {
         info!(
-            enabled = self.config.enabled,
+            enabled = config.enabled,
             model = self.backfill_service.model(),
             dimensions = self.backfill_service.dimensions(),
-            batch_size = self.config.batch_size,
-            interval_seconds = self.config.interval.as_secs(),
-            "embedding reconciliation worker started"
+            batch_size = config.batch_size,
+            interval_seconds = config.interval.as_secs(),
+            "embedding reconciliation worker started",
         );
+    }
 
-        loop {
-            match self.run_once().await {
-                Ok(result) => {
-                    if result.attempted > 0 || result.created > 0 {
-                        info!(
-                            attempted = result.attempted,
-                            created = result.created,
-                            failed = result.failed,
-                            remaining = result.remaining,
-                            "embedding reconciliation cycle completed"
-                        );
-                    }
-                }
-                Err(err) => {
-                    error!(error = %err, "embedding reconciliation cycle failed");
-                }
-            }
-            tokio::time::sleep(self.config.interval).await;
+    fn log_cycle_complete(&self, outcome: &Self::Outcome) {
+        if outcome.attempted == 0 {
+            return;
         }
+        info!(
+            attempted = outcome.attempted,
+            created = outcome.created,
+            failed = outcome.failed,
+            remaining = outcome.remaining,
+            "embedding reconciliation cycle completed",
+        );
+    }
+
+    async fn run_once(&self, batch_size: u32) -> Result<Self::Outcome, Self::Error> {
+        self.backfill_service
+            .backfill_missing_or_failed_embeddings(batch_size)
+            .await
     }
 }
+
+pub type EmbeddingReconciliationWorker<ID, I, E> = ReconciliationWorker<EmbeddingCycle<ID, I, E>>;
 
 #[cfg(test)]
 mod tests {
@@ -71,12 +73,13 @@ mod tests {
         database,
         journal::{
             embedding::{
-                EmbedderError, Embedding, EmbeddingBackfillService, EmbeddingWorkerConfig,
-                SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
+                EmbedderError, Embedding, EmbeddingBackfillService, SUPPORTED_EMBEDDING_DIMENSIONS,
+                SqliteEmbeddingRepository,
             },
             repository::JournalRepository,
         },
         messages::{IncomingMessage, MessageSource},
+        workers::ReconciliationWorker,
     };
     use async_trait::async_trait;
     use chrono::{TimeZone, Utc};
@@ -164,9 +167,9 @@ mod tests {
         batch_size: u32,
     ) -> EmbeddingReconciliationWorker<i64, SqliteEmbeddingRepository, FakeEmbedder> {
         let backfill_service = EmbeddingBackfillService::new(embedding_repository, FakeEmbedder);
-        EmbeddingReconciliationWorker::new(
-            backfill_service,
-            EmbeddingWorkerConfig {
+        ReconciliationWorker::new(
+            EmbeddingCycle::new(backfill_service),
+            ReconciliationWorkerConfig {
                 enabled: true,
                 batch_size,
                 interval: Duration::from_secs(300),

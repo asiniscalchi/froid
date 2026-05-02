@@ -6,7 +6,6 @@ pub(crate) mod service;
 pub(crate) mod types;
 pub(crate) mod validation;
 pub(crate) mod wiring;
-pub(crate) mod worker_config;
 
 use chrono::{DateTime, Utc};
 
@@ -18,7 +17,6 @@ pub use generator::{
 pub use prompt::{JournalEntryExtractionPrompt, JournalEntryExtractionPromptConfig};
 pub use types::{BehaviorValence, JournalEntryExtractionResult, NeedStatus, PatternExtraction};
 pub use wiring::{JournalEntryExtractionRuntimeConfig, configure_journal_entry_extraction};
-pub use worker_config::{ExtractionWorkerConfig, ExtractionWorkerConfigError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryExtractionCandidate {

@@ -1,65 +1,68 @@
-use tracing::{error, info};
+use tracing::info;
 
-use crate::journal::extraction::{
-    ExtractionBackfillError, ExtractionBackfillResult, ExtractionBackfillService,
-    ExtractionWorkerConfig, service::JournalEntryExtractionRunner,
+use crate::{
+    journal::extraction::{
+        ExtractionBackfillError, ExtractionBackfillResult, ExtractionBackfillService,
+        service::JournalEntryExtractionRunner,
+    },
+    workers::{
+        ReconciliationWorker, config::ReconciliationWorkerConfig,
+        reconciliation::ReconciliationCycle,
+    },
 };
 
-pub struct ExtractionReconciliationWorker<R> {
+pub struct ExtractionCycle<R> {
     backfill_service: ExtractionBackfillService<R>,
-    config: ExtractionWorkerConfig,
 }
 
-impl<R> ExtractionReconciliationWorker<R>
+impl<R> ExtractionCycle<R> {
+    pub fn new(backfill_service: ExtractionBackfillService<R>) -> Self {
+        Self { backfill_service }
+    }
+}
+
+impl<R> ReconciliationCycle for ExtractionCycle<R>
 where
-    R: JournalEntryExtractionRunner,
+    R: JournalEntryExtractionRunner + Send + Sync + 'static,
 {
-    pub fn new(
-        backfill_service: ExtractionBackfillService<R>,
-        config: ExtractionWorkerConfig,
-    ) -> Self {
-        Self {
-            backfill_service,
-            config,
-        }
+    type Outcome = ExtractionBackfillResult;
+    type Error = ExtractionBackfillError;
+
+    fn worker_label(&self) -> &'static str {
+        "extraction"
     }
 
-    pub async fn run_once(&self) -> Result<ExtractionBackfillResult, ExtractionBackfillError> {
-        self.backfill_service
-            .backfill_missing_or_failed_extractions(self.config.batch_size)
-            .await
-    }
-
-    pub async fn run_forever(self) {
+    fn log_startup(&self, config: &ReconciliationWorkerConfig) {
         info!(
-            enabled = self.config.enabled,
+            enabled = config.enabled,
             model = self.backfill_service.model(),
             prompt_version = self.backfill_service.prompt_version(),
-            batch_size = self.config.batch_size,
-            interval_seconds = self.config.interval.as_secs(),
-            "extraction reconciliation worker started"
+            batch_size = config.batch_size,
+            interval_seconds = config.interval.as_secs(),
+            "extraction reconciliation worker started",
         );
+    }
 
-        loop {
-            match self.run_once().await {
-                Ok(result) => {
-                    if result.attempted > 0 || result.errored > 0 {
-                        info!(
-                            attempted = result.attempted,
-                            errored = result.errored,
-                            remaining = result.remaining,
-                            "extraction reconciliation cycle completed"
-                        );
-                    }
-                }
-                Err(err) => {
-                    error!(error = %err, "extraction reconciliation cycle failed");
-                }
-            }
-            tokio::time::sleep(self.config.interval).await;
+    fn log_cycle_complete(&self, outcome: &Self::Outcome) {
+        if outcome.attempted == 0 {
+            return;
         }
+        info!(
+            attempted = outcome.attempted,
+            errored = outcome.errored,
+            remaining = outcome.remaining,
+            "extraction reconciliation cycle completed",
+        );
+    }
+
+    async fn run_once(&self, batch_size: u32) -> Result<Self::Outcome, Self::Error> {
+        self.backfill_service
+            .backfill_missing_or_failed_extractions(batch_size)
+            .await
     }
 }
+
+pub type ExtractionReconciliationWorker<R> = ReconciliationWorker<ExtractionCycle<R>>;
 
 #[cfg(test)]
 mod tests {
@@ -73,13 +76,13 @@ mod tests {
         database,
         journal::{
             extraction::{
-                ExtractionWorkerConfig,
                 repository::JournalEntryExtractionRepository,
                 service::{JournalEntryExtractionRunner, JournalEntryExtractionServiceError},
             },
             repository::JournalRepository,
         },
         messages::{IncomingMessage, MessageSource},
+        workers::ReconciliationWorker,
     };
 
     async fn setup() -> (JournalRepository, JournalEntryExtractionRepository) {
@@ -137,9 +140,9 @@ mod tests {
         batch_size: u32,
     ) -> ExtractionReconciliationWorker<FakeRunner> {
         let backfill = ExtractionBackfillService::new(extraction_repo, FakeRunner);
-        ExtractionReconciliationWorker::new(
-            backfill,
-            ExtractionWorkerConfig {
+        ReconciliationWorker::new(
+            ExtractionCycle::new(backfill),
+            ReconciliationWorkerConfig {
                 enabled: true,
                 batch_size,
                 interval: Duration::from_secs(300),
