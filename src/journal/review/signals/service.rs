@@ -167,7 +167,9 @@ impl DailyReviewSignalService {
                     error = %message,
                     "signal generation failed"
                 );
-                self.daily_reviews.mark_signals_failed(review.id, &message).await?;
+                self.daily_reviews
+                    .mark_signals_failed(review.id, &message)
+                    .await?;
                 return Ok(DailyReviewSignalResult::GenerationFailed { error: message });
             }
         };
@@ -211,7 +213,9 @@ impl DailyReviewSignalService {
             }
             Err(error) => {
                 let message = error.to_string();
-                self.daily_reviews.mark_signals_failed(review.id, &message).await?;
+                self.daily_reviews
+                    .mark_signals_failed(review.id, &message)
+                    .await?;
                 Err(DailyReviewSignalServiceError::Storage(message))
             }
         }

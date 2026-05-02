@@ -286,14 +286,18 @@ mod tests {
     use crate::{
         database,
         journal::{
-            extraction::{NeedStatus},
+            extraction::NeedStatus,
             review::repository::DailyReviewRepository,
             review::signals::types::{DailyReviewSignalCandidate, SignalType},
         },
         messages::{IncomingMessage, MessageSource},
     };
 
-    async fn setup() -> (DailyReviewSignalRepository, DailyReviewRepository, SqlitePool) {
+    async fn setup() -> (
+        DailyReviewSignalRepository,
+        DailyReviewRepository,
+        SqlitePool,
+    ) {
         database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
@@ -412,7 +416,10 @@ mod tests {
         let (repo, reviews, pool) = setup().await;
         let review_id = insert_daily_review(&pool).await;
 
-        reviews.mark_signals_pending(review_id, "model", "v1").await.unwrap();
+        reviews
+            .mark_signals_pending(review_id, "model", "v1")
+            .await
+            .unwrap();
 
         let candidates = repo
             .find_completed_reviews_missing_signals(10)
@@ -426,7 +433,10 @@ mod tests {
         let (repo, reviews, pool) = setup().await;
         let review_id = insert_daily_review(&pool).await;
 
-        reviews.mark_signals_failed(review_id, "error").await.unwrap();
+        reviews
+            .mark_signals_failed(review_id, "error")
+            .await
+            .unwrap();
 
         let candidates = repo
             .find_completed_reviews_missing_signals(10)

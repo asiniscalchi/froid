@@ -24,7 +24,10 @@ impl fmt::Display for DailyReviewRepositoryError {
                 write!(f, "invalid daily review status stored in database: {value}")
             }
             Self::InvalidSignalStatus(value) => {
-                write!(f, "invalid signal generation status stored in database: {value}")
+                write!(
+                    f,
+                    "invalid signal generation status stored in database: {value}"
+                )
             }
         }
     }

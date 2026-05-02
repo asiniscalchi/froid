@@ -77,7 +77,7 @@ mod tests {
                 signals::{
                     backfill::DailyReviewSignalBackfillService,
                     generator::fake::FakeSignalGenerator,
-                    repository::{DailyReviewSignalRepository},
+                    repository::DailyReviewSignalRepository,
                     service::DailyReviewSignalService,
                     types::{DailyReviewSignalCandidate, DailyReviewSignalsOutput, SignalType},
                     worker_config::DailyReviewSignalWorkerConfig,
