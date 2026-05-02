@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
-use std::{mem::size_of_val};
+use std::{fmt};
 
 use crate::journal::embedding::{
     Embedding, EmbeddingCandidate, EmbeddingIndex, EmbeddingRepositoryError, EmbeddingSearchResult,
@@ -91,7 +91,7 @@ impl SqliteDailyReviewEmbeddingRepository {
             "#,
         )
         .bind(result.last_insert_rowid())
-        .bind(embedding_to_blob(embedding))
+        .bind(embedding.to_blob())
         .execute(&mut *tx)
         .await?;
 
@@ -177,7 +177,7 @@ impl SqliteDailyReviewEmbeddingRepository {
             LIMIT ?
             "#,
         )
-        .bind(embedding_to_blob(embedding))
+        .bind(embedding.to_blob())
         .bind(embedding_model)
         .bind(user_id)
         .bind(limit as i64)
@@ -259,16 +259,6 @@ impl EmbeddingIndex<i64> for SqliteDailyReviewEmbeddingRepository {
             .await
             .map_err(Into::into)
     }
-}
-
-fn embedding_to_blob(embedding: &Embedding) -> Vec<u8> {
-    let mut blob = Vec::with_capacity(size_of_val(embedding.values()));
-
-    for value in embedding.values() {
-        blob.extend_from_slice(&value.to_le_bytes());
-    }
-
-    blob
 }
 
 #[cfg(test)]

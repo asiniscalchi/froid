@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, mem::size_of_val};
+use std::{error::Error, fmt};
 
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
@@ -170,7 +170,7 @@ impl SqliteEmbeddingRepository {
             "#,
         )
         .bind(result.last_insert_rowid())
-        .bind(embedding_to_blob(embedding))
+        .bind(embedding.to_blob())
         .execute(&mut *tx)
         .await?;
 
@@ -299,7 +299,7 @@ impl SqliteEmbeddingRepository {
             LIMIT ?
             "#,
         )
-        .bind(embedding_to_blob(embedding))
+        .bind(embedding.to_blob())
         .bind(embedding_model)
         .bind(limit as i64)
         .fetch_all(&self.pool)
@@ -329,7 +329,7 @@ impl SqliteEmbeddingRepository {
             LIMIT ?
             "#,
         )
-        .bind(embedding_to_blob(embedding))
+        .bind(embedding.to_blob())
         .bind(embedding_model)
         .bind(user_id)
         .bind(limit as i64)
@@ -371,11 +371,7 @@ impl SqliteEmbeddingRepository {
                 id: row.get("journal_entry_id"),
                 embedding_model: row.get("embedding_model"),
                 embedding_dim: row.get("embedding_dim"),
-                embedding: Embedding::new(
-                    blob_to_embedding_values(&row.get::<Vec<u8>, _>("embedding")),
-                    row.get::<i64, _>("embedding_dim") as usize,
-                )
-                .map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
+                embedding: Embedding::from_blob(&row.get::<Vec<u8>, _>("embedding")),
             })
         })
         .transpose()
@@ -489,23 +485,6 @@ pub(crate) struct StoredEmbedding {
     pub(crate) embedding_model: String,
     pub(crate) embedding_dim: i64,
     pub(crate) embedding: Embedding,
-}
-
-fn embedding_to_blob(embedding: &Embedding) -> Vec<u8> {
-    let mut blob = Vec::with_capacity(size_of_val(embedding.values()));
-
-    for value in embedding.values() {
-        blob.extend_from_slice(&value.to_le_bytes());
-    }
-
-    blob
-}
-
-#[cfg(test)]
-fn blob_to_embedding_values(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(std::mem::size_of::<f32>())
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
-        .collect()
 }
 
 #[cfg(test)]
