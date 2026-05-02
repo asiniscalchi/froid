@@ -122,6 +122,67 @@ impl DailyReviewSignalRepository {
         rows.into_iter().map(row_to_signal).collect()
     }
 
+    pub async fn find_completed_reviews_missing_signals(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<(i64, String, NaiveDate)>, DailyReviewSignalRepositoryError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT dr.id, dr.user_id, dr.review_date
+            FROM daily_reviews dr
+            WHERE dr.status = 'completed'
+              AND dr.review_text IS NOT NULL
+              AND dr.review_text != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM daily_review_signal_jobs j
+                  WHERE j.daily_review_id = dr.id AND j.status = 'completed'
+              )
+            ORDER BY dr.review_date ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let review_date_str = row.get::<String, _>("review_date");
+                let review_date =
+                    NaiveDate::parse_from_str(&review_date_str, "%Y-%m-%d").map_err(|_| {
+                        DailyReviewSignalRepositoryError::InvalidReviewDate(review_date_str)
+                    })?;
+                Ok((
+                    row.get::<i64, _>("id"),
+                    row.get::<String, _>("user_id"),
+                    review_date,
+                ))
+            })
+            .collect()
+    }
+
+    pub async fn count_completed_reviews_missing_signals(
+        &self,
+    ) -> Result<u32, DailyReviewSignalRepositoryError> {
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM daily_reviews dr
+            WHERE dr.status = 'completed'
+              AND dr.review_text IS NOT NULL
+              AND dr.review_text != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM daily_review_signal_jobs j
+                  WHERE j.daily_review_id = dr.id AND j.status = 'completed'
+              )
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count as u32)
+    }
+
     pub async fn find_by_user_and_date(
         &self,
         user_id: &str,
@@ -148,8 +209,9 @@ impl DailyReviewSignalRepository {
 
 fn row_to_signal(row: SqliteRow) -> Result<DailyReviewSignal, DailyReviewSignalRepositoryError> {
     let signal_type_str = row.get::<String, _>("signal_type");
-    let signal_type = SignalType::from_str(&signal_type_str)
-        .ok_or(DailyReviewSignalRepositoryError::InvalidSignalType(signal_type_str))?;
+    let signal_type = SignalType::from_str(&signal_type_str).ok_or(
+        DailyReviewSignalRepositoryError::InvalidSignalType(signal_type_str),
+    )?;
 
     let review_date_str = row.get::<String, _>("review_date");
     let review_date = NaiveDate::parse_from_str(&review_date_str, "%Y-%m-%d")
@@ -707,5 +769,79 @@ mod tests {
         // Allow tiny floating-point tolerance from SQLite REAL
         assert!((stored[0].strength - 0.85).abs() < 1e-5);
         assert!((stored[0].confidence - 0.88).abs() < 1e-5);
+    }
+
+    #[tokio::test]
+    async fn find_completed_reviews_missing_signals_returns_reviews_without_completed_job() {
+        let (repo, jobs, pool) = setup().await;
+        let review_id = insert_daily_review(&pool).await;
+
+        let candidates = repo
+            .find_completed_reviews_missing_signals(10)
+            .await
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].0, review_id);
+        assert_eq!(candidates[0].1, "user-1");
+        assert_eq!(candidates[0].2, date());
+
+        let job = jobs.insert_pending(review_id).await.unwrap();
+        jobs.mark_completed(job.id).await.unwrap();
+
+        let candidates_after = repo
+            .find_completed_reviews_missing_signals(10)
+            .await
+            .unwrap();
+        assert!(candidates_after.is_empty());
+    }
+
+    #[tokio::test]
+    async fn count_completed_reviews_missing_signals_matches_find() {
+        let (repo, _jobs, pool) = setup().await;
+        insert_daily_review(&pool).await;
+
+        let count = repo
+            .count_completed_reviews_missing_signals()
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn find_completed_reviews_missing_signals_respects_limit() {
+        let (repo, _jobs, pool) = setup().await;
+
+        // Insert a second review with a distinct date/message_id
+        let user_id = "user-1";
+        let msg2 = crate::messages::IncomingMessage {
+            source: crate::messages::MessageSource::Telegram,
+            source_conversation_id: "42".to_string(),
+            source_message_id: "2".to_string(),
+            user_id: user_id.to_string(),
+            text: "entry two".to_string(),
+            received_at: chrono::Utc::now(),
+        };
+        crate::journal::repository::JournalRepository::new(pool.clone())
+            .store(&msg2)
+            .await
+            .unwrap();
+        let review_repo =
+            crate::journal::review::repository::DailyReviewRepository::new(pool.clone());
+        review_repo
+            .upsert_completed(
+                user_id,
+                NaiveDate::from_ymd_opt(2026, 4, 29).unwrap(),
+                "review two",
+                "model",
+                "v1",
+            )
+            .await
+            .unwrap();
+
+        let candidates = repo
+            .find_completed_reviews_missing_signals(1)
+            .await
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
     }
 }
