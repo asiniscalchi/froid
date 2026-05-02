@@ -158,6 +158,33 @@ mod tests {
 
     use super::*;
 
+    fn default_cli() -> Cli {
+        Cli {
+            telegram_bot_token: None,
+            data_dir: "data".to_string(),
+            database_file: "froid.sqlite3".to_string(),
+            embedding_worker_enabled: None,
+            embedding_worker_batch_size: None,
+            embedding_worker_interval_seconds: None,
+            extraction_worker_enabled: None,
+            extraction_worker_batch_size: None,
+            extraction_worker_interval_seconds: None,
+            daily_review_delivery_enabled: None,
+            daily_review_delivery_interval_seconds: None,
+            signal_worker_enabled: None,
+            signal_worker_batch_size: None,
+            signal_worker_interval_seconds: None,
+            command: None,
+        }
+    }
+
+    fn cli_with_token(token: &str) -> Cli {
+        Cli {
+            telegram_bot_token: Some(token.to_string()),
+            ..default_cli()
+        }
+    }
+
     #[test]
     fn parses_serve_config_from_cli_flags() {
         let cli = Cli::parse_from([
@@ -190,48 +217,12 @@ mod tests {
 
     #[test]
     fn defaults_to_serve_command() {
-        let cli = Cli {
-            telegram_bot_token: None,
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
-        };
-
-        assert!(matches!(cli.selected_command(), Command::Serve));
+        assert!(matches!(default_cli().selected_command(), Command::Serve));
     }
 
     #[test]
     fn rejects_missing_telegram_bot_token() {
-        let cli = Cli {
-            telegram_bot_token: None,
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
-        };
-
-        let error = cli.serve_config().unwrap_err();
+        let error = default_cli().serve_config().unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
         assert!(
@@ -243,25 +234,12 @@ mod tests {
 
     #[test]
     fn rejects_empty_telegram_bot_token() {
-        let cli = Cli {
+        let error = Cli {
             telegram_bot_token: Some("  ".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
-        };
-
-        let error = cli.serve_config().unwrap_err();
+            ..default_cli()
+        }
+        .serve_config()
+        .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
         assert!(error.to_string().contains("must not be empty"));
@@ -275,26 +253,6 @@ mod tests {
     #[test]
     fn command_version_uses_build_version() {
         assert_eq!(Cli::command().get_version(), Some(version::VERSION));
-    }
-
-    fn cli_with_token(token: &str) -> Cli {
-        Cli {
-            telegram_bot_token: Some(token.to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
-        }
     }
 
     #[test]
@@ -319,20 +277,8 @@ mod tests {
     fn serve_config_worker_enabled_when_set_to_true() {
         let config = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: Some("true".to_string()),
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap();
@@ -344,20 +290,8 @@ mod tests {
     fn serve_config_rejects_zero_batch_size() {
         let error = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
             embedding_worker_batch_size: Some("0".to_string()),
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap_err();
@@ -374,20 +308,8 @@ mod tests {
     fn serve_config_rejects_zero_interval() {
         let error = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
             embedding_worker_interval_seconds: Some("0".to_string()),
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap_err();
@@ -421,20 +343,8 @@ mod tests {
     fn serve_config_daily_review_delivery_enabled_when_set_to_true() {
         let config = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: Some("true".to_string()),
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap();
@@ -446,20 +356,8 @@ mod tests {
     fn serve_config_rejects_zero_daily_review_delivery_interval() {
         let error = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
             daily_review_delivery_interval_seconds: Some("0".to_string()),
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap_err();
@@ -494,20 +392,8 @@ mod tests {
     fn serve_config_extraction_worker_enabled_when_set_to_true() {
         let config = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
             extraction_worker_enabled: Some("true".to_string()),
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap();
@@ -519,20 +405,8 @@ mod tests {
     fn serve_config_rejects_zero_extraction_worker_batch_size() {
         let error = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
             extraction_worker_batch_size: Some("0".to_string()),
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap_err();
@@ -549,20 +423,8 @@ mod tests {
     fn serve_config_rejects_zero_extraction_worker_interval() {
         let error = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
             extraction_worker_interval_seconds: Some("0".to_string()),
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap_err();
@@ -597,20 +459,8 @@ mod tests {
     fn serve_config_signal_worker_enabled_when_set_to_true() {
         let config = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
             signal_worker_enabled: Some("true".to_string()),
-            signal_worker_batch_size: None,
-            signal_worker_interval_seconds: None,
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap();
@@ -622,20 +472,8 @@ mod tests {
     fn serve_config_rejects_zero_signal_worker_batch_size() {
         let error = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
             signal_worker_batch_size: Some("0".to_string()),
-            signal_worker_interval_seconds: None,
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap_err();
@@ -648,20 +486,8 @@ mod tests {
     fn serve_config_rejects_zero_signal_worker_interval() {
         let error = Cli {
             telegram_bot_token: Some("token".to_string()),
-            data_dir: "data".to_string(),
-            database_file: "froid.sqlite3".to_string(),
-            embedding_worker_enabled: None,
-            embedding_worker_batch_size: None,
-            embedding_worker_interval_seconds: None,
-            extraction_worker_enabled: None,
-            extraction_worker_batch_size: None,
-            extraction_worker_interval_seconds: None,
-            daily_review_delivery_enabled: None,
-            daily_review_delivery_interval_seconds: None,
-            signal_worker_enabled: None,
-            signal_worker_batch_size: None,
             signal_worker_interval_seconds: Some("0".to_string()),
-            command: None,
+            ..default_cli()
         }
         .serve_config()
         .unwrap_err();
