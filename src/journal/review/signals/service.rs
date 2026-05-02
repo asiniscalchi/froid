@@ -11,10 +11,7 @@ use crate::journal::{
         repository::DailyReviewRepository,
         signals::{
             generator::DailyReviewSignalGenerator,
-            repository::{
-                DailyReviewSignalJobRepository, DailyReviewSignalRepository,
-                DailyReviewSignalRepositoryError,
-            },
+            repository::{DailyReviewSignalRepository, DailyReviewSignalRepositoryError},
             types::DailyReviewSignal,
             validation::validate_signal,
         },
@@ -90,7 +87,6 @@ pub struct DailyReviewSignalService {
     journal_entries: JournalRepository,
     extractions: JournalEntryExtractionRepository,
     signals: DailyReviewSignalRepository,
-    jobs: DailyReviewSignalJobRepository,
     generator: Arc<dyn DailyReviewSignalGenerator>,
 }
 
@@ -100,7 +96,6 @@ impl DailyReviewSignalService {
         journal_entries: JournalRepository,
         extractions: JournalEntryExtractionRepository,
         signals: DailyReviewSignalRepository,
-        jobs: DailyReviewSignalJobRepository,
         generator: G,
     ) -> Self
     where
@@ -111,7 +106,6 @@ impl DailyReviewSignalService {
             journal_entries,
             extractions,
             signals,
-            jobs,
             generator: Arc::new(generator),
         }
     }
@@ -147,11 +141,9 @@ impl DailyReviewSignalService {
             _ => return Ok(DailyReviewSignalResult::NoDailyReview),
         };
 
-        let job = self.jobs.insert_pending(review.id).await?;
-
-        self.jobs
-            .mark_started(
-                job.id,
+        self.daily_reviews
+            .mark_signals_pending(
+                review.id,
                 self.generator.model(),
                 self.generator.prompt_version(),
             )
@@ -175,7 +167,9 @@ impl DailyReviewSignalService {
                     error = %message,
                     "signal generation failed"
                 );
-                self.jobs.mark_failed(job.id, &message).await?;
+                self.daily_reviews
+                    .mark_signals_failed(review.id, &message)
+                    .await?;
                 return Ok(DailyReviewSignalResult::GenerationFailed { error: message });
             }
         };
@@ -209,7 +203,7 @@ impl DailyReviewSignalService {
 
         match stored {
             Ok(signals) => {
-                self.jobs.mark_completed(job.id).await?;
+                self.daily_reviews.mark_signals_completed(review.id).await?;
                 let count = signals.len();
                 info!(
                     daily_review_id = review.id,
@@ -219,7 +213,9 @@ impl DailyReviewSignalService {
             }
             Err(error) => {
                 let message = error.to_string();
-                self.jobs.mark_failed(job.id, &message).await?;
+                self.daily_reviews
+                    .mark_signals_failed(review.id, &message)
+                    .await?;
                 Err(DailyReviewSignalServiceError::Storage(message))
             }
         }
@@ -283,7 +279,7 @@ mod tests {
                 repository::DailyReviewRepository,
                 signals::{
                     generator::fake::FakeSignalGenerator,
-                    repository::{DailyReviewSignalJobRepository, DailyReviewSignalRepository},
+                    repository::DailyReviewSignalRepository,
                     types::{DailyReviewSignalCandidate, DailyReviewSignalsOutput, SignalType},
                 },
             },
@@ -309,13 +305,11 @@ mod tests {
                 pool.clone(),
             );
         let signals = DailyReviewSignalRepository::new(pool.clone());
-        let jobs = DailyReviewSignalJobRepository::new(pool.clone());
         let service = DailyReviewSignalService::new(
             daily_reviews.clone(),
             journal_entries.clone(),
             extractions,
             signals,
-            jobs,
             generator,
         );
         (service, daily_reviews, journal_entries)

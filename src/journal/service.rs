@@ -574,6 +574,11 @@ mod tests {
             error_message: None,
             delivered_at: None,
             delivery_error: None,
+            signals_status: None,
+            signals_error: None,
+            signals_model: None,
+            signals_prompt_version: None,
+            signals_updated_at: None,
             created_at: at(10, 0),
             updated_at: at(10, 0),
         }

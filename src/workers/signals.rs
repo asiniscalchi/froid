@@ -28,7 +28,7 @@ impl DailyReviewSignalReconciliationWorker {
         &self,
     ) -> Result<DailyReviewSignalBackfillResult, DailyReviewSignalBackfillError> {
         self.backfill_service
-            .backfill_missing_signal_jobs(self.config.batch_size)
+            .backfill_missing_signals(self.config.batch_size)
             .await
     }
 
@@ -77,7 +77,7 @@ mod tests {
                 signals::{
                     backfill::DailyReviewSignalBackfillService,
                     generator::fake::FakeSignalGenerator,
-                    repository::{DailyReviewSignalJobRepository, DailyReviewSignalRepository},
+                    repository::DailyReviewSignalRepository,
                     service::DailyReviewSignalService,
                     types::{DailyReviewSignalCandidate, DailyReviewSignalsOutput, SignalType},
                     worker_config::DailyReviewSignalWorkerConfig,
@@ -102,13 +102,11 @@ mod tests {
         let journal_entries = JournalRepository::new(pool.clone());
         let extractions = JournalEntryExtractionRepository::new(pool.clone());
         let signals = DailyReviewSignalRepository::new(pool.clone());
-        let jobs = DailyReviewSignalJobRepository::new(pool.clone());
         let service = DailyReviewSignalService::new(
             daily_reviews.clone(),
             journal_entries.clone(),
             extractions,
             signals.clone(),
-            jobs,
             generator,
         );
         let backfill = DailyReviewSignalBackfillService::new(signals, service);

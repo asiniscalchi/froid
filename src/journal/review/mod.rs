@@ -35,12 +35,24 @@ pub struct DailyReview {
     pub error_message: Option<String>,
     pub delivered_at: Option<DateTime<Utc>>,
     pub delivery_error: Option<String>,
+    pub signals_status: Option<SignalGenerationStatus>,
+    pub signals_error: Option<String>,
+    pub signals_model: Option<String>,
+    pub signals_prompt_version: Option<String>,
+    pub signals_updated_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DailyReviewStatus {
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignalGenerationStatus {
+    Pending,
     Completed,
     Failed,
 }
