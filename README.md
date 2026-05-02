@@ -11,88 +11,32 @@ Send a message to your Telegram bot. Froid stores it immediately and returns a c
 
 At the end of the day, a review worker synthesises all of that day's raw notes and their structured extractions into a concise reflection delivered via Telegram.
 
-## Requirements
+## Running with Docker
 
-- Rust (edition 2024)
-- SQLite 3 + development libraries (`libsqlite3-dev` on Debian/Ubuntu)
-- A Telegram bot token
-- An OpenAI API key (only required if embedding or extraction workers are enabled)
+A pre-built image is published to the GitHub Container Registry on every push to `main`.
 
-## Getting started
+Create an `.env` file:
 
-```bash
-# Clone the repo
-git clone https://github.com/asiniscalchi/froid.git
-cd froid
+```env
+TELEGRAM_BOT_TOKEN=your-token-here
+OPENAI_API_KEY=your-key-here        # required if enabling workers
 
-# Configure environment
-cp .env.example .env
-# Fill in TELEGRAM_BOT_TOKEN (and OPENAI_API_KEY if enabling workers)
-
-# Run
-cargo run -- serve
+FROID_EMBEDDING_WORKER_ENABLED=true
+FROID_EXTRACTION_WORKER_ENABLED=true
+FROID_DAILY_REVIEW_DELIVERY_ENABLED=true
 ```
 
-Database migrations are applied automatically on startup.
-
-## Configuration
-
-All runtime configuration is read from environment variables (or a `.env` file in the working directory). CLI flags mirror the same names.
-
-| Variable | Default | Description |
-|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | — | **Required.** Telegram bot credentials. |
-| `OPENAI_API_KEY` | — | Required when embedding or extraction workers are enabled. |
-| `DATA_DIR` | `data` | Directory for persistent data. |
-| `DATABASE_FILE` | `froid.sqlite3` | SQLite database path. |
-| `RUST_LOG` | `info` | Log level filter (e.g. `debug`, `froid=trace`). |
-| `FROID_EMBEDDING_WORKER_ENABLED` | `false` | Enable the embedding reconciliation worker. |
-| `FROID_EMBEDDING_WORKER_BATCH_SIZE` | `20` | Entries processed per cycle. |
-| `FROID_EMBEDDING_WORKER_INTERVAL_SECONDS` | `300` | Polling interval in seconds. |
-| `FROID_EXTRACTION_WORKER_ENABLED` | `false` | Enable the extraction reconciliation worker. |
-| `FROID_EXTRACTION_WORKER_BATCH_SIZE` | `20` | Entries processed per cycle. |
-| `FROID_EXTRACTION_WORKER_INTERVAL_SECONDS` | `300` | Polling interval in seconds. |
-| `FROID_DAILY_REVIEW_DELIVERY_ENABLED` | `false` | Enable the daily review delivery worker. |
-| `FROID_DAILY_REVIEW_DELIVERY_INTERVAL_SECONDS` | — | Polling interval in seconds. |
-
-## Docker
-
-A pre-built image is published to the GitHub Container Registry on every push to `main`:
+Then run:
 
 ```bash
-docker pull ghcr.io/asiniscalchi/froid:latest
+docker run --env-file .env -v ./data:/app/data ghcr.io/asiniscalchi/froid:latest serve
 ```
 
-To build locally:
+See the [project wiki](https://github.com/asiniscalchi/froid/wiki) for the full list of configuration options.
 
-```bash
-docker build --build-arg FROID_VERSION=$(git rev-parse --short HEAD) -t froid .
-docker run --env-file .env froid serve
-```
+## Contributing
 
-## Development
-
-```bash
-# Check formatting
-cargo fmt --all --check
-
-# Compile
-cargo check --locked --all-targets
-
-# Lint
-cargo clippy --locked --all-targets -- -D warnings
-
-# Test
-cargo test --locked --all-targets
-```
-
-All four checks must pass before pushing. They mirror the CI pipeline exactly.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for branch conventions, project structure, and architecture notes.
-
-## Documentation
-
-The [project wiki](https://github.com/asiniscalchi/froid/wiki) covers system design, the information model, database schema, the entry processing pipeline, and worker configuration.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, build instructions, and project conventions.
 
 ## License
 
