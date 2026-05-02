@@ -24,7 +24,10 @@ pub trait ReconciliationCycle: Send + 'static {
     /// Implementors typically suppress logs when nothing was attempted.
     fn log_cycle_complete(&self, outcome: &Self::Outcome);
 
-    fn run_once(&self) -> impl Future<Output = Result<Self::Outcome, Self::Error>> + Send;
+    fn run_once(
+        &self,
+        batch_size: u32,
+    ) -> impl Future<Output = Result<Self::Outcome, Self::Error>> + Send;
 }
 
 pub struct ReconciliationWorker<C> {
@@ -41,14 +44,14 @@ where
     }
 
     pub async fn run_once(&self) -> Result<C::Outcome, C::Error> {
-        self.cycle.run_once().await
+        self.cycle.run_once(self.config.batch_size).await
     }
 
     pub async fn run_forever(self) {
         self.cycle.log_startup(&self.config);
 
         loop {
-            match self.cycle.run_once().await {
+            match self.cycle.run_once(self.config.batch_size).await {
                 Ok(outcome) => self.cycle.log_cycle_complete(&outcome),
                 Err(err) => {
                     error!(
@@ -119,7 +122,7 @@ mod tests {
             self.cycle_logs.lock().unwrap().push(*outcome);
         }
 
-        async fn run_once(&self) -> Result<Self::Outcome, Self::Error> {
+        async fn run_once(&self, _batch_size: u32) -> Result<Self::Outcome, Self::Error> {
             Ok(self.run_count.fetch_add(1, Ordering::SeqCst) + 1)
         }
     }

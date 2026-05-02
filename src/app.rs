@@ -33,8 +33,9 @@ use crate::{
     },
     version,
     workers::{
+        ReconciliationWorker,
         daily_review::{DailyReviewDeliveryWorker, TelegramDailyReviewSender},
-        embedding::EmbeddingReconciliationWorker,
+        embedding::EmbeddingCycle,
         extraction::ExtractionReconciliationWorker,
         signals::DailyReviewSignalReconciliationWorker,
     },
@@ -90,8 +91,10 @@ fn spawn_embedding_worker(
         let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
         let index = SqliteEmbeddingRepository::new(pool.clone());
         let backfill_service = EmbeddingBackfillService::new(index, embedder);
-        let worker =
-            EmbeddingReconciliationWorker::new(backfill_service, config.embedding_worker.clone());
+        let worker = ReconciliationWorker::new(
+            EmbeddingCycle::new(backfill_service),
+            config.embedding_worker.clone(),
+        );
         tokio::spawn(async move { worker.run_forever().await });
     }
 
@@ -112,8 +115,8 @@ fn spawn_daily_review_embedding_worker(
                 pool.clone(),
             );
         let backfill_service = EmbeddingBackfillService::new(index, embedder);
-        let worker = EmbeddingReconciliationWorker::new(
-            backfill_service,
+        let worker = ReconciliationWorker::new(
+            EmbeddingCycle::new(backfill_service),
             config.daily_review_embedding_worker.clone(),
         );
         tokio::spawn(async move { worker.run_forever().await });
