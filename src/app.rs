@@ -183,7 +183,7 @@ fn spawn_daily_review_delivery_worker(
         TelegramDailyReviewSender::new(config.telegram_bot_token.clone()),
         config.daily_review_delivery.clone(),
     );
-    tokio::spawn(async move { worker.run_forever().await });
+    tokio::spawn(async move { worker.run_forever(CancellationToken::new()).await });
 
     Ok(true)
 }
