@@ -58,7 +58,7 @@ impl DailyReviewSignalBackfillService {
         self.service.prompt_version()
     }
 
-    pub async fn backfill_missing_signal_jobs(
+    pub async fn backfill_missing_signals(
         &self,
         limit: u32,
     ) -> Result<DailyReviewSignalBackfillResult, DailyReviewSignalBackfillError> {
@@ -159,7 +159,7 @@ mod tests {
                 repository::DailyReviewRepository,
                 signals::{
                     generator::fake::FakeSignalGenerator,
-                    repository::{DailyReviewSignalJobRepository, DailyReviewSignalRepository},
+                    repository::DailyReviewSignalRepository,
                     service::DailyReviewSignalService,
                     types::{DailyReviewSignalCandidate, DailyReviewSignalsOutput, SignalType},
                 },
@@ -184,13 +184,11 @@ mod tests {
         let journal_entries = JournalRepository::new(pool.clone());
         let extractions = JournalEntryExtractionRepository::new(pool.clone());
         let signals = DailyReviewSignalRepository::new(pool.clone());
-        let jobs = DailyReviewSignalJobRepository::new(pool.clone());
         let service = DailyReviewSignalService::new(
             daily_reviews.clone(),
             journal_entries.clone(),
             extractions,
             signals.clone(),
-            jobs,
             generator,
         );
         let backfill = DailyReviewSignalBackfillService::new(signals.clone(), service);
@@ -231,7 +229,7 @@ mod tests {
     async fn returns_zero_when_no_candidates() {
         let (backfill, _, _, _) = setup(FakeSignalGenerator::succeeding(theme_output())).await;
 
-        let result = backfill.backfill_missing_signal_jobs(10).await.unwrap();
+        let result = backfill.backfill_missing_signals(10).await.unwrap();
 
         assert_eq!(
             result,
@@ -244,7 +242,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn processes_completed_review_without_signal_job() {
+    async fn processes_completed_review_without_signals() {
         let generator = FakeSignalGenerator::succeeding(theme_output());
         let (backfill, reviews, entries, _) = setup(generator.clone()).await;
         store_entry(&entries, "1", "entry text").await;
@@ -253,7 +251,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = backfill.backfill_missing_signal_jobs(10).await.unwrap();
+        let result = backfill.backfill_missing_signals(10).await.unwrap();
 
         assert_eq!(result.attempted, 1);
         assert_eq!(result.errored, 0);
@@ -270,14 +268,14 @@ mod tests {
             .await
             .unwrap();
 
-        let result = backfill.backfill_missing_signal_jobs(10).await.unwrap();
+        let result = backfill.backfill_missing_signals(10).await.unwrap();
 
         assert_eq!(result.attempted, 1);
         assert_eq!(result.errored, 1);
     }
 
     #[tokio::test]
-    async fn does_not_reprocess_reviews_with_completed_job() {
+    async fn does_not_reprocess_reviews_with_completed_signals() {
         let generator = FakeSignalGenerator::succeeding(theme_output());
         let (backfill, reviews, entries, _) = setup(generator.clone()).await;
         store_entry(&entries, "1", "entry text").await;
@@ -286,8 +284,8 @@ mod tests {
             .await
             .unwrap();
 
-        backfill.backfill_missing_signal_jobs(10).await.unwrap();
-        let second = backfill.backfill_missing_signal_jobs(10).await.unwrap();
+        backfill.backfill_missing_signals(10).await.unwrap();
+        let second = backfill.backfill_missing_signals(10).await.unwrap();
 
         assert_eq!(second.attempted, 0);
         assert_eq!(generator.calls(), 1);

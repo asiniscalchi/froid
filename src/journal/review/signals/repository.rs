@@ -5,16 +5,12 @@ use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
 use crate::journal::extraction::{BehaviorValence, NeedStatus};
 
-use super::types::{
-    DailyReviewSignal, DailyReviewSignalCandidate, DailyReviewSignalJob, SignalJobStatus,
-    SignalType,
-};
+use super::types::{DailyReviewSignal, DailyReviewSignalCandidate, SignalType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DailyReviewSignalRepositoryError {
     Storage(String),
     InvalidSignalType(String),
-    InvalidSignalJobStatus(String),
     InvalidReviewDate(String),
 }
 
@@ -24,9 +20,6 @@ impl fmt::Display for DailyReviewSignalRepositoryError {
             Self::Storage(message) => write!(f, "{message}"),
             Self::InvalidSignalType(value) => {
                 write!(f, "invalid signal_type stored in database: {value}")
-            }
-            Self::InvalidSignalJobStatus(value) => {
-                write!(f, "invalid signal job status stored in database: {value}")
             }
             Self::InvalidReviewDate(value) => {
                 write!(f, "invalid review_date stored in database: {value}")
@@ -133,10 +126,7 @@ impl DailyReviewSignalRepository {
             WHERE dr.status = 'completed'
               AND dr.review_text IS NOT NULL
               AND dr.review_text != ''
-              AND NOT EXISTS (
-                  SELECT 1 FROM daily_review_signal_jobs j
-                  WHERE j.daily_review_id = dr.id AND j.status = 'completed'
-              )
+              AND (dr.signals_status IS NULL OR dr.signals_status = 'failed')
             ORDER BY dr.review_date ASC
             LIMIT ?
             "#,
@@ -171,10 +161,7 @@ impl DailyReviewSignalRepository {
             WHERE dr.status = 'completed'
               AND dr.review_text IS NOT NULL
               AND dr.review_text != ''
-              AND NOT EXISTS (
-                  SELECT 1 FROM daily_review_signal_jobs j
-                  WHERE j.daily_review_id = dr.id AND j.status = 'completed'
-              )
+              AND (dr.signals_status IS NULL OR dr.signals_status = 'failed')
             "#,
         )
         .fetch_one(&self.pool)
@@ -290,152 +277,6 @@ fn behavior_valence_from_str(s: &str) -> Result<BehaviorValence, DailyReviewSign
     }
 }
 
-// ── Job repository ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct DailyReviewSignalJobRepository {
-    pool: SqlitePool,
-}
-
-impl DailyReviewSignalJobRepository {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-
-    pub async fn insert_pending(
-        &self,
-        daily_review_id: i64,
-    ) -> Result<DailyReviewSignalJob, DailyReviewSignalRepositoryError> {
-        let id: i64 = sqlx::query_scalar(
-            r#"
-            INSERT INTO daily_review_signal_jobs (daily_review_id, status)
-            VALUES (?, 'pending')
-            RETURNING id
-            "#,
-        )
-        .bind(daily_review_id)
-        .fetch_one(&self.pool)
-        .await?;
-
-        self.find_by_id(id).await?.ok_or_else(|| {
-            DailyReviewSignalRepositoryError::Storage("job not found after insert".into())
-        })
-    }
-
-    pub async fn mark_started(
-        &self,
-        job_id: i64,
-        model: &str,
-        prompt_version: &str,
-    ) -> Result<(), DailyReviewSignalRepositoryError> {
-        sqlx::query(
-            r#"
-            UPDATE daily_review_signal_jobs
-            SET status = 'pending',
-                model = ?,
-                prompt_version = ?,
-                started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?
-            "#,
-        )
-        .bind(model)
-        .bind(prompt_version)
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn mark_completed(
-        &self,
-        job_id: i64,
-    ) -> Result<(), DailyReviewSignalRepositoryError> {
-        sqlx::query(
-            r#"
-            UPDATE daily_review_signal_jobs
-            SET status = 'completed',
-                error_message = NULL,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?
-            "#,
-        )
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn mark_failed(
-        &self,
-        job_id: i64,
-        error_message: &str,
-    ) -> Result<(), DailyReviewSignalRepositoryError> {
-        sqlx::query(
-            r#"
-            UPDATE daily_review_signal_jobs
-            SET status = 'failed',
-                error_message = ?,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?
-            "#,
-        )
-        .bind(error_message)
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn find_by_id(
-        &self,
-        id: i64,
-    ) -> Result<Option<DailyReviewSignalJob>, DailyReviewSignalRepositoryError> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, daily_review_id, status, error_message, model, prompt_version,
-                   started_at, created_at, updated_at
-            FROM daily_review_signal_jobs
-            WHERE id = ?
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        row.map(row_to_job).transpose()
-    }
-}
-
-fn row_to_job(row: SqliteRow) -> Result<DailyReviewSignalJob, DailyReviewSignalRepositoryError> {
-    let status_str = row.get::<String, _>("status");
-    let status = match status_str.as_str() {
-        "pending" => SignalJobStatus::Pending,
-        "completed" => SignalJobStatus::Completed,
-        "failed" => SignalJobStatus::Failed,
-        _ => {
-            return Err(DailyReviewSignalRepositoryError::InvalidSignalJobStatus(
-                status_str,
-            ));
-        }
-    };
-
-    Ok(DailyReviewSignalJob {
-        id: row.get("id"),
-        daily_review_id: row.get("daily_review_id"),
-        status,
-        error_message: row.get("error_message"),
-        model: row.get("model"),
-        prompt_version: row.get("prompt_version"),
-        started_at: row.get("started_at"),
-        created_at: row.get::<DateTime<Utc>, _>("created_at"),
-        updated_at: row.get::<DateTime<Utc>, _>("updated_at"),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
@@ -445,23 +286,20 @@ mod tests {
     use crate::{
         database,
         journal::{
-            extraction::{BehaviorValence, NeedStatus},
+            extraction::{NeedStatus},
+            review::repository::DailyReviewRepository,
             review::signals::types::{DailyReviewSignalCandidate, SignalType},
         },
         messages::{IncomingMessage, MessageSource},
     };
 
-    async fn setup() -> (
-        DailyReviewSignalRepository,
-        DailyReviewSignalJobRepository,
-        SqlitePool,
-    ) {
+    async fn setup() -> (DailyReviewSignalRepository, DailyReviewRepository, SqlitePool) {
         database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
         (
             DailyReviewSignalRepository::new(pool.clone()),
-            DailyReviewSignalJobRepository::new(pool.clone()),
+            DailyReviewRepository::new(pool.clone()),
             pool,
         )
     }
@@ -481,8 +319,7 @@ mod tests {
             .await
             .unwrap();
 
-        let review_repo =
-            crate::journal::review::repository::DailyReviewRepository::new(pool.clone());
+        let review_repo = DailyReviewRepository::new(pool.clone());
         let review = review_repo
             .upsert_completed(
                 user_id,
@@ -525,21 +362,9 @@ mod tests {
         }
     }
 
-    fn behavior_candidate() -> DailyReviewSignalCandidate {
-        DailyReviewSignalCandidate {
-            signal_type: SignalType::Behavior,
-            label: "plan switching".to_string(),
-            status: None,
-            valence: Some(BehaviorValence::Negative),
-            strength: 0.75,
-            confidence: 0.8,
-            evidence: "Plan changed multiple times.".to_string(),
-        }
-    }
-
     #[tokio::test]
     async fn replace_inserts_signals_and_returns_them() {
-        let (repo, _jobs, pool) = setup().await;
+        let (repo, _reviews, pool) = setup().await;
         let review_id = insert_daily_review(&pool).await;
 
         let stored = repo
@@ -557,223 +382,13 @@ mod tests {
         assert_eq!(stored.len(), 2);
         assert_eq!(stored[0].signal_type, SignalType::Theme);
         assert_eq!(stored[0].label, "physical appearance");
-        assert_eq!(stored[0].status, None);
-        assert_eq!(stored[0].valence, None);
         assert_eq!(stored[1].signal_type, SignalType::Need);
         assert_eq!(stored[1].status, Some(NeedStatus::Unmet));
     }
 
     #[tokio::test]
-    async fn replace_stores_behavior_valence() {
-        let (repo, _jobs, pool) = setup().await;
-        let review_id = insert_daily_review(&pool).await;
-
-        let stored = repo
-            .replace_in_transaction(
-                review_id,
-                "user-1",
-                date(),
-                &[behavior_candidate()],
-                "model",
-                "v1",
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(stored[0].signal_type, SignalType::Behavior);
-        assert_eq!(stored[0].valence, Some(BehaviorValence::Negative));
-        assert_eq!(stored[0].status, None);
-    }
-
-    #[tokio::test]
-    async fn replace_deletes_existing_signals_before_inserting() {
-        let (repo, _jobs, pool) = setup().await;
-        let review_id = insert_daily_review(&pool).await;
-
-        repo.replace_in_transaction(
-            review_id,
-            "user-1",
-            date(),
-            &[theme_candidate()],
-            "model",
-            "v1",
-        )
-        .await
-        .unwrap();
-
-        let second = repo
-            .replace_in_transaction(
-                review_id,
-                "user-1",
-                date(),
-                &[need_candidate()],
-                "model",
-                "v1",
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(second.len(), 1);
-        assert_eq!(second[0].signal_type, SignalType::Need);
-    }
-
-    #[tokio::test]
-    async fn replace_with_empty_candidates_clears_all_signals() {
-        let (repo, _jobs, pool) = setup().await;
-        let review_id = insert_daily_review(&pool).await;
-
-        repo.replace_in_transaction(
-            review_id,
-            "user-1",
-            date(),
-            &[theme_candidate()],
-            "model",
-            "v1",
-        )
-        .await
-        .unwrap();
-
-        let stored = repo
-            .replace_in_transaction(review_id, "user-1", date(), &[], "model", "v1")
-            .await
-            .unwrap();
-
-        assert!(stored.is_empty());
-    }
-
-    #[tokio::test]
-    async fn find_by_user_and_date_returns_only_matching_signals() {
-        let (repo, _jobs, pool) = setup().await;
-        let review_id = insert_daily_review(&pool).await;
-
-        repo.replace_in_transaction(
-            review_id,
-            "user-1",
-            date(),
-            &[theme_candidate()],
-            "model",
-            "v1",
-        )
-        .await
-        .unwrap();
-
-        let found = repo.find_by_user_and_date("user-1", date()).await.unwrap();
-        let not_found = repo
-            .find_by_user_and_date("user-1", NaiveDate::from_ymd_opt(2026, 4, 29).unwrap())
-            .await
-            .unwrap();
-        let other_user = repo.find_by_user_and_date("user-2", date()).await.unwrap();
-
-        assert_eq!(found.len(), 1);
-        assert!(not_found.is_empty());
-        assert!(other_user.is_empty());
-    }
-
-    #[tokio::test]
-    async fn find_by_daily_review_id_returns_correct_signals() {
-        let (repo, _jobs, pool) = setup().await;
-        let review_id = insert_daily_review(&pool).await;
-
-        repo.replace_in_transaction(
-            review_id,
-            "user-1",
-            date(),
-            &[theme_candidate(), behavior_candidate()],
-            "model",
-            "v1",
-        )
-        .await
-        .unwrap();
-
-        let found = repo.find_by_daily_review_id(review_id).await.unwrap();
-        assert_eq!(found.len(), 2);
-    }
-
-    // ── Job repository tests ─────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn insert_pending_creates_job_with_pending_status() {
-        let (_signals, jobs, pool) = setup().await;
-        let review_id = insert_daily_review(&pool).await;
-
-        let job = jobs.insert_pending(review_id).await.unwrap();
-
-        assert_eq!(job.daily_review_id, review_id);
-        assert_eq!(job.status, SignalJobStatus::Pending);
-        assert_eq!(job.error_message, None);
-        assert_eq!(job.model, None);
-        assert_eq!(job.prompt_version, None);
-        assert_eq!(job.started_at, None);
-    }
-
-    #[tokio::test]
-    async fn mark_started_records_model_and_prompt_version() {
-        let (_signals, jobs, pool) = setup().await;
-        let review_id = insert_daily_review(&pool).await;
-        let job = jobs.insert_pending(review_id).await.unwrap();
-
-        jobs.mark_started(job.id, "test-model", "v1").await.unwrap();
-
-        let updated = jobs.find_by_id(job.id).await.unwrap().unwrap();
-        assert_eq!(updated.status, SignalJobStatus::Pending);
-        assert_eq!(updated.model, Some("test-model".to_string()));
-        assert_eq!(updated.prompt_version, Some("v1".to_string()));
-        assert!(updated.started_at.is_some());
-    }
-
-    #[tokio::test]
-    async fn mark_completed_sets_status_and_clears_error() {
-        let (_signals, jobs, pool) = setup().await;
-        let review_id = insert_daily_review(&pool).await;
-        let job = jobs.insert_pending(review_id).await.unwrap();
-
-        jobs.mark_completed(job.id).await.unwrap();
-
-        let updated = jobs.find_by_id(job.id).await.unwrap().unwrap();
-        assert_eq!(updated.status, SignalJobStatus::Completed);
-        assert_eq!(updated.error_message, None);
-    }
-
-    #[tokio::test]
-    async fn mark_failed_sets_status_and_records_error() {
-        let (_signals, jobs, pool) = setup().await;
-        let review_id = insert_daily_review(&pool).await;
-        let job = jobs.insert_pending(review_id).await.unwrap();
-
-        jobs.mark_failed(job.id, "provider down").await.unwrap();
-
-        let updated = jobs.find_by_id(job.id).await.unwrap().unwrap();
-        assert_eq!(updated.status, SignalJobStatus::Failed);
-        assert_eq!(updated.error_message, Some("provider down".to_string()));
-    }
-
-    #[tokio::test]
-    async fn signal_repository_stores_float_strength_and_confidence() {
-        let (repo, _jobs, pool) = setup().await;
-        let review_id = insert_daily_review(&pool).await;
-        let candidate = DailyReviewSignalCandidate {
-            signal_type: SignalType::Tension,
-            label: "discipline vs optimization".to_string(),
-            status: None,
-            valence: None,
-            strength: 0.85,
-            confidence: 0.88,
-            evidence: "Review identifies tension between discipline and plan changes.".to_string(),
-        };
-
-        let stored = repo
-            .replace_in_transaction(review_id, "user-1", date(), &[candidate], "model", "v1")
-            .await
-            .unwrap();
-
-        // Allow tiny floating-point tolerance from SQLite REAL
-        assert!((stored[0].strength - 0.85).abs() < 1e-5);
-        assert!((stored[0].confidence - 0.88).abs() < 1e-5);
-    }
-
-    #[tokio::test]
-    async fn find_completed_reviews_missing_signals_returns_reviews_without_completed_job() {
-        let (repo, jobs, pool) = setup().await;
+    async fn find_completed_reviews_missing_signals_returns_reviews_without_completed_status() {
+        let (repo, reviews, pool) = setup().await;
         let review_id = insert_daily_review(&pool).await;
 
         let candidates = repo
@@ -782,11 +397,8 @@ mod tests {
             .unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].0, review_id);
-        assert_eq!(candidates[0].1, "user-1");
-        assert_eq!(candidates[0].2, date());
 
-        let job = jobs.insert_pending(review_id).await.unwrap();
-        jobs.mark_completed(job.id).await.unwrap();
+        reviews.mark_signals_completed(review_id).await.unwrap();
 
         let candidates_after = repo
             .find_completed_reviews_missing_signals(10)
@@ -796,50 +408,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn count_completed_reviews_missing_signals_matches_find() {
-        let (repo, _jobs, pool) = setup().await;
-        insert_daily_review(&pool).await;
+    async fn find_completed_reviews_missing_signals_ignores_pending() {
+        let (repo, reviews, pool) = setup().await;
+        let review_id = insert_daily_review(&pool).await;
 
-        let count = repo
-            .count_completed_reviews_missing_signals()
+        reviews.mark_signals_pending(review_id, "model", "v1").await.unwrap();
+
+        let candidates = repo
+            .find_completed_reviews_missing_signals(10)
             .await
             .unwrap();
-        assert_eq!(count, 1);
+        assert!(candidates.is_empty());
     }
 
     #[tokio::test]
-    async fn find_completed_reviews_missing_signals_respects_limit() {
-        let (repo, _jobs, pool) = setup().await;
+    async fn find_completed_reviews_missing_signals_includes_failed() {
+        let (repo, reviews, pool) = setup().await;
+        let review_id = insert_daily_review(&pool).await;
 
-        // Insert a second review with a distinct date/message_id
-        let user_id = "user-1";
-        let msg2 = crate::messages::IncomingMessage {
-            source: crate::messages::MessageSource::Telegram,
-            source_conversation_id: "42".to_string(),
-            source_message_id: "2".to_string(),
-            user_id: user_id.to_string(),
-            text: "entry two".to_string(),
-            received_at: chrono::Utc::now(),
-        };
-        crate::journal::repository::JournalRepository::new(pool.clone())
-            .store(&msg2)
-            .await
-            .unwrap();
-        let review_repo =
-            crate::journal::review::repository::DailyReviewRepository::new(pool.clone());
-        review_repo
-            .upsert_completed(
-                user_id,
-                NaiveDate::from_ymd_opt(2026, 4, 29).unwrap(),
-                "review two",
-                "model",
-                "v1",
-            )
-            .await
-            .unwrap();
+        reviews.mark_signals_failed(review_id, "error").await.unwrap();
 
         let candidates = repo
-            .find_completed_reviews_missing_signals(1)
+            .find_completed_reviews_missing_signals(10)
             .await
             .unwrap();
         assert_eq!(candidates.len(), 1);

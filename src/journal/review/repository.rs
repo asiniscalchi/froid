@@ -3,13 +3,14 @@ use std::{error::Error, fmt};
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
-use super::{DailyReview, DailyReviewStatus};
+use super::{DailyReview, DailyReviewStatus, SignalGenerationStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DailyReviewRepositoryError {
     Storage(String),
     InvalidReviewDate(String),
     InvalidStatus(String),
+    InvalidSignalStatus(String),
 }
 
 impl fmt::Display for DailyReviewRepositoryError {
@@ -21,6 +22,9 @@ impl fmt::Display for DailyReviewRepositoryError {
             }
             Self::InvalidStatus(value) => {
                 write!(f, "invalid daily review status stored in database: {value}")
+            }
+            Self::InvalidSignalStatus(value) => {
+                write!(f, "invalid signal generation status stored in database: {value}")
             }
         }
     }
@@ -52,7 +56,9 @@ impl DailyReviewRepository {
         let row = sqlx::query(
             r#"
             SELECT id, user_id, review_date, review_text, model, prompt_version, status,
-                   error_message, delivered_at, delivery_error, created_at, updated_at
+                   error_message, delivered_at, delivery_error,
+                   signals_status, signals_error, signals_model, signals_prompt_version, signals_updated_at,
+                   created_at, updated_at
             FROM daily_reviews
             WHERE user_id = ? AND review_date = ?
             "#,
@@ -85,6 +91,11 @@ impl DailyReviewRepository {
                 status = 'completed',
                 delivery_error = NULL,
                 error_message = NULL,
+                signals_status = NULL,
+                signals_error = NULL,
+                signals_model = NULL,
+                signals_prompt_version = NULL,
+                signals_updated_at = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             "#,
         )
@@ -123,6 +134,11 @@ impl DailyReviewRepository {
                 status = 'failed',
                 error_message = excluded.error_message,
                 delivery_error = NULL,
+                signals_status = NULL,
+                signals_error = NULL,
+                signals_model = NULL,
+                signals_prompt_version = NULL,
+                signals_updated_at = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             WHERE daily_reviews.status = 'failed'
             "#,
@@ -189,6 +205,77 @@ impl DailyReviewRepository {
 
         Ok(())
     }
+
+    pub async fn mark_signals_pending(
+        &self,
+        daily_review_id: i64,
+        model: &str,
+        prompt_version: &str,
+    ) -> Result<(), DailyReviewRepositoryError> {
+        sqlx::query(
+            r#"
+            UPDATE daily_reviews
+            SET signals_status = 'pending',
+                signals_model = ?,
+                signals_prompt_version = ?,
+                signals_error = NULL,
+                signals_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?
+            "#,
+        )
+        .bind(model)
+        .bind(prompt_version)
+        .bind(daily_review_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn mark_signals_completed(
+        &self,
+        daily_review_id: i64,
+    ) -> Result<(), DailyReviewRepositoryError> {
+        sqlx::query(
+            r#"
+            UPDATE daily_reviews
+            SET signals_status = 'completed',
+                signals_error = NULL,
+                signals_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?
+            "#,
+        )
+        .bind(daily_review_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn mark_signals_failed(
+        &self,
+        daily_review_id: i64,
+        error_message: &str,
+    ) -> Result<(), DailyReviewRepositoryError> {
+        sqlx::query(
+            r#"
+            UPDATE daily_reviews
+            SET signals_status = 'failed',
+                signals_error = ?,
+                signals_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?
+            "#,
+        )
+        .bind(error_message)
+        .bind(daily_review_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
 }
 
 fn row_to_daily_review(row: SqliteRow) -> Result<DailyReview, DailyReviewRepositoryError> {
@@ -203,6 +290,18 @@ fn row_to_daily_review(row: SqliteRow) -> Result<DailyReview, DailyReviewReposit
         _ => return Err(DailyReviewRepositoryError::InvalidStatus(status)),
     };
 
+    let signals_status = row
+        .get::<Option<String>, _>("signals_status")
+        .map(|s| match s.as_str() {
+            "pending" => Ok(SignalGenerationStatus::Pending),
+            "completed" => Ok(SignalGenerationStatus::Completed),
+            "failed" => Ok(SignalGenerationStatus::Failed),
+            other => Err(DailyReviewRepositoryError::InvalidSignalStatus(
+                other.to_string(),
+            )),
+        })
+        .transpose()?;
+
     Ok(DailyReview {
         id: row.get("id"),
         user_id: row.get("user_id"),
@@ -214,6 +313,11 @@ fn row_to_daily_review(row: SqliteRow) -> Result<DailyReview, DailyReviewReposit
         error_message: row.get("error_message"),
         delivered_at: row.get("delivered_at"),
         delivery_error: row.get("delivery_error"),
+        signals_status,
+        signals_error: row.get("signals_error"),
+        signals_model: row.get("signals_model"),
+        signals_prompt_version: row.get("signals_prompt_version"),
+        signals_updated_at: row.get("signals_updated_at"),
         created_at: row.get::<DateTime<Utc>, _>("created_at"),
         updated_at: row.get::<DateTime<Utc>, _>("updated_at"),
     })

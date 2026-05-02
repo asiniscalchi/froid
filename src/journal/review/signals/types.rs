@@ -43,23 +43,6 @@ impl SignalType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SignalJobStatus {
-    Pending,
-    Completed,
-    Failed,
-}
-
-impl SignalJobStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-        }
-    }
-}
-
 /// A single signal as returned by the LLM.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DailyReviewSignalCandidate {
@@ -94,20 +77,6 @@ pub struct DailyReviewSignal {
     pub evidence: String,
     pub model: String,
     pub prompt_version: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// A job record tracking the outcome of a single signal generation run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DailyReviewSignalJob {
-    pub id: i64,
-    pub daily_review_id: i64,
-    pub status: SignalJobStatus,
-    pub error_message: Option<String>,
-    pub model: Option<String>,
-    pub prompt_version: Option<String>,
-    pub started_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

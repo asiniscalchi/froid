@@ -10,7 +10,7 @@ use crate::journal::{
         signals::{
             generator::{DailyReviewSignalConfig, RigOpenAiDailyReviewSignalGenerator},
             prompt::DailyReviewSignalPromptConfig,
-            repository::{DailyReviewSignalJobRepository, DailyReviewSignalRepository},
+            repository::{DailyReviewSignalRepository},
             service::DailyReviewSignalService,
         },
     },
@@ -56,7 +56,6 @@ pub fn build_signal_service(
         JournalRepository::new(pool.clone()),
         JournalEntryExtractionRepository::new(pool.clone()),
         DailyReviewSignalRepository::new(pool.clone()),
-        DailyReviewSignalJobRepository::new(pool.clone()),
         generator,
     );
 
