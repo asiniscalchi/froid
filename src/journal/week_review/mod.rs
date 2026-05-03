@@ -1,4 +1,5 @@
 pub mod generator;
+pub mod prompt;
 pub mod repository;
 pub mod service;
 
