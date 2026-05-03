@@ -6,13 +6,11 @@ use teloxide::{
 };
 use tracing::{error, info};
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 
 use crate::{
     handler::MessageHandler,
-    journal::command::{
-        DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest, MAX_REVIEW_OFFSET,
-    },
+    journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
     messages::{IncomingMessage, MessageSource},
 };
 
@@ -127,7 +125,7 @@ fn incoming_from_text_message(message: &Message, user_id: String) -> IncomingMes
     }
 }
 
-fn parse_command(text: &str, received_at: DateTime<Utc>) -> Option<JournalCommand> {
+fn parse_command(text: &str, _received_at: DateTime<Utc>) -> Option<JournalCommand> {
     let mut parts = text.trim().splitn(2, char::is_whitespace);
     let command = parts.next()?;
     // strip optional @botname suffix
@@ -143,48 +141,13 @@ fn parse_command(text: &str, received_at: DateTime<Utc>) -> Option<JournalComman
         "/today" => Some(JournalCommand::Today),
         "/stats" => Some(JournalCommand::Stats),
         "/status" => Some(JournalCommand::Status),
-        "/review" => Some(parse_review_argument(argument, received_at)),
+        "/day_review" => Some(JournalCommand::DayReviewLast),
         "/week_review" => Some(JournalCommand::WeekReviewLast),
         "/search" => Some(parse_search_argument(argument)),
         _ if command.starts_with('/') => Some(JournalCommand::Unknown {
             command: command.to_string(),
         }),
         _ => None,
-    }
-}
-
-fn parse_review_argument(argument: Option<&str>, received_at: DateTime<Utc>) -> JournalCommand {
-    let today = received_at.date_naive();
-    match argument {
-        None | Some("today") => JournalCommand::ReviewToday,
-        Some(arg) if arg.starts_with('-') => parse_review_relative_offset(&arg[1..], today),
-        Some(arg) => parse_review_explicit_date(arg, today),
-    }
-}
-
-fn parse_review_relative_offset(digits: &str, today: NaiveDate) -> JournalCommand {
-    match digits.parse::<u32>() {
-        Ok(0) | Err(_) => JournalCommand::ReviewUsage,
-        Ok(offset) if offset > MAX_REVIEW_OFFSET => JournalCommand::ReviewError {
-            message: format!(
-                "Offset -{offset} exceeds the maximum allowed offset of {MAX_REVIEW_OFFSET} days."
-            ),
-        },
-        Ok(offset) => JournalCommand::ReviewDate {
-            date: today - chrono::Duration::days(i64::from(offset)),
-        },
-    }
-}
-
-fn parse_review_explicit_date(arg: &str, today: NaiveDate) -> JournalCommand {
-    match NaiveDate::parse_from_str(arg, "%Y-%m-%d") {
-        Ok(date) if date > today => JournalCommand::ReviewError {
-            message: format!(
-                "Date {date} is in the future. Only past and present dates are supported."
-            ),
-        },
-        Ok(date) => JournalCommand::ReviewDate { date },
-        Err(_) => JournalCommand::ReviewUsage,
     }
 }
 
@@ -352,135 +315,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_review_no_argument_returns_today() {
-        assert_eq!(cmd("/review"), Some(JournalCommand::ReviewToday));
-        assert_eq!(cmd("/review "), Some(JournalCommand::ReviewToday));
-    }
-
-    #[test]
-    fn parse_review_today_command() {
-        assert_eq!(cmd("/review today"), Some(JournalCommand::ReviewToday));
-    }
-
-    #[test]
-    fn parse_review_today_command_strips_bot_name_suffix() {
+    fn parse_day_review_command() {
+        assert_eq!(cmd("/day_review"), Some(JournalCommand::DayReviewLast));
+        assert_eq!(cmd("/day_review "), Some(JournalCommand::DayReviewLast));
         assert_eq!(
-            cmd("/review@mybot today"),
-            Some(JournalCommand::ReviewToday)
-        );
-        assert_eq!(cmd("/review@mybot"), Some(JournalCommand::ReviewToday));
-    }
-
-    #[test]
-    fn parse_review_explicit_date_returns_review_date() {
-        assert_eq!(
-            cmd("/review 2026-04-29"),
-            Some(JournalCommand::ReviewDate {
-                date: NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()
-            })
-        );
-        assert_eq!(
-            cmd("/review 2026-04-28"),
-            Some(JournalCommand::ReviewDate {
-                date: NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
-            })
-        );
-    }
-
-    #[test]
-    fn parse_review_explicit_date_strips_bot_name_suffix() {
-        assert_eq!(
-            cmd("/review@mybot 2026-04-28"),
-            Some(JournalCommand::ReviewDate {
-                date: NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
-            })
-        );
-    }
-
-    #[test]
-    fn parse_review_future_date_returns_error() {
-        assert_eq!(
-            cmd("/review 2026-04-30"),
-            Some(JournalCommand::ReviewError {
-                message:
-                    "Date 2026-04-30 is in the future. Only past and present dates are supported."
-                        .to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn parse_review_relative_offset_returns_review_date() {
-        assert_eq!(
-            cmd("/review -1"),
-            Some(JournalCommand::ReviewDate {
-                date: NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
-            })
-        );
-        assert_eq!(
-            cmd("/review -7"),
-            Some(JournalCommand::ReviewDate {
-                date: NaiveDate::from_ymd_opt(2026, 4, 22).unwrap()
-            })
-        );
-    }
-
-    #[test]
-    fn parse_review_relative_offset_strips_bot_name_suffix() {
-        assert_eq!(
-            cmd("/review@mybot -1"),
-            Some(JournalCommand::ReviewDate {
-                date: NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
-            })
-        );
-    }
-
-    #[test]
-    fn parse_review_zero_offset_returns_usage() {
-        assert_eq!(cmd("/review -0"), Some(JournalCommand::ReviewUsage));
-    }
-
-    #[test]
-    fn parse_review_positive_offset_returns_usage() {
-        assert_eq!(cmd("/review +1"), Some(JournalCommand::ReviewUsage));
-        assert_eq!(cmd("/review 1"), Some(JournalCommand::ReviewUsage));
-    }
-
-    #[test]
-    fn parse_review_offset_exceeding_max_returns_error() {
-        assert_eq!(
-            cmd("/review -366"),
-            Some(JournalCommand::ReviewError {
-                message: "Offset -366 exceeds the maximum allowed offset of 365 days.".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn parse_review_invalid_date_format_returns_usage() {
-        assert_eq!(cmd("/review 04-29"), Some(JournalCommand::ReviewUsage));
-        assert_eq!(cmd("/review 2026-13-01"), Some(JournalCommand::ReviewUsage));
-        assert_eq!(cmd("/review not-a-date"), Some(JournalCommand::ReviewUsage));
-    }
-
-    #[test]
-    fn parse_review_natural_language_returns_usage() {
-        assert_eq!(cmd("/review yesterday"), Some(JournalCommand::ReviewUsage));
-        assert_eq!(cmd("/review monday"), Some(JournalCommand::ReviewUsage));
-        assert_eq!(cmd("/review last week"), Some(JournalCommand::ReviewUsage));
-    }
-
-    #[test]
-    fn parse_review_extra_words_after_today_returns_usage() {
-        assert_eq!(
-            cmd("/review today extra"),
-            Some(JournalCommand::ReviewUsage)
+            cmd("/day_review@mybot"),
+            Some(JournalCommand::DayReviewLast)
         );
     }
 
     #[test]
     fn parse_week_review_command() {
         assert_eq!(cmd("/week_review"), Some(JournalCommand::WeekReviewLast));
+        assert_eq!(cmd("/week_review "), Some(JournalCommand::WeekReviewLast));
         assert_eq!(
             cmd("/week_review@mybot"),
             Some(JournalCommand::WeekReviewLast)

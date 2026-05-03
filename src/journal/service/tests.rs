@@ -501,8 +501,12 @@ async fn command_start_returns_welcome_message() {
         .await
         .unwrap();
 
-    assert!(outgoing.text.contains("Froid is running."));
-    assert!(outgoing.text.contains("/recent [number]"));
+    assert!(outgoing.text.contains("Froid is your private journal"));
+    assert!(
+        outgoing
+            .text
+            .contains("/help to see all available commands")
+    );
 }
 
 #[tokio::test]
@@ -516,10 +520,11 @@ async fn command_help_returns_available_commands() {
 
     assert!(outgoing.text.contains("/recent [number]"));
     assert!(outgoing.text.contains("/today"));
+    assert!(outgoing.text.contains("/day_review - show daily review"));
     assert!(
         outgoing
             .text
-            .contains("/review [today|YYYY-MM-DD|-N] - show daily review")
+            .contains("/week_review - show last week's review")
     );
     assert!(outgoing.text.contains("/stats"));
     assert!(outgoing.text.contains("/status"));
@@ -740,26 +745,11 @@ async fn status_does_not_expose_secrets_or_raw_internal_errors() {
 }
 
 #[tokio::test]
-async fn review_usage_returns_usage_message() {
-    let service = setup().await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::ReviewUsage))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        outgoing.text,
-        "Usage: /review [today|YYYY-MM-DD|-N]\n\nExamples:\n/review\n/review today\n/review 2026-04-29\n/review -1\n/review -7"
-    );
-}
-
-#[tokio::test]
-async fn review_today_returns_unavailable_when_runner_is_not_configured() {
+async fn day_review_last_returns_unavailable_when_runner_is_not_configured() {
     let (service, pool) = setup_with_pool().await;
 
     let outgoing = service
-        .command(&command(JournalCommand::ReviewToday))
+        .command(&command(JournalCommand::DayReviewLast))
         .await
         .unwrap();
     let review_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM daily_reviews")
@@ -775,12 +765,12 @@ async fn review_today_returns_unavailable_when_runner_is_not_configured() {
 }
 
 #[tokio::test]
-async fn review_today_returns_existing_review() {
+async fn day_review_last_returns_existing_review() {
     let runner = FakeDailyReviewRunner::with_fetch_result(Ok(Some(daily_review("stored review"))));
     let service = setup_with_daily_review_runner(runner.clone()).await;
 
     let outgoing = service
-        .command(&command(JournalCommand::ReviewToday))
+        .command(&command(JournalCommand::DayReviewLast))
         .await
         .unwrap();
 
@@ -789,12 +779,12 @@ async fn review_today_returns_existing_review() {
 }
 
 #[tokio::test]
-async fn review_today_returns_not_available_when_no_review_exists() {
+async fn day_review_last_returns_not_available_when_no_review_exists() {
     let runner = FakeDailyReviewRunner::with_fetch_result(Ok(None));
     let service = setup_with_daily_review_runner(runner).await;
 
     let outgoing = service
-        .command(&command(JournalCommand::ReviewToday))
+        .command(&command(JournalCommand::DayReviewLast))
         .await
         .unwrap();
 
@@ -802,14 +792,14 @@ async fn review_today_returns_not_available_when_no_review_exists() {
 }
 
 #[tokio::test]
-async fn review_today_returns_not_available_on_fetch_error() {
+async fn day_review_last_returns_not_available_on_fetch_error() {
     let runner = FakeDailyReviewRunner::with_fetch_result(Err(DailyReviewServiceError::Storage(
         "database unavailable".to_string(),
     )));
     let service = setup_with_daily_review_runner(runner).await;
 
     let outgoing = service
-        .command(&command(JournalCommand::ReviewToday))
+        .command(&command(JournalCommand::DayReviewLast))
         .await
         .unwrap();
 
@@ -817,11 +807,11 @@ async fn review_today_returns_not_available_on_fetch_error() {
 }
 
 #[tokio::test]
-async fn review_today_command_does_not_store_command_text_as_journal_entry() {
+async fn day_review_last_command_does_not_store_command_text_as_journal_entry() {
     let (service, pool) = setup_with_pool().await;
 
     service
-        .command(&command(JournalCommand::ReviewToday))
+        .command(&command(JournalCommand::DayReviewLast))
         .await
         .unwrap();
 
@@ -850,7 +840,7 @@ async fn undo_deletes_daily_review_for_deleted_entry_date() {
         .await
         .unwrap();
     let review = service
-        .command(&command(JournalCommand::ReviewToday))
+        .command(&command(JournalCommand::DayReviewLast))
         .await
         .unwrap();
     let persisted_review = daily_reviews
@@ -861,105 +851,6 @@ async fn undo_deletes_daily_review_for_deleted_entry_date() {
     assert_eq!(undo.text, "Deleted last entry.");
     assert_eq!(review.text, "No review available for today yet.");
     assert!(persisted_review.is_none());
-}
-
-#[tokio::test]
-async fn review_date_returns_unavailable_when_runner_is_not_configured() {
-    let (service, pool) = setup_with_pool().await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::ReviewDate { date: date() }))
-        .await
-        .unwrap();
-    let review_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM daily_reviews")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        outgoing.text,
-        "Daily review generation is not configured yet."
-    );
-    assert_eq!(review_count, 0);
-}
-
-#[tokio::test]
-async fn review_date_returns_existing_review() {
-    let runner = FakeDailyReviewRunner::with_fetch_result(Ok(Some(daily_review("stored review"))));
-    let service = setup_with_daily_review_runner(runner.clone()).await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::ReviewDate { date: date() }))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        outgoing.text,
-        "Daily review for 2026-04-28\n\nstored review"
-    );
-    assert_eq!(runner.calls(), vec![("7".to_string(), date())]);
-}
-
-#[tokio::test]
-async fn review_date_returns_not_available_when_no_review_exists() {
-    let runner = FakeDailyReviewRunner::with_fetch_result(Ok(None));
-    let service = setup_with_daily_review_runner(runner).await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::ReviewDate { date: date() }))
-        .await
-        .unwrap();
-
-    assert_eq!(outgoing.text, "No review available for 2026-04-28 yet.");
-}
-
-#[tokio::test]
-async fn review_date_returns_not_available_on_fetch_error() {
-    let runner = FakeDailyReviewRunner::with_fetch_result(Err(DailyReviewServiceError::Storage(
-        "database unavailable".to_string(),
-    )));
-    let service = setup_with_daily_review_runner(runner).await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::ReviewDate { date: date() }))
-        .await
-        .unwrap();
-
-    assert_eq!(outgoing.text, "No review available for 2026-04-28 yet.");
-}
-
-#[tokio::test]
-async fn review_date_does_not_store_command_text_as_journal_entry() {
-    let (service, pool) = setup_with_pool().await;
-
-    service
-        .command(&command(JournalCommand::ReviewDate { date: date() }))
-        .await
-        .unwrap();
-
-    let entry_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(entry_count, 0);
-}
-
-#[tokio::test]
-async fn review_error_returns_error_message() {
-    let service = setup().await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::ReviewError {
-            message: "Date 2026-05-01 is in the future. Only past and present dates are supported."
-                .to_string(),
-        }))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        outgoing.text,
-        "Date 2026-05-01 is in the future. Only past and present dates are supported."
-    );
 }
 
 #[tokio::test]

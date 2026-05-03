@@ -1,10 +1,9 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 
 use crate::messages::MessageSource;
 
 pub const DEFAULT_RECENT_LIMIT: u32 = 10;
 pub const MAX_RECENT_LIMIT: u32 = 50;
-pub const MAX_REVIEW_OFFSET: u32 = 365;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalCommandRequest {
@@ -26,10 +25,7 @@ pub enum JournalCommand {
     Today,
     Stats,
     Status,
-    ReviewToday,
-    ReviewDate { date: NaiveDate },
-    ReviewUsage,
-    ReviewError { message: String },
+    DayReviewLast,
     WeekReviewLast,
     Search { query: String },
     SearchUsage,

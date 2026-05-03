@@ -13,14 +13,11 @@ pub(super) fn message_saved_response() -> String {
 }
 
 pub(super) fn start_response() -> String {
-    format!(
-        "Froid is running.\n\nSend me any text message and I will store it as a journal entry.\n\n{}",
-        help_response()
-    )
+    "Froid is your private journal. Send me any text message and I will store it for you.\n\nI use AI to help you find meaning in your entries and provide daily and weekly reviews of your thoughts.\n\nUse /help to see all available commands.".to_string()
 }
 
 pub(super) fn help_response() -> String {
-    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/review [today|YYYY-MM-DD|-N] - show daily review\n/week_review - show last week's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
+    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/day_review - show daily review\n/week_review - show last week's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
 }
 
 pub(super) fn unknown_command_response(command: &str) -> String {
@@ -29,6 +26,10 @@ pub(super) fn unknown_command_response(command: &str) -> String {
 
 pub(super) fn recent_usage_response() -> String {
     "Usage: /recent [number]\n\nExamples:\n/recent\n/recent 5".to_string()
+}
+
+pub(super) fn search_usage_response() -> String {
+    "Usage: /search <query>\n\nExamples:\n/search anxiety before meetings".to_string()
 }
 
 pub(super) fn no_entries_response() -> String {
@@ -51,20 +52,12 @@ pub(super) fn no_entries_today_response() -> String {
     "No journal entries found for today.".to_string()
 }
 
-pub(super) fn daily_review_usage_response() -> String {
-    "Usage: /review [today|YYYY-MM-DD|-N]\n\nExamples:\n/review\n/review today\n/review 2026-04-29\n/review -1\n/review -7".to_string()
-}
-
 pub(super) fn daily_review_unavailable_response() -> String {
     "Daily review generation is not configured yet.".to_string()
 }
 
 pub(super) fn daily_review_not_available_response() -> String {
     "No review available for today yet.".to_string()
-}
-
-pub(super) fn daily_review_not_available_for_date_response(date: NaiveDate) -> String {
-    format!("No review available for {} yet.", date.format("%Y-%m-%d"))
 }
 
 pub(super) fn format_daily_review(review: &DailyReview) -> String {

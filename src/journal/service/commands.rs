@@ -5,19 +5,18 @@ use crate::{
     journal::{
         command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
         responses::{
-            daily_review_not_available_for_date_response, daily_review_not_available_response,
-            daily_review_unavailable_response, daily_review_usage_response,
-            deleted_last_entry_response, format_daily_review, format_daily_review_for_date,
-            format_entries, format_last_entry, format_weekly_review_for_week, help_response,
-            no_entries_response, no_entries_today_response, no_entry_to_delete_response,
-            no_last_entry_response, recent_usage_response, start_response, stats_response,
+            daily_review_not_available_response, daily_review_unavailable_response,
+            deleted_last_entry_response, format_daily_review, format_entries, format_last_entry,
+            format_weekly_review_for_week, help_response, no_entries_response,
+            no_entries_today_response, no_entry_to_delete_response, no_last_entry_response,
+            recent_usage_response, search_usage_response, start_response, stats_response,
             status_response, unknown_command_response, weekly_review_not_available_response,
             weekly_review_unavailable_response,
         },
         review::DailyReview,
         search::{
             format_search_results, search_empty_response, search_error_response,
-            search_unavailable_response, search_usage_response,
+            search_unavailable_response,
         },
         status::{
             DailyReviewDeliveryStatus, DailyReviewGenerationStatus, DailyReviewStatus,
@@ -69,18 +68,9 @@ impl JournalService {
                 self.status(&request.user_id, request.received_at.date_naive())
                     .await
             }
-            JournalCommand::ReviewToday => Ok(self
-                .review_today(&request.user_id, request.received_at.date_naive())
+            JournalCommand::DayReviewLast => Ok(self
+                .day_review_last(&request.user_id, request.received_at.date_naive())
                 .await),
-            JournalCommand::ReviewDate { date } => {
-                Ok(self.review_date(&request.user_id, *date).await)
-            }
-            JournalCommand::ReviewUsage => Ok(OutgoingMessage {
-                text: daily_review_usage_response(),
-            }),
-            JournalCommand::ReviewError { message } => Ok(OutgoingMessage {
-                text: message.clone(),
-            }),
             JournalCommand::WeekReviewLast => Ok(self
                 .week_review_last(&request.user_id, request.received_at.date_naive())
                 .await),
@@ -96,22 +86,12 @@ impl JournalService {
         }
     }
 
-    async fn review_today(&self, user_id: &str, date: chrono::NaiveDate) -> OutgoingMessage {
+    async fn day_review_last(&self, user_id: &str, date: chrono::NaiveDate) -> OutgoingMessage {
         self.run_review(
             user_id,
             date,
             format_daily_review,
             daily_review_not_available_response(),
-        )
-        .await
-    }
-
-    async fn review_date(&self, user_id: &str, date: chrono::NaiveDate) -> OutgoingMessage {
-        self.run_review(
-            user_id,
-            date,
-            |review| format_daily_review_for_date(review, date),
-            daily_review_not_available_for_date_response(date),
         )
         .await
     }
