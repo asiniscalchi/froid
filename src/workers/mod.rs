@@ -5,5 +5,5 @@ pub mod extraction;
 pub mod reconciliation;
 pub mod signals;
 
-pub use config::{ReconciliationWorkerConfig, ReconciliationWorkerConfigError, WorkerEnvLabels};
+pub use config::ReconciliationWorkerConfig;
 pub use reconciliation::{ReconciliationCycle, ReconciliationWorker};

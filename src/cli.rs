@@ -1,29 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::{
-    journal::review::DailyReviewDeliveryWorkerConfig,
-    version,
-    workers::{ReconciliationWorkerConfig, WorkerEnvLabels},
-};
-
-const EMBEDDING_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
-    batch_size: "FROID_EMBEDDING_WORKER_BATCH_SIZE",
-    interval_seconds: "FROID_EMBEDDING_WORKER_INTERVAL_SECONDS",
-};
-
-const DAILY_REVIEW_EMBEDDING_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
-    batch_size: "FROID_DAILY_REVIEW_EMBEDDING_WORKER_BATCH_SIZE",
-    interval_seconds: "FROID_DAILY_REVIEW_EMBEDDING_WORKER_INTERVAL_SECONDS",
-};
-
-const EXTRACTION_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
-    batch_size: "FROID_EXTRACTION_WORKER_BATCH_SIZE",
-    interval_seconds: "FROID_EXTRACTION_WORKER_INTERVAL_SECONDS",
-};
-
-const SIGNAL_WORKER_LABELS: WorkerEnvLabels = WorkerEnvLabels {
-    batch_size: "FROID_SIGNAL_WORKER_BATCH_SIZE",
-    interval_seconds: "FROID_SIGNAL_WORKER_INTERVAL_SECONDS",
+    journal::review::DailyReviewDeliveryWorkerConfig, version, workers::ReconciliationWorkerConfig,
 };
 
 #[derive(Debug, Parser)]
@@ -49,62 +27,95 @@ pub struct Cli {
     database_file: String,
 
     #[arg(long, env = "FROID_EMBEDDING_WORKER_ENABLED", global = true)]
-    embedding_worker_enabled: Option<String>,
+    embedding_worker_enabled: Option<bool>,
 
-    #[arg(long, env = "FROID_EMBEDDING_WORKER_BATCH_SIZE", global = true)]
-    embedding_worker_batch_size: Option<String>,
+    #[arg(
+        long,
+        env = "FROID_EMBEDDING_WORKER_BATCH_SIZE",
+        global = true,
+        value_parser = clap::value_parser!(u32).range(1..),
+    )]
+    embedding_worker_batch_size: Option<u32>,
 
-    #[arg(long, env = "FROID_EMBEDDING_WORKER_INTERVAL_SECONDS", global = true)]
-    embedding_worker_interval_seconds: Option<String>,
+    #[arg(
+        long,
+        env = "FROID_EMBEDDING_WORKER_INTERVAL_SECONDS",
+        global = true,
+        value_parser = clap::value_parser!(u64).range(1..),
+    )]
+    embedding_worker_interval_seconds: Option<u64>,
 
     #[arg(
         long,
         env = "FROID_DAILY_REVIEW_EMBEDDING_WORKER_ENABLED",
         global = true
     )]
-    daily_review_embedding_worker_enabled: Option<String>,
+    daily_review_embedding_worker_enabled: Option<bool>,
 
     #[arg(
         long,
         env = "FROID_DAILY_REVIEW_EMBEDDING_WORKER_BATCH_SIZE",
-        global = true
+        global = true,
+        value_parser = clap::value_parser!(u32).range(1..),
     )]
-    daily_review_embedding_worker_batch_size: Option<String>,
+    daily_review_embedding_worker_batch_size: Option<u32>,
 
     #[arg(
         long,
         env = "FROID_DAILY_REVIEW_EMBEDDING_WORKER_INTERVAL_SECONDS",
-        global = true
+        global = true,
+        value_parser = clap::value_parser!(u64).range(1..),
     )]
-    daily_review_embedding_worker_interval_seconds: Option<String>,
+    daily_review_embedding_worker_interval_seconds: Option<u64>,
 
     #[arg(long, env = "FROID_EXTRACTION_WORKER_ENABLED", global = true)]
-    extraction_worker_enabled: Option<String>,
+    extraction_worker_enabled: Option<bool>,
 
-    #[arg(long, env = "FROID_EXTRACTION_WORKER_BATCH_SIZE", global = true)]
-    extraction_worker_batch_size: Option<String>,
+    #[arg(
+        long,
+        env = "FROID_EXTRACTION_WORKER_BATCH_SIZE",
+        global = true,
+        value_parser = clap::value_parser!(u32).range(1..),
+    )]
+    extraction_worker_batch_size: Option<u32>,
 
-    #[arg(long, env = "FROID_EXTRACTION_WORKER_INTERVAL_SECONDS", global = true)]
-    extraction_worker_interval_seconds: Option<String>,
+    #[arg(
+        long,
+        env = "FROID_EXTRACTION_WORKER_INTERVAL_SECONDS",
+        global = true,
+        value_parser = clap::value_parser!(u64).range(1..),
+    )]
+    extraction_worker_interval_seconds: Option<u64>,
 
     #[arg(long, env = "FROID_DAILY_REVIEW_DELIVERY_ENABLED", global = true)]
-    daily_review_delivery_enabled: Option<String>,
+    daily_review_delivery_enabled: Option<bool>,
 
     #[arg(
         long,
         env = "FROID_DAILY_REVIEW_DELIVERY_INTERVAL_SECONDS",
-        global = true
+        global = true,
+        value_parser = clap::value_parser!(u64).range(1..),
     )]
-    daily_review_delivery_interval_seconds: Option<String>,
+    daily_review_delivery_interval_seconds: Option<u64>,
 
     #[arg(long, env = "FROID_SIGNAL_WORKER_ENABLED", global = true)]
-    signal_worker_enabled: Option<String>,
+    signal_worker_enabled: Option<bool>,
 
-    #[arg(long, env = "FROID_SIGNAL_WORKER_BATCH_SIZE", global = true)]
-    signal_worker_batch_size: Option<String>,
+    #[arg(
+        long,
+        env = "FROID_SIGNAL_WORKER_BATCH_SIZE",
+        global = true,
+        value_parser = clap::value_parser!(u32).range(1..),
+    )]
+    signal_worker_batch_size: Option<u32>,
 
-    #[arg(long, env = "FROID_SIGNAL_WORKER_INTERVAL_SECONDS", global = true)]
-    signal_worker_interval_seconds: Option<String>,
+    #[arg(
+        long,
+        env = "FROID_SIGNAL_WORKER_INTERVAL_SECONDS",
+        global = true,
+        value_parser = clap::value_parser!(u64).range(1..),
+    )]
+    signal_worker_interval_seconds: Option<u64>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -149,42 +160,33 @@ impl Cli {
         }
 
         let embedding_worker = ReconciliationWorkerConfig::from_values(
-            EMBEDDING_WORKER_LABELS,
-            self.embedding_worker_enabled.clone(),
-            self.embedding_worker_batch_size.clone(),
-            self.embedding_worker_interval_seconds.clone(),
-        )
-        .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
+            self.embedding_worker_enabled,
+            self.embedding_worker_batch_size,
+            self.embedding_worker_interval_seconds,
+        );
 
         let daily_review_embedding_worker = ReconciliationWorkerConfig::from_values(
-            DAILY_REVIEW_EMBEDDING_WORKER_LABELS,
-            self.daily_review_embedding_worker_enabled.clone(),
-            self.daily_review_embedding_worker_batch_size.clone(),
-            self.daily_review_embedding_worker_interval_seconds.clone(),
-        )
-        .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
+            self.daily_review_embedding_worker_enabled,
+            self.daily_review_embedding_worker_batch_size,
+            self.daily_review_embedding_worker_interval_seconds,
+        );
 
         let extraction_worker = ReconciliationWorkerConfig::from_values(
-            EXTRACTION_WORKER_LABELS,
-            self.extraction_worker_enabled.clone(),
-            self.extraction_worker_batch_size.clone(),
-            self.extraction_worker_interval_seconds.clone(),
-        )
-        .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
+            self.extraction_worker_enabled,
+            self.extraction_worker_batch_size,
+            self.extraction_worker_interval_seconds,
+        );
 
         let daily_review_delivery = DailyReviewDeliveryWorkerConfig::from_values(
-            self.daily_review_delivery_enabled.clone(),
-            self.daily_review_delivery_interval_seconds.clone(),
-        )
-        .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
+            self.daily_review_delivery_enabled,
+            self.daily_review_delivery_interval_seconds,
+        );
 
         let signal_worker = ReconciliationWorkerConfig::from_values(
-            SIGNAL_WORKER_LABELS,
-            self.signal_worker_enabled.clone(),
-            self.signal_worker_batch_size.clone(),
-            self.signal_worker_interval_seconds.clone(),
-        )
-        .map_err(|e| clap::Error::raw(clap::error::ErrorKind::ValueValidation, e.to_string()))?;
+            self.signal_worker_enabled,
+            self.signal_worker_batch_size,
+            self.signal_worker_interval_seconds,
+        );
 
         let database_path = format!("{}/{}", self.data_dir, self.database_file);
 
@@ -326,52 +328,74 @@ mod tests {
     }
 
     #[test]
-    fn serve_config_worker_enabled_when_set_to_true() {
-        let config = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            embedding_worker_enabled: Some("true".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
-        .unwrap();
+    fn serve_config_worker_enabled_when_flag_set() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--embedding-worker-enabled",
+            "true",
+        ]);
+
+        let config = cli.serve_config().unwrap();
 
         assert!(config.embedding_worker.enabled);
     }
 
     #[test]
-    fn serve_config_rejects_zero_batch_size() {
-        let error = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            embedding_worker_batch_size: Some("0".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
+    fn parse_rejects_zero_batch_size() {
+        let error = Cli::try_parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--embedding-worker-batch-size",
+            "0",
+        ])
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(
-            error
-                .to_string()
-                .contains("FROID_EMBEDDING_WORKER_BATCH_SIZE")
-        );
     }
 
     #[test]
-    fn serve_config_rejects_zero_interval() {
-        let error = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            embedding_worker_interval_seconds: Some("0".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
+    fn parse_rejects_non_numeric_batch_size() {
+        let error = Cli::try_parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--embedding-worker-batch-size",
+            "abc",
+        ])
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(
-            error
-                .to_string()
-                .contains("FROID_EMBEDDING_WORKER_INTERVAL_SECONDS")
-        );
+    }
+
+    #[test]
+    fn parse_rejects_non_bool_enabled_value() {
+        let error = Cli::try_parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--embedding-worker-enabled",
+            "yes",
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn parse_rejects_zero_interval() {
+        let error = Cli::try_parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--embedding-worker-interval-seconds",
+            "0",
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 
     #[test]
@@ -392,34 +416,32 @@ mod tests {
     }
 
     #[test]
-    fn serve_config_daily_review_delivery_enabled_when_set_to_true() {
-        let config = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            daily_review_delivery_enabled: Some("true".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
-        .unwrap();
+    fn serve_config_daily_review_delivery_enabled_when_flag_set() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--daily-review-delivery-enabled",
+            "true",
+        ]);
+
+        let config = cli.serve_config().unwrap();
 
         assert!(config.daily_review_delivery.enabled);
     }
 
     #[test]
-    fn serve_config_rejects_zero_daily_review_delivery_interval() {
-        let error = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            daily_review_delivery_interval_seconds: Some("0".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
+    fn parse_rejects_zero_daily_review_delivery_interval() {
+        let error = Cli::try_parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--daily-review-delivery-interval-seconds",
+            "0",
+        ])
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(
-            error
-                .to_string()
-                .contains("FROID_DAILY_REVIEW_DELIVERY_INTERVAL_SECONDS")
-        );
     }
 
     #[test]
@@ -441,52 +463,46 @@ mod tests {
     }
 
     #[test]
-    fn serve_config_extraction_worker_enabled_when_set_to_true() {
-        let config = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            extraction_worker_enabled: Some("true".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
-        .unwrap();
+    fn serve_config_extraction_worker_enabled_when_flag_set() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--extraction-worker-enabled",
+            "true",
+        ]);
+
+        let config = cli.serve_config().unwrap();
 
         assert!(config.extraction_worker.enabled);
     }
 
     #[test]
-    fn serve_config_rejects_zero_extraction_worker_batch_size() {
-        let error = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            extraction_worker_batch_size: Some("0".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
+    fn parse_rejects_zero_extraction_worker_batch_size() {
+        let error = Cli::try_parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--extraction-worker-batch-size",
+            "0",
+        ])
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(
-            error
-                .to_string()
-                .contains("FROID_EXTRACTION_WORKER_BATCH_SIZE")
-        );
     }
 
     #[test]
-    fn serve_config_rejects_zero_extraction_worker_interval() {
-        let error = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            extraction_worker_interval_seconds: Some("0".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
+    fn parse_rejects_zero_extraction_worker_interval() {
+        let error = Cli::try_parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--extraction-worker-interval-seconds",
+            "0",
+        ])
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(
-            error
-                .to_string()
-                .contains("FROID_EXTRACTION_WORKER_INTERVAL_SECONDS")
-        );
     }
 
     #[test]
@@ -508,47 +524,45 @@ mod tests {
     }
 
     #[test]
-    fn serve_config_signal_worker_enabled_when_set_to_true() {
-        let config = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            signal_worker_enabled: Some("true".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
-        .unwrap();
+    fn serve_config_signal_worker_enabled_when_flag_set() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--signal-worker-enabled",
+            "true",
+        ]);
+
+        let config = cli.serve_config().unwrap();
 
         assert!(config.signal_worker.enabled);
     }
 
     #[test]
-    fn serve_config_rejects_zero_signal_worker_batch_size() {
-        let error = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            signal_worker_batch_size: Some("0".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
+    fn parse_rejects_zero_signal_worker_batch_size() {
+        let error = Cli::try_parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--signal-worker-batch-size",
+            "0",
+        ])
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(error.to_string().contains("FROID_SIGNAL_WORKER_BATCH_SIZE"));
     }
 
     #[test]
-    fn serve_config_rejects_zero_signal_worker_interval() {
-        let error = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            signal_worker_interval_seconds: Some("0".to_string()),
-            ..default_cli()
-        }
-        .serve_config()
+    fn parse_rejects_zero_signal_worker_interval() {
+        let error = Cli::try_parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--signal-worker-interval-seconds",
+            "0",
+        ])
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(
-            error
-                .to_string()
-                .contains("FROID_SIGNAL_WORKER_INTERVAL_SECONDS")
-        );
     }
 }
