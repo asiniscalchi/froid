@@ -9,3 +9,4 @@ pub mod search;
 pub mod service;
 pub mod status;
 pub mod store;
+pub mod week_review;
