@@ -6,7 +6,7 @@ pub mod service;
 pub mod wiring;
 
 pub use delivery_config::WeeklyReviewDeliveryWorkerConfig;
-pub use wiring::{WeeklyReviewRuntimeConfig, build_weekly_review_service};
+pub use wiring::{WeeklyReviewRuntimeConfig, build_weekly_review_service, configure_weekly_review};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;

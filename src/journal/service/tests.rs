@@ -22,6 +22,10 @@ use crate::{
             service::{DailyReviewRunner, DailyReviewService, DailyReviewServiceError},
         },
         search::SemanticSearchService,
+        week_review::{
+            WeeklyReview, WeeklyReviewStatus,
+            service::{WeeklyReviewResult, WeeklyReviewRunner, WeeklyReviewServiceError},
+        },
     },
     messages::MessageSource,
 };
@@ -1441,4 +1445,153 @@ async fn process_survives_panic_in_capture_time_extraction() {
         .await
         .expect("service must remain healthy after a background panic");
     assert_eq!(second.text, "Message saved.");
+}
+
+#[derive(Debug, Clone)]
+struct FakeWeeklyReviewRunner {
+    fetch_result: Result<Option<WeeklyReview>, WeeklyReviewServiceError>,
+    calls: Arc<Mutex<Vec<(String, NaiveDate)>>>,
+}
+
+impl FakeWeeklyReviewRunner {
+    fn with_fetch_result(
+        fetch_result: Result<Option<WeeklyReview>, WeeklyReviewServiceError>,
+    ) -> Self {
+        Self {
+            fetch_result,
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn calls(&self) -> Vec<(String, NaiveDate)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl WeeklyReviewRunner for FakeWeeklyReviewRunner {
+    async fn review_week(
+        &self,
+        _user_id: &str,
+        _week_start: NaiveDate,
+    ) -> Result<WeeklyReviewResult, WeeklyReviewServiceError> {
+        Ok(WeeklyReviewResult::SparseWeek)
+    }
+
+    async fn fetch_review(
+        &self,
+        user_id: &str,
+        week_start: NaiveDate,
+    ) -> Result<Option<WeeklyReview>, WeeklyReviewServiceError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((user_id.to_string(), week_start));
+        self.fetch_result.clone()
+    }
+}
+
+fn weekly_review(text: &str, week_start: NaiveDate) -> WeeklyReview {
+    WeeklyReview {
+        id: 1,
+        user_id: "7".to_string(),
+        week_start_date: week_start,
+        review_text: Some(text.to_string()),
+        model: "test-model".to_string(),
+        prompt_version: "v1".to_string(),
+        status: WeeklyReviewStatus::Completed,
+        error_message: None,
+        delivered_at: None,
+        delivery_error: None,
+        inputs_snapshot: None,
+        created_at: at(10, 0),
+        updated_at: at(10, 0),
+    }
+}
+
+async fn setup_with_weekly_review_runner<R>(runner: R) -> JournalService
+where
+    R: WeeklyReviewRunner + 'static,
+{
+    database::register_sqlite_vec_extension();
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::migrate!().run(&pool).await.unwrap();
+    JournalService::new(JournalRepository::new(pool)).with_weekly_review_runner(runner)
+}
+
+// 2026-04-28 is a Tuesday. previous ISO Monday relative to today is 2026-04-20.
+fn previous_week_monday() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 4, 20).unwrap()
+}
+
+#[tokio::test]
+async fn week_review_returns_unavailable_when_runner_is_not_configured() {
+    let service = setup().await;
+
+    let outgoing = service
+        .command(&command(JournalCommand::WeekReviewLast))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outgoing.text,
+        "Weekly review generation is not configured yet."
+    );
+}
+
+#[tokio::test]
+async fn week_review_fetches_previous_iso_week_monday() {
+    let runner = FakeWeeklyReviewRunner::with_fetch_result(Ok(Some(weekly_review(
+        "stored weekly review",
+        previous_week_monday(),
+    ))));
+    let service = setup_with_weekly_review_runner(runner.clone()).await;
+
+    let outgoing = service
+        .command(&command(JournalCommand::WeekReviewLast))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outgoing.text,
+        "Weekly review for week of 2026-04-20\n\nstored weekly review"
+    );
+    assert_eq!(
+        runner.calls(),
+        vec![("7".to_string(), previous_week_monday())]
+    );
+}
+
+#[tokio::test]
+async fn week_review_returns_not_available_when_no_review_exists() {
+    let runner = FakeWeeklyReviewRunner::with_fetch_result(Ok(None));
+    let service = setup_with_weekly_review_runner(runner).await;
+
+    let outgoing = service
+        .command(&command(JournalCommand::WeekReviewLast))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outgoing.text,
+        "No weekly review available for the week of 2026-04-20 yet."
+    );
+}
+
+#[tokio::test]
+async fn week_review_returns_not_available_on_fetch_error() {
+    let runner = FakeWeeklyReviewRunner::with_fetch_result(Err(WeeklyReviewServiceError::Storage(
+        "database unavailable".to_string(),
+    )));
+    let service = setup_with_weekly_review_runner(runner).await;
+
+    let outgoing = service
+        .command(&command(JournalCommand::WeekReviewLast))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outgoing.text,
+        "No weekly review available for the week of 2026-04-20 yet."
+    );
 }

@@ -22,6 +22,7 @@ use crate::{
         search::{SearchService, SemanticSearchService},
         status::EmbeddingStatusConfig,
         store::JournalEntryStore,
+        week_review::service::WeeklyReviewRunner,
     },
     messages::{IncomingMessage, OutgoingMessage},
 };
@@ -39,6 +40,7 @@ pub struct JournalService {
     capture_embedding: Option<Arc<dyn CaptureEmbeddingService>>,
     entry_extraction: Option<Arc<dyn JournalEntryExtractionRunner>>,
     daily_review: Option<Arc<dyn DailyReviewRunner>>,
+    weekly_review: Option<Arc<dyn WeeklyReviewRunner>>,
     embedding_status_config: Option<EmbeddingStatusConfig>,
     pending_embedding_counter: Option<Arc<dyn PendingEmbeddingCounter>>,
     daily_review_prompt_version: Option<String>,
@@ -56,6 +58,7 @@ impl JournalService {
             capture_embedding: None,
             entry_extraction: None,
             daily_review: None,
+            weekly_review: None,
             embedding_status_config: None,
             pending_embedding_counter: None,
             daily_review_prompt_version: None,
@@ -121,6 +124,14 @@ impl JournalService {
         R: DailyReviewRunner + 'static,
     {
         self.daily_review = Some(Arc::new(daily_review));
+        self
+    }
+
+    pub fn with_weekly_review_runner<R>(mut self, weekly_review: R) -> Self
+    where
+        R: WeeklyReviewRunner + 'static,
+    {
+        self.weekly_review = Some(Arc::new(weekly_review));
         self
     }
 
