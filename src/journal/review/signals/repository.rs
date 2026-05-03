@@ -192,6 +192,33 @@ impl DailyReviewSignalRepository {
 
         rows.into_iter().map(row_to_signal).collect()
     }
+
+    pub async fn find_by_user_in_range(
+        &self,
+        user_id: &str,
+        start_date: NaiveDate,
+        end_date_exclusive: NaiveDate,
+    ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalRepositoryError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, daily_review_id, user_id, review_date, signal_type, label, status,
+                   valence, strength, confidence, evidence, model, prompt_version,
+                   created_at, updated_at
+            FROM daily_review_signals
+            WHERE user_id = ?
+              AND review_date >= ?
+              AND review_date < ?
+            ORDER BY review_date ASC, id ASC
+            "#,
+        )
+        .bind(user_id)
+        .bind(start_date.to_string())
+        .bind(end_date_exclusive.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_signal).collect()
+    }
 }
 
 fn row_to_signal(row: SqliteRow) -> Result<DailyReviewSignal, DailyReviewSignalRepositoryError> {
@@ -443,5 +470,110 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(candidates.len(), 1);
+    }
+
+    async fn insert_daily_review_for(pool: &SqlitePool, user_id: &str, date: NaiveDate) -> i64 {
+        let review_repo = DailyReviewRepository::new(pool.clone());
+        review_repo
+            .upsert_completed(user_id, date, "review text", "model", "v1")
+            .await
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn find_by_user_in_range_returns_signals_in_range_ordered_by_date_then_id() {
+        let (repo, _reviews, pool) = setup().await;
+        let monday = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+        let wednesday = NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
+        let outside = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+
+        let monday_review = insert_daily_review_for(&pool, "user-1", monday).await;
+        let wednesday_review = insert_daily_review_for(&pool, "user-1", wednesday).await;
+        let outside_review = insert_daily_review_for(&pool, "user-1", outside).await;
+
+        repo.replace_in_transaction(
+            monday_review,
+            "user-1",
+            monday,
+            &[theme_candidate()],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+        repo.replace_in_transaction(
+            wednesday_review,
+            "user-1",
+            wednesday,
+            &[theme_candidate(), need_candidate()],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+        repo.replace_in_transaction(
+            outside_review,
+            "user-1",
+            outside,
+            &[theme_candidate()],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+
+        let in_range = repo
+            .find_by_user_in_range(
+                "user-1",
+                monday,
+                NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let dates: Vec<_> = in_range.iter().map(|s| s.review_date).collect();
+        assert_eq!(dates, vec![monday, wednesday, wednesday]);
+    }
+
+    #[tokio::test]
+    async fn find_by_user_in_range_isolates_users() {
+        let (repo, _reviews, pool) = setup().await;
+        let target = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+        let user_one_review = insert_daily_review_for(&pool, "user-1", target).await;
+        let user_two_review = insert_daily_review_for(&pool, "user-2", target).await;
+
+        repo.replace_in_transaction(
+            user_one_review,
+            "user-1",
+            target,
+            &[theme_candidate()],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+        repo.replace_in_transaction(
+            user_two_review,
+            "user-2",
+            target,
+            &[theme_candidate()],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+
+        let rows = repo
+            .find_by_user_in_range(
+                "user-1",
+                target,
+                NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].user_id, "user-1");
     }
 }

@@ -132,6 +132,37 @@ impl DailyReviewRepository {
         Ok(results)
     }
 
+    pub async fn fetch_completed_in_range(
+        &self,
+        user_id: &str,
+        start_date: NaiveDate,
+        end_date_exclusive: NaiveDate,
+    ) -> Result<Vec<DailyReview>, DailyReviewRepositoryError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, user_id, review_date, review_text, model, prompt_version, status,
+                   error_message, delivered_at, delivery_error,
+                   signals_status, signals_error, signals_model, signals_prompt_version, signals_updated_at,
+                   created_at, updated_at
+            FROM daily_reviews
+            WHERE user_id = ?
+              AND review_date >= ?
+              AND review_date < ?
+              AND status = 'completed'
+              AND review_text IS NOT NULL
+              AND TRIM(review_text) != ''
+            ORDER BY review_date ASC
+            "#,
+        )
+        .bind(user_id)
+        .bind(start_date.to_string())
+        .bind(end_date_exclusive.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_daily_review).collect()
+    }
+
     pub async fn upsert_completed(
         &self,
         user_id: &str,
@@ -621,5 +652,97 @@ mod tests {
             .unwrap();
         assert_eq!(review.delivered_at, None);
         assert_eq!(review.delivery_error, Some("second error".to_string()));
+    }
+
+    #[tokio::test]
+    async fn fetch_completed_in_range_returns_only_completed_rows_in_range_ordered_ascending() {
+        let repo = setup().await;
+        let monday = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+        let tuesday = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
+        let next_monday = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+        let prev_sunday = NaiveDate::from_ymd_opt(2026, 4, 26).unwrap();
+
+        repo.upsert_completed("user-1", monday, "monday", "m", "v1")
+            .await
+            .unwrap();
+        repo.upsert_completed("user-1", tuesday, "tuesday", "m", "v1")
+            .await
+            .unwrap();
+        repo.upsert_completed("user-1", prev_sunday, "previous week", "m", "v1")
+            .await
+            .unwrap();
+        repo.upsert_completed("user-1", next_monday, "next week", "m", "v1")
+            .await
+            .unwrap();
+        repo.upsert_failed(
+            "user-1",
+            NaiveDate::from_ymd_opt(2026, 4, 29).unwrap(),
+            "m",
+            "v1",
+            "boom",
+        )
+        .await
+        .unwrap();
+
+        let rows = repo
+            .fetch_completed_in_range(
+                "user-1",
+                monday,
+                NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let dates: Vec<_> = rows.iter().map(|r| r.review_date).collect();
+        assert_eq!(dates, vec![monday, tuesday]);
+    }
+
+    #[tokio::test]
+    async fn fetch_completed_in_range_excludes_blank_review_text() {
+        let repo = setup().await;
+        let date_a = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+        let date_b = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
+        repo.upsert_completed("user-1", date_a, "real", "m", "v1")
+            .await
+            .unwrap();
+        repo.upsert_completed("user-1", date_b, "   ", "m", "v1")
+            .await
+            .unwrap();
+
+        let rows = repo
+            .fetch_completed_in_range(
+                "user-1",
+                date_a,
+                NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let dates: Vec<_> = rows.iter().map(|r| r.review_date).collect();
+        assert_eq!(dates, vec![date_a]);
+    }
+
+    #[tokio::test]
+    async fn fetch_completed_in_range_isolates_users() {
+        let repo = setup().await;
+        let target = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+        repo.upsert_completed("user-1", target, "user one", "m", "v1")
+            .await
+            .unwrap();
+        repo.upsert_completed("user-2", target, "user two", "m", "v1")
+            .await
+            .unwrap();
+
+        let rows = repo
+            .fetch_completed_in_range(
+                "user-1",
+                target,
+                NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].user_id, "user-1");
     }
 }

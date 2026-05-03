@@ -1,5 +1,6 @@
 pub mod generator;
 pub mod repository;
+pub mod service;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
