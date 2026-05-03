@@ -1,7 +1,11 @@
 use clap::{Parser, Subcommand};
 
 use crate::{
-    journal::review::DailyReviewDeliveryWorkerConfig, version, workers::ReconciliationWorkerConfig,
+    journal::{
+        review::DailyReviewDeliveryWorkerConfig, week_review::WeeklyReviewDeliveryWorkerConfig,
+    },
+    version,
+    workers::{ReconciliationWorkerConfig, weekly_review::weekday_from_str},
 };
 
 #[derive(Debug, Parser)]
@@ -98,6 +102,28 @@ pub struct Cli {
     )]
     daily_review_delivery_interval_seconds: Option<u64>,
 
+    #[arg(long, env = "FROID_WEEK_REVIEW_WORKER_ENABLED", global = true)]
+    week_review_worker_enabled: Option<bool>,
+
+    #[arg(
+        long,
+        env = "FROID_WEEK_REVIEW_WORKER_INTERVAL_SECONDS",
+        global = true,
+        value_parser = clap::value_parser!(u64).range(1..),
+    )]
+    week_review_worker_interval_seconds: Option<u64>,
+
+    #[arg(long, env = "FROID_WEEK_REVIEW_KICKOFF_DAY", global = true)]
+    week_review_kickoff_day: Option<String>,
+
+    #[arg(
+        long,
+        env = "FROID_WEEK_REVIEW_MIN_DAILY_REVIEWS",
+        global = true,
+        value_parser = clap::value_parser!(usize),
+    )]
+    week_review_min_daily_reviews: Option<usize>,
+
     #[arg(long, env = "FROID_SIGNAL_WORKER_ENABLED", global = true)]
     signal_worker_enabled: Option<bool>,
 
@@ -136,6 +162,7 @@ pub struct ServeConfig {
     pub daily_review_embedding_worker: ReconciliationWorkerConfig,
     pub extraction_worker: ReconciliationWorkerConfig,
     pub daily_review_delivery: DailyReviewDeliveryWorkerConfig,
+    pub weekly_review_delivery: WeeklyReviewDeliveryWorkerConfig,
     pub signal_worker: ReconciliationWorkerConfig,
 }
 
@@ -182,6 +209,28 @@ impl Cli {
             self.daily_review_delivery_interval_seconds,
         );
 
+        let kickoff_weekday = match self.week_review_kickoff_day.as_deref() {
+            Some(value) => match weekday_from_str(value) {
+                Some(day) => Some(day),
+                None => {
+                    return Err(clap::Error::raw(
+                        clap::error::ErrorKind::ValueValidation,
+                        format!(
+                            "FROID_WEEK_REVIEW_KICKOFF_DAY must be a weekday name (e.g. Monday); got {value:?}"
+                        ),
+                    ));
+                }
+            },
+            None => None,
+        };
+
+        let weekly_review_delivery = WeeklyReviewDeliveryWorkerConfig::from_values(
+            self.week_review_worker_enabled,
+            self.week_review_worker_interval_seconds,
+            kickoff_weekday,
+            self.week_review_min_daily_reviews,
+        );
+
         let signal_worker = ReconciliationWorkerConfig::from_values(
             self.signal_worker_enabled,
             self.signal_worker_batch_size,
@@ -198,6 +247,7 @@ impl Cli {
             daily_review_embedding_worker,
             extraction_worker,
             daily_review_delivery,
+            weekly_review_delivery,
             signal_worker,
         })
     }
@@ -225,6 +275,10 @@ mod tests {
             extraction_worker_interval_seconds: None,
             daily_review_delivery_enabled: None,
             daily_review_delivery_interval_seconds: None,
+            week_review_worker_enabled: None,
+            week_review_worker_interval_seconds: None,
+            week_review_kickoff_day: None,
+            week_review_min_daily_reviews: None,
             signal_worker_enabled: None,
             signal_worker_batch_size: None,
             signal_worker_interval_seconds: None,

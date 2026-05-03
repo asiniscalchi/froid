@@ -1,8 +1,15 @@
+pub mod delivery_config;
 pub mod generator;
+pub mod prompt;
 pub mod repository;
 pub mod service;
+pub mod wiring;
+
+pub use delivery_config::WeeklyReviewDeliveryWorkerConfig;
+pub use wiring::{WeeklyReviewRuntimeConfig, build_weekly_review_service};
 
 use chrono::{DateTime, NaiveDate, Utc};
+use serde::Serialize;
 
 use crate::journal::review::signals::types::DailyReviewSignal;
 
@@ -18,6 +25,7 @@ pub struct WeeklyReview {
     pub error_message: Option<String>,
     pub delivered_at: Option<DateTime<Utc>>,
     pub delivery_error: Option<String>,
+    pub inputs_snapshot: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -28,13 +36,13 @@ pub enum WeeklyReviewStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WeeklyReviewInput {
     pub week_start: NaiveDate,
     pub days: Vec<DailyReviewSlice>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DailyReviewSlice {
     pub date: NaiveDate,
     pub review_text: String,

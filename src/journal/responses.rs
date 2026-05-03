@@ -6,6 +6,7 @@ use super::status::{
     DailyReviewDeliveryStatus, DailyReviewGenerationStatus, DailyReviewStatus, EmbeddingStatus,
     SemanticSearchStatus, StatusReport,
 };
+use super::week_review::WeeklyReview;
 
 pub(super) fn message_saved_response() -> String {
     "Message saved.".to_string()
@@ -77,6 +78,17 @@ pub(crate) fn format_daily_review_for_date(review: &DailyReview, date: NaiveDate
     format!(
         "Daily review for {}\n\n{}",
         date.format("%Y-%m-%d"),
+        review.review_text.as_deref().unwrap_or_default()
+    )
+}
+
+pub(crate) fn format_weekly_review_for_week(
+    review: &WeeklyReview,
+    week_start: NaiveDate,
+) -> String {
+    format!(
+        "Weekly review for week of {}\n\n{}",
+        week_start.format("%Y-%m-%d"),
         review.review_text.as_deref().unwrap_or_default()
     )
 }

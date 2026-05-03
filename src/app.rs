@@ -32,6 +32,7 @@ use crate::{
         search::SemanticSearchService,
         service::JournalService,
         status::EmbeddingStatusConfig,
+        week_review::{WeeklyReviewRuntimeConfig, build_weekly_review_service},
     },
     version,
     workers::{
@@ -40,6 +41,7 @@ use crate::{
         embedding::EmbeddingCycle,
         extraction::ExtractionCycle,
         signals::DailyReviewSignalCycle,
+        weekly_review::{TelegramWeeklyReviewSender, WeeklyReviewDeliveryWorker},
     },
 };
 
@@ -58,6 +60,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
 
     let embedding_config = EmbeddingConfig::from_env().ok();
     let daily_review_config = DailyReviewRuntimeConfig::from_env();
+    let weekly_review_config = WeeklyReviewRuntimeConfig::from_env();
     let entry_extraction_config = JournalEntryExtractionRuntimeConfig::from_env();
     let signal_runtime_config = DailyReviewSignalRuntimeConfig::from_env();
 
@@ -91,6 +94,13 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &pool,
         &config,
         daily_review_config.clone(),
+    )?;
+    spawn_weekly_review_delivery_worker(
+        &mut workers,
+        &shutdown,
+        &pool,
+        &config,
+        weekly_review_config,
     )?;
     spawn_signal_worker(
         &mut workers,
@@ -328,6 +338,39 @@ fn spawn_daily_review_delivery_worker(
     });
 
     Ok(true)
+}
+
+fn spawn_weekly_review_delivery_worker(
+    workers: &mut JoinSet<&'static str>,
+    shutdown: &CancellationToken,
+    pool: &SqlitePool,
+    config: &ServeConfig,
+    weekly_review_config: WeeklyReviewRuntimeConfig,
+) -> Result<(), Box<dyn Error>> {
+    if !config.weekly_review_delivery.enabled {
+        return Ok(());
+    }
+
+    let Some(weekly_review_service) =
+        build_weekly_review_service(pool.clone(), weekly_review_config)?
+    else {
+        return Ok(());
+    };
+
+    let worker = WeeklyReviewDeliveryWorker::new(
+        JournalRepository::new(pool.clone()),
+        crate::journal::week_review::repository::WeeklyReviewRepository::new(pool.clone()),
+        weekly_review_service,
+        TelegramWeeklyReviewSender::new(config.telegram_bot_token.clone()),
+        config.weekly_review_delivery.clone(),
+    );
+    let token = shutdown.clone();
+    workers.spawn(async move {
+        worker.run_forever(token).await;
+        "weekly_review_delivery"
+    });
+
+    Ok(())
 }
 
 fn spawn_signal_worker(
