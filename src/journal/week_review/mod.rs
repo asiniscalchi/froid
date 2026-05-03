@@ -1,6 +1,9 @@
+pub mod generator;
 pub mod repository;
 
 use chrono::{DateTime, NaiveDate, Utc};
+
+use crate::journal::review::signals::types::DailyReviewSignal;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeeklyReview {
@@ -22,4 +25,17 @@ pub struct WeeklyReview {
 pub enum WeeklyReviewStatus {
     Completed,
     Failed,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeeklyReviewInput {
+    pub week_start: NaiveDate,
+    pub days: Vec<DailyReviewSlice>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DailyReviewSlice {
+    pub date: NaiveDate,
+    pub review_text: String,
+    pub signals: Vec<DailyReviewSignal>,
 }
