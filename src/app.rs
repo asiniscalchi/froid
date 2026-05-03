@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::future::{Future, pending};
+use std::sync::Arc;
 
 use sqlx::SqlitePool;
 use tokio::task::JoinSet;
@@ -388,10 +389,9 @@ fn build_journal_service(
             );
             error
         })?;
+        let embedder = Arc::new(embedder);
 
-        let search_index = SqliteEmbeddingRepository::new(pool.clone());
-        let capture_index = SqliteEmbeddingRepository::new(pool.clone());
-        let status_index = SqliteEmbeddingRepository::new(pool.clone());
+        let embedding_repository = SqliteEmbeddingRepository::new(pool.clone());
         let review_search_index =
             crate::journal::review::embedding_repository::SqliteDailyReviewEmbeddingRepository::new(
                 pool.clone(),
@@ -401,21 +401,22 @@ fn build_journal_service(
             dimensions: cfg.dimensions,
         };
         let search = SemanticSearchService::new(
-            search_index,
-            embedder.clone(),
+            embedding_repository.clone(),
+            Arc::clone(&embedder),
             JournalRepository::new(pool.clone()),
         );
         let review_search = crate::journal::review::search::SemanticDailyReviewSearchService::new(
             review_search_index,
-            embedder.clone(),
+            Arc::clone(&embedder),
             crate::journal::review::repository::DailyReviewRepository::new(pool.clone()),
         );
 
         journal_service = journal_service.with_search(search);
         journal_service = journal_service.with_daily_review_search(review_search);
-        journal_service = journal_service.with_capture_embedding(capture_index, embedder);
+        journal_service =
+            journal_service.with_capture_embedding(embedding_repository.clone(), embedder);
         journal_service = journal_service.with_embedding_status_config(status_config);
-        journal_service = journal_service.with_pending_embedding_counter(status_index);
+        journal_service = journal_service.with_pending_embedding_counter(embedding_repository);
     }
 
     Ok(journal_service)

@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, sync::Arc};
 
 use async_trait::async_trait;
 
@@ -78,4 +78,22 @@ pub trait Embedder: Send + Sync {
     fn dimensions(&self) -> usize;
 
     async fn embed(&self, text: &str) -> Result<Embedding, EmbedderError>;
+}
+
+#[async_trait]
+impl<E> Embedder for Arc<E>
+where
+    E: Embedder + ?Sized,
+{
+    fn model(&self) -> &str {
+        (**self).model()
+    }
+
+    fn dimensions(&self) -> usize {
+        (**self).dimensions()
+    }
+
+    async fn embed(&self, text: &str) -> Result<Embedding, EmbedderError> {
+        (**self).embed(text).await
+    }
 }
