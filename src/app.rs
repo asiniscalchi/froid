@@ -380,11 +380,15 @@ fn build_journal_service(
         journal_service = journal_service.with_daily_review_delivery_configured();
     }
 
-    if let Some(cfg) = embedding_config
-        && let Ok(search_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
-        && let Ok(capture_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
-        && let Ok(review_search_embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
-    {
+    if let Some(cfg) = embedding_config {
+        let embedder = RigOpenAiEmbedder::from_env(cfg.clone()).map_err(|error| {
+            warn!(
+                error = %error,
+                "failed to construct OpenAI embedder for journal service; semantic search will be unavailable"
+            );
+            error
+        })?;
+
         let search_index = SqliteEmbeddingRepository::new(pool.clone());
         let capture_index = SqliteEmbeddingRepository::new(pool.clone());
         let status_index = SqliteEmbeddingRepository::new(pool.clone());
@@ -398,18 +402,18 @@ fn build_journal_service(
         };
         let search = SemanticSearchService::new(
             search_index,
-            search_embedder,
+            embedder.clone(),
             JournalRepository::new(pool.clone()),
         );
         let review_search = crate::journal::review::search::SemanticDailyReviewSearchService::new(
             review_search_index,
-            review_search_embedder,
+            embedder.clone(),
             crate::journal::review::repository::DailyReviewRepository::new(pool.clone()),
         );
 
         journal_service = journal_service.with_search(search);
         journal_service = journal_service.with_daily_review_search(review_search);
-        journal_service = journal_service.with_capture_embedding(capture_index, capture_embedder);
+        journal_service = journal_service.with_capture_embedding(capture_index, embedder);
         journal_service = journal_service.with_embedding_status_config(status_config);
         journal_service = journal_service.with_pending_embedding_counter(status_index);
     }
