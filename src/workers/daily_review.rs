@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use teloxide::{prelude::*, types::ChatId};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -230,7 +231,7 @@ where
         Ok(())
     }
 
-    pub async fn run_forever(self) {
+    pub async fn run_forever(self, shutdown: CancellationToken) {
         info!(
             enabled = self.config.enabled,
             interval_seconds = self.config.interval.as_secs(),
@@ -238,6 +239,10 @@ where
         );
 
         loop {
+            if shutdown.is_cancelled() {
+                return;
+            }
+
             match self.run_once(Utc::now()).await {
                 Ok(result) => {
                     if result.attempted > 0 && (result.delivered > 0 || result.failed > 0) {
@@ -254,7 +259,11 @@ where
                     error!(error = %err, "daily review delivery cycle failed");
                 }
             }
-            tokio::time::sleep(self.config.interval).await;
+
+            tokio::select! {
+                _ = tokio::time::sleep(self.config.interval) => {}
+                _ = shutdown.cancelled() => return,
+            }
         }
     }
 }
@@ -712,5 +721,35 @@ mod tests {
                 .delivered_at
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn run_forever_exits_when_cancellation_token_fires() {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+
+        let worker = DailyReviewDeliveryWorker::new(
+            JournalRepository::new(pool.clone()),
+            DailyReviewRepository::new(pool.clone()),
+            FakeRunner::returning(Ok(DailyReviewResult::EmptyDay)),
+            FakeSender::succeeding(),
+            DailyReviewDeliveryWorkerConfig {
+                enabled: true,
+                interval: std::time::Duration::from_millis(1),
+            },
+        );
+
+        let shutdown = CancellationToken::new();
+        let handle = tokio::spawn({
+            let shutdown = shutdown.clone();
+            async move {
+                worker.run_forever(shutdown).await;
+            }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        shutdown.cancel();
+        handle.await.expect("worker task ran to completion");
     }
 }

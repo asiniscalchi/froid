@@ -720,6 +720,7 @@ dependencies = [
  "chrono",
  "clap",
  "dotenvy",
+ "futures",
  "libsqlite3-sys",
  "rig-core",
  "schemars 1.2.1",
@@ -729,6 +730,7 @@ dependencies = [
  "sqlx",
  "teloxide",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3228,6 +3230,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

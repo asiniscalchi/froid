@@ -1397,3 +1397,48 @@ async fn command_search_returns_error_message_when_embedder_fails() {
 
     assert!(outgoing.text.starts_with("Search failed:"));
 }
+
+#[derive(Clone)]
+struct PanickingExtractionRunner;
+
+#[async_trait::async_trait]
+impl JournalEntryExtractionRunner for PanickingExtractionRunner {
+    fn model(&self) -> &str {
+        "panicking-extraction-model"
+    }
+
+    fn prompt_version(&self) -> &str {
+        "panicking_v1"
+    }
+
+    async fn extract_entry(
+        &self,
+        _journal_entry_id: i64,
+        _text: &str,
+    ) -> Result<(), JournalEntryExtractionServiceError> {
+        panic!("intentional capture-time panic");
+    }
+}
+
+#[tokio::test]
+async fn process_survives_panic_in_capture_time_extraction() {
+    // The spawned background task panics inside the extraction runner.
+    // catch_unwind must absorb it so the runtime stays healthy and
+    // subsequent calls to `process` keep working.
+    let (service, _repo) = setup_with_entry_extraction_runner(PanickingExtractionRunner).await;
+
+    let first = service
+        .process(&incoming("200", "first", at(10, 0)))
+        .await
+        .expect("first message must be saved despite panicking background task");
+    assert_eq!(first.text, "Message saved.");
+
+    // Give the background task a moment to run-and-panic-and-be-caught.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let second = service
+        .process(&incoming("201", "second", at(10, 1)))
+        .await
+        .expect("service must remain healthy after a background panic");
+    assert_eq!(second.text, "Message saved.");
+}

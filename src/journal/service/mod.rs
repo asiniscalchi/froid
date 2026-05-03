@@ -1,7 +1,9 @@
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tracing::warn;
+use futures::FutureExt;
+use tracing::{error, warn};
 
 use crate::{
     handler::MessageHandler,
@@ -147,28 +149,54 @@ impl JournalService {
         let entry_extraction = self.entry_extraction.clone();
 
         tokio::spawn(async move {
-            if let Some(capture_embedding) = capture_embedding
-                && let Err(error) = capture_embedding.embed_entry(journal_entry_id, &text).await
-            {
-                warn!(
-                    journal_entry_id,
-                    error = %error,
-                    "failed to create journal entry embedding after capture"
-                );
-            }
+            // Wrap with catch_unwind so a panic inside the embedder or
+            // extractor surfaces as an error log instead of being lost
+            // to a fire-and-forget JoinHandle.
+            let outcome = AssertUnwindSafe(run_capture_followups(
+                journal_entry_id,
+                text,
+                capture_embedding,
+                entry_extraction,
+            ))
+            .catch_unwind()
+            .await;
 
-            if let Some(entry_extraction) = entry_extraction
-                && let Err(error) = entry_extraction
-                    .extract_entry(journal_entry_id, &text)
-                    .await
-            {
-                warn!(
+            if outcome.is_err() {
+                error!(
                     journal_entry_id,
-                    error = %error,
-                    "failed to process journal entry extraction after capture"
+                    "background capture task panicked; payload swallowed by catch_unwind"
                 );
             }
         });
+    }
+}
+
+async fn run_capture_followups(
+    journal_entry_id: i64,
+    text: String,
+    capture_embedding: Option<Arc<dyn CaptureEmbeddingService>>,
+    entry_extraction: Option<Arc<dyn JournalEntryExtractionRunner>>,
+) {
+    if let Some(capture_embedding) = capture_embedding
+        && let Err(error) = capture_embedding.embed_entry(journal_entry_id, &text).await
+    {
+        warn!(
+            journal_entry_id,
+            error = %error,
+            "failed to create journal entry embedding after capture"
+        );
+    }
+
+    if let Some(entry_extraction) = entry_extraction
+        && let Err(error) = entry_extraction
+            .extract_entry(journal_entry_id, &text)
+            .await
+    {
+        warn!(
+            journal_entry_id,
+            error = %error,
+            "failed to process journal entry extraction after capture"
+        );
     }
 }
 
