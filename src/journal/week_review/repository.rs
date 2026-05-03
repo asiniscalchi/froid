@@ -58,7 +58,7 @@ impl WeeklyReviewRepository {
         let row = sqlx::query(
             r#"
             SELECT id, user_id, week_start_date, review_text, model, prompt_version, status,
-                   error_message, delivered_at, delivery_error,
+                   error_message, delivered_at, delivery_error, inputs_snapshot,
                    created_at, updated_at
             FROM weekly_reviews
             WHERE user_id = ? AND week_start_date = ?
@@ -79,12 +79,13 @@ impl WeeklyReviewRepository {
         review_text: &str,
         model: &str,
         prompt_version: &str,
+        inputs_snapshot: &str,
     ) -> Result<WeeklyReview, WeeklyReviewRepositoryError> {
         sqlx::query(
             r#"
             INSERT INTO weekly_reviews
-                (user_id, week_start_date, review_text, model, prompt_version, status, error_message)
-            VALUES (?, ?, ?, ?, ?, 'completed', NULL)
+                (user_id, week_start_date, review_text, model, prompt_version, status, error_message, inputs_snapshot)
+            VALUES (?, ?, ?, ?, ?, 'completed', NULL, ?)
             ON CONFLICT(user_id, week_start_date) DO UPDATE SET
                 review_text = excluded.review_text,
                 model = excluded.model,
@@ -92,6 +93,7 @@ impl WeeklyReviewRepository {
                 status = 'completed',
                 error_message = NULL,
                 delivery_error = NULL,
+                inputs_snapshot = excluded.inputs_snapshot,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             "#,
         )
@@ -100,6 +102,7 @@ impl WeeklyReviewRepository {
         .bind(review_text)
         .bind(model)
         .bind(prompt_version)
+        .bind(inputs_snapshot)
         .execute(&self.pool)
         .await?;
 
@@ -221,6 +224,7 @@ fn row_to_weekly_review(row: SqliteRow) -> Result<WeeklyReview, WeeklyReviewRepo
         error_message: row.get("error_message"),
         delivered_at: row.get("delivered_at"),
         delivery_error: row.get("delivery_error"),
+        inputs_snapshot: row.get("inputs_snapshot"),
         created_at: row.get::<DateTime<Utc>, _>("created_at"),
         updated_at: row.get::<DateTime<Utc>, _>("updated_at"),
     })
@@ -250,7 +254,14 @@ mod tests {
         let repo = setup().await;
 
         let review = repo
-            .upsert_completed("user-1", week_start(), "review text", "test-model", "v1")
+            .upsert_completed(
+                "user-1",
+                week_start(),
+                "review text",
+                "test-model",
+                "v1",
+                "{}",
+            )
             .await
             .unwrap();
 
@@ -287,9 +298,16 @@ mod tests {
     #[tokio::test]
     async fn finds_review_by_user_and_week() {
         let repo = setup().await;
-        repo.upsert_completed("user-1", week_start(), "review text", "test-model", "v1")
-            .await
-            .unwrap();
+        repo.upsert_completed(
+            "user-1",
+            week_start(),
+            "review text",
+            "test-model",
+            "v1",
+            "{}",
+        )
+        .await
+        .unwrap();
 
         let found = repo
             .find_by_user_and_week("user-1", week_start())
@@ -305,13 +323,13 @@ mod tests {
         let repo = setup().await;
         let other_week = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
 
-        repo.upsert_completed("user-1", week_start(), "user one", "test-model", "v1")
+        repo.upsert_completed("user-1", week_start(), "user one", "test-model", "v1", "{}")
             .await
             .unwrap();
-        repo.upsert_completed("user-2", week_start(), "user two", "test-model", "v1")
+        repo.upsert_completed("user-2", week_start(), "user two", "test-model", "v1", "{}")
             .await
             .unwrap();
-        repo.upsert_completed("user-1", other_week, "other week", "test-model", "v1")
+        repo.upsert_completed("user-1", other_week, "other week", "test-model", "v1", "{}")
             .await
             .unwrap();
 
@@ -346,11 +364,18 @@ mod tests {
         let repo = setup().await;
 
         let original = repo
-            .upsert_completed("user-1", week_start(), "original", "test-model", "v1")
+            .upsert_completed("user-1", week_start(), "original", "test-model", "v1", "{}")
             .await
             .unwrap();
         let updated = repo
-            .upsert_completed("user-1", week_start(), "new review", "new-model", "v2")
+            .upsert_completed(
+                "user-1",
+                week_start(),
+                "new review",
+                "new-model",
+                "v2",
+                "{}",
+            )
             .await
             .unwrap();
 
@@ -367,7 +392,7 @@ mod tests {
         let repo = setup().await;
 
         let original = repo
-            .upsert_completed("user-1", week_start(), "original", "test-model", "v1")
+            .upsert_completed("user-1", week_start(), "original", "test-model", "v1", "{}")
             .await
             .unwrap();
         let after_failed = repo
@@ -389,7 +414,14 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
 
         let completed = repo
-            .upsert_completed("user-1", week_start(), "review text", "test-model", "v1")
+            .upsert_completed(
+                "user-1",
+                week_start(),
+                "review text",
+                "test-model",
+                "v1",
+                "{}",
+            )
             .await
             .unwrap();
 
@@ -424,9 +456,16 @@ mod tests {
     #[tokio::test]
     async fn mark_delivered_records_delivery_time_and_clears_delivery_error() {
         let repo = setup().await;
-        repo.upsert_completed("user-1", week_start(), "review text", "test-model", "v1")
-            .await
-            .unwrap();
+        repo.upsert_completed(
+            "user-1",
+            week_start(),
+            "review text",
+            "test-model",
+            "v1",
+            "{}",
+        )
+        .await
+        .unwrap();
         repo.mark_delivery_failed("user-1", week_start(), "telegram failed")
             .await
             .unwrap();
@@ -445,9 +484,16 @@ mod tests {
     #[tokio::test]
     async fn mark_delivery_failed_records_latest_delivery_error() {
         let repo = setup().await;
-        repo.upsert_completed("user-1", week_start(), "review text", "test-model", "v1")
-            .await
-            .unwrap();
+        repo.upsert_completed(
+            "user-1",
+            week_start(),
+            "review text",
+            "test-model",
+            "v1",
+            "{}",
+        )
+        .await
+        .unwrap();
 
         repo.mark_delivery_failed("user-1", week_start(), "first error")
             .await
@@ -500,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn unique_constraint_enforced_on_user_and_week() {
         let repo = setup().await;
-        repo.upsert_completed("user-1", week_start(), "first", "m", "v1")
+        repo.upsert_completed("user-1", week_start(), "first", "m", "v1", "{}")
             .await
             .unwrap();
 
@@ -515,5 +561,61 @@ mod tests {
         .await;
 
         assert!(result.is_err(), "expected UNIQUE constraint to reject row");
+    }
+
+    #[tokio::test]
+    async fn upsert_completed_persists_inputs_snapshot() {
+        let repo = setup().await;
+        let snapshot = r#"{"week_start":"2026-04-27","days":[]}"#;
+
+        let stored = repo
+            .upsert_completed("user-1", week_start(), "review", "m", "v1", snapshot)
+            .await
+            .unwrap();
+
+        assert_eq!(stored.inputs_snapshot, Some(snapshot.to_string()));
+    }
+
+    #[tokio::test]
+    async fn upsert_completed_overwrites_inputs_snapshot_on_regeneration() {
+        let repo = setup().await;
+        repo.upsert_completed("user-1", week_start(), "first", "m", "v1", r#"{"v":1}"#)
+            .await
+            .unwrap();
+
+        let updated = repo
+            .upsert_completed("user-1", week_start(), "second", "m", "v1", r#"{"v":2}"#)
+            .await
+            .unwrap();
+
+        assert_eq!(updated.inputs_snapshot, Some(r#"{"v":2}"#.to_string()));
+    }
+
+    #[tokio::test]
+    async fn upsert_failed_leaves_existing_inputs_snapshot_untouched() {
+        let repo = setup().await;
+        repo.upsert_completed("user-1", week_start(), "first", "m", "v1", r#"{"v":1}"#)
+            .await
+            .unwrap();
+        repo.upsert_failed("user-1", week_start(), "m", "v1", "ignored")
+            .await
+            .unwrap();
+
+        let stored = repo
+            .find_by_user_and_week("user-1", week_start())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.inputs_snapshot, Some(r#"{"v":1}"#.to_string()));
+    }
+
+    #[tokio::test]
+    async fn upsert_failed_starts_with_null_inputs_snapshot() {
+        let repo = setup().await;
+        let stored = repo
+            .upsert_failed("user-1", week_start(), "m", "v1", "boom")
+            .await
+            .unwrap();
+        assert_eq!(stored.inputs_snapshot, None);
     }
 }

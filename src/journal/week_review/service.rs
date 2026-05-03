@@ -195,9 +195,22 @@ impl WeeklyReviewService {
                         .await;
                 }
 
+                let inputs_snapshot = serde_json::to_string(&input).map_err(|err| {
+                    WeeklyReviewServiceError::Storage(format!(
+                        "failed to serialize inputs snapshot: {err}"
+                    ))
+                })?;
+
                 let review = self
                     .weekly_reviews
-                    .upsert_completed(user_id, week_start, trimmed, model, prompt_version)
+                    .upsert_completed(
+                        user_id,
+                        week_start,
+                        trimmed,
+                        model,
+                        prompt_version,
+                        &inputs_snapshot,
+                    )
                     .await?;
                 Ok(WeeklyReviewResult::Generated(review))
             }
@@ -375,7 +388,7 @@ mod tests {
         let (service, weekly_reviews, _daily, _signals, generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("new")).await;
         let existing = weekly_reviews
-            .upsert_completed("user-1", week_start(), "existing", "model", "v1")
+            .upsert_completed("user-1", week_start(), "existing", "model", "v1", "{}")
             .await
             .unwrap();
 
@@ -604,7 +617,7 @@ mod tests {
             seed_completed_daily(&daily, "user-1", day(offset), "text").await;
         }
         let existing = weekly_reviews
-            .upsert_completed("user-1", week_start(), "", "old-model", "v0")
+            .upsert_completed("user-1", week_start(), "", "old-model", "v0", "{}")
             .await
             .unwrap();
 
@@ -643,7 +656,7 @@ mod tests {
         let (service, weekly_reviews, _daily, _signals, _generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("any")).await;
         weekly_reviews
-            .upsert_completed("user-1", week_start(), "review text", "model", "v1")
+            .upsert_completed("user-1", week_start(), "review text", "model", "v1", "{}")
             .await
             .unwrap();
 
@@ -674,5 +687,38 @@ mod tests {
         let result = service.fetch_review("user-1", week_start()).await.unwrap();
 
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn generated_review_persists_serialized_inputs_snapshot() {
+        let (service, weekly_reviews, daily, signals_repo, _generator) =
+            setup(FakeWeeklyReviewGenerator::succeeding("week review")).await;
+        let monday_review = seed_completed_daily(&daily, "user-1", day(0), "monday text").await;
+        seed_completed_daily(&daily, "user-1", day(1), "tuesday text").await;
+        seed_completed_daily(&daily, "user-1", day(2), "wednesday text").await;
+        signals_repo
+            .replace_in_transaction(
+                monday_review,
+                "user-1",
+                day(0),
+                &[theme_candidate()],
+                "model",
+                "v1",
+            )
+            .await
+            .unwrap();
+
+        service.review_week("user-1", week_start()).await.unwrap();
+
+        let stored = weekly_reviews
+            .find_by_user_and_week("user-1", week_start())
+            .await
+            .unwrap()
+            .unwrap();
+        let snapshot = stored.inputs_snapshot.expect("snapshot must be persisted");
+        assert!(snapshot.contains("\"week_start\":\"2026-04-27\""));
+        assert!(snapshot.contains("\"review_text\":\"monday text\""));
+        assert!(snapshot.contains("\"review_text\":\"tuesday text\""));
+        assert!(snapshot.contains("\"label\":\"physical appearance\""));
     }
 }
