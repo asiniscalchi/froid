@@ -1,10 +1,10 @@
 use std::error::Error;
+use std::future::{Future, pending};
 
 use sqlx::SqlitePool;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
-
-use tracing::warn;
+use tracing::{error, info, warn};
 
 use crate::{
     adapters::{Adapter, telegram::TelegramAdapter},
@@ -60,12 +60,44 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let entry_extraction_config = JournalEntryExtractionRuntimeConfig::from_env();
     let signal_runtime_config = DailyReviewSignalRuntimeConfig::from_env();
 
-    spawn_embedding_worker(&pool, &config, embedding_config.as_ref())?;
-    spawn_daily_review_embedding_worker(&pool, &config, embedding_config.as_ref())?;
-    spawn_extraction_worker(&pool, &config, &entry_extraction_config)?;
-    let delivery_configured =
-        spawn_daily_review_delivery_worker(&pool, &config, daily_review_config.clone())?;
-    spawn_signal_worker(&pool, &config, signal_runtime_config)?;
+    let shutdown = CancellationToken::new();
+    let mut workers: JoinSet<&'static str> = JoinSet::new();
+
+    spawn_embedding_worker(
+        &mut workers,
+        &shutdown,
+        &pool,
+        &config,
+        embedding_config.as_ref(),
+    )?;
+    spawn_daily_review_embedding_worker(
+        &mut workers,
+        &shutdown,
+        &pool,
+        &config,
+        embedding_config.as_ref(),
+    )?;
+    spawn_extraction_worker(
+        &mut workers,
+        &shutdown,
+        &pool,
+        &config,
+        &entry_extraction_config,
+    )?;
+    let delivery_configured = spawn_daily_review_delivery_worker(
+        &mut workers,
+        &shutdown,
+        &pool,
+        &config,
+        daily_review_config.clone(),
+    )?;
+    spawn_signal_worker(
+        &mut workers,
+        &shutdown,
+        &pool,
+        &config,
+        signal_runtime_config,
+    )?;
     let journal_service = build_journal_service(
         pool,
         embedding_config,
@@ -74,14 +106,101 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         delivery_configured,
     )?;
 
-    TelegramAdapter::new(config.telegram_bot_token, journal_service)
-        .run()
-        .await;
+    let adapter = TelegramAdapter::new(config.telegram_bot_token, journal_service);
+    supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
+}
 
-    Ok(())
+/// Race the adapter against the worker JoinSet and the shutdown signal.
+///
+/// Returns Ok only when the OS asked us to stop. Any other exit (a worker
+/// panicking or returning, the adapter loop unwinding) is fatal — the
+/// returned error bubbles up to `main` so the process exits non-zero and a
+/// supervisor (systemd, Docker) restarts the binary.
+async fn supervise(
+    mut workers: JoinSet<&'static str>,
+    shutdown: CancellationToken,
+    shutdown_signal: impl Future<Output = ()>,
+    adapter: impl Future<Output = ()>,
+) -> Result<(), Box<dyn Error>> {
+    let outcome: Result<(), Box<dyn Error>> = tokio::select! {
+        () = adapter => {
+            error!("adapter loop exited unexpectedly");
+            Err("adapter loop exited unexpectedly".into())
+        }
+        Some(result) = workers.join_next(), if !workers.is_empty() => {
+            match result {
+                Ok(label) => {
+                    error!(worker = label, "worker exited unexpectedly");
+                    Err(format!("worker '{label}' exited unexpectedly").into())
+                }
+                Err(err) if err.is_panic() => {
+                    error!(error = %err, "worker task panicked");
+                    Err(format!("worker task panicked: {err}").into())
+                }
+                Err(err) => {
+                    error!(error = %err, "worker task failed");
+                    Err(format!("worker task failed: {err}").into())
+                }
+            }
+        }
+        () = shutdown_signal => {
+            info!("shutdown signal received, draining workers");
+            Ok(())
+        }
+    };
+
+    shutdown.cancel();
+    while workers.join_next().await.is_some() {}
+
+    outcome
+}
+
+#[cfg(unix)]
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut sigterm = match signal(SignalKind::terminate()) {
+        Ok(stream) => stream,
+        Err(err) => {
+            warn!(error = %err, "failed to install SIGTERM handler; only SIGINT will trigger shutdown");
+            tokio::select! {
+                result = tokio::signal::ctrl_c() => {
+                    if let Err(err) = result {
+                        warn!(error = %err, "ctrl-c handler error");
+                    }
+                    info!("received SIGINT, shutting down");
+                }
+                () = pending::<()>() => {}
+            }
+            return;
+        }
+    };
+
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            if let Err(err) = result {
+                warn!(error = %err, "ctrl-c handler error");
+            }
+            info!("received SIGINT, shutting down");
+        }
+        _ = sigterm.recv() => {
+            info!("received SIGTERM, shutting down");
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    if let Err(err) = tokio::signal::ctrl_c().await {
+        warn!(error = %err, "ctrl-c handler error");
+        pending::<()>().await;
+    }
+    info!("received SIGINT, shutting down");
 }
 
 fn spawn_embedding_worker(
+    workers: &mut JoinSet<&'static str>,
+    shutdown: &CancellationToken,
     pool: &SqlitePool,
     config: &ServeConfig,
     embedding_config: Option<&EmbeddingConfig>,
@@ -96,13 +215,19 @@ fn spawn_embedding_worker(
             EmbeddingCycle::new(backfill_service),
             config.embedding_worker.clone(),
         );
-        tokio::spawn(async move { worker.run_forever(CancellationToken::new()).await });
+        let token = shutdown.clone();
+        workers.spawn(async move {
+            worker.run_forever(token).await;
+            "embedding"
+        });
     }
 
     Ok(())
 }
 
 fn spawn_daily_review_embedding_worker(
+    workers: &mut JoinSet<&'static str>,
+    shutdown: &CancellationToken,
     pool: &SqlitePool,
     config: &ServeConfig,
     embedding_config: Option<&EmbeddingConfig>,
@@ -120,13 +245,19 @@ fn spawn_daily_review_embedding_worker(
             EmbeddingCycle::new(backfill_service),
             config.daily_review_embedding_worker.clone(),
         );
-        tokio::spawn(async move { worker.run_forever(CancellationToken::new()).await });
+        let token = shutdown.clone();
+        workers.spawn(async move {
+            worker.run_forever(token).await;
+            "daily_review_embedding"
+        });
     }
 
     Ok(())
 }
 
 fn spawn_extraction_worker(
+    workers: &mut JoinSet<&'static str>,
+    shutdown: &CancellationToken,
     pool: &SqlitePool,
     config: &ServeConfig,
     entry_extraction_config: &JournalEntryExtractionRuntimeConfig,
@@ -157,12 +288,18 @@ fn spawn_extraction_worker(
         ExtractionCycle::new(backfill),
         config.extraction_worker.clone(),
     );
-    tokio::spawn(async move { worker.run_forever(CancellationToken::new()).await });
+    let token = shutdown.clone();
+    workers.spawn(async move {
+        worker.run_forever(token).await;
+        "extraction"
+    });
 
     Ok(())
 }
 
 fn spawn_daily_review_delivery_worker(
+    workers: &mut JoinSet<&'static str>,
+    shutdown: &CancellationToken,
     pool: &SqlitePool,
     config: &ServeConfig,
     daily_review_config: DailyReviewRuntimeConfig,
@@ -183,12 +320,18 @@ fn spawn_daily_review_delivery_worker(
         TelegramDailyReviewSender::new(config.telegram_bot_token.clone()),
         config.daily_review_delivery.clone(),
     );
-    tokio::spawn(async move { worker.run_forever(CancellationToken::new()).await });
+    let token = shutdown.clone();
+    workers.spawn(async move {
+        worker.run_forever(token).await;
+        "daily_review_delivery"
+    });
 
     Ok(true)
 }
 
 fn spawn_signal_worker(
+    workers: &mut JoinSet<&'static str>,
+    shutdown: &CancellationToken,
     pool: &SqlitePool,
     config: &ServeConfig,
     signal_config: DailyReviewSignalRuntimeConfig,
@@ -210,7 +353,11 @@ fn spawn_signal_worker(
         DailyReviewSignalCycle::new(backfill),
         config.signal_worker.clone(),
     );
-    tokio::spawn(async move { worker.run_forever(CancellationToken::new()).await });
+    let token = shutdown.clone();
+    workers.spawn(async move {
+        worker.run_forever(token).await;
+        "signal"
+    });
 
     Ok(())
 }
@@ -268,4 +415,125 @@ fn build_journal_service(
     }
 
     Ok(journal_service)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::pending;
+    use std::time::Duration;
+
+    use tokio::task::JoinSet;
+    use tokio_util::sync::CancellationToken;
+
+    use super::supervise;
+
+    #[tokio::test]
+    async fn supervise_returns_ok_when_signal_fires() {
+        let workers: JoinSet<&'static str> = JoinSet::new();
+        let shutdown = CancellationToken::new();
+        let signal = async {};
+        let adapter = pending::<()>();
+
+        let result = supervise(workers, shutdown.clone(), signal, adapter).await;
+
+        assert!(result.is_ok());
+        assert!(shutdown.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn supervise_drains_workers_on_signal() {
+        let mut workers: JoinSet<&'static str> = JoinSet::new();
+        let shutdown = CancellationToken::new();
+        let token_for_worker = shutdown.clone();
+        workers.spawn(async move {
+            token_for_worker.cancelled().await;
+            "fake"
+        });
+        let adapter = pending::<()>();
+
+        let result = supervise(workers, shutdown.clone(), async {}, adapter).await;
+
+        assert!(result.is_ok());
+        assert!(shutdown.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn supervise_returns_err_when_a_worker_exits_cleanly() {
+        let mut workers: JoinSet<&'static str> = JoinSet::new();
+        workers.spawn(async { "embedding" });
+        let shutdown = CancellationToken::new();
+        let signal = pending::<()>();
+        let adapter = pending::<()>();
+
+        let result = supervise(workers, shutdown.clone(), signal, adapter).await;
+
+        let err = result.expect_err("worker exit must surface as error");
+        assert!(
+            err.to_string().contains("embedding"),
+            "error should name the worker that died, got: {err}"
+        );
+        assert!(shutdown.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn supervise_returns_err_when_a_worker_panics() {
+        let mut workers: JoinSet<&'static str> = JoinSet::new();
+        workers.spawn(async {
+            panic!("boom");
+        });
+        let shutdown = CancellationToken::new();
+        let signal = pending::<()>();
+        let adapter = pending::<()>();
+
+        let result = supervise(workers, shutdown.clone(), signal, adapter).await;
+
+        let err = result.expect_err("panic must surface as error");
+        assert!(
+            err.to_string().contains("panicked"),
+            "error should describe a panic, got: {err}"
+        );
+        assert!(shutdown.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn supervise_returns_err_when_adapter_exits() {
+        let workers: JoinSet<&'static str> = JoinSet::new();
+        let shutdown = CancellationToken::new();
+        let signal = pending::<()>();
+        let adapter = async {};
+
+        let result = supervise(workers, shutdown.clone(), signal, adapter).await;
+
+        let err = result.expect_err("adapter exit must surface as error");
+        assert!(err.to_string().contains("adapter"));
+        assert!(shutdown.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn supervise_cancels_siblings_when_one_worker_dies() {
+        // A second worker observes the shared token; when the first one dies,
+        // supervise() must cancel and the sibling must drain cleanly.
+        let mut workers: JoinSet<&'static str> = JoinSet::new();
+        let shutdown = CancellationToken::new();
+
+        workers.spawn(async { "embedding" });
+        let sibling_token = shutdown.clone();
+        workers.spawn(async move {
+            sibling_token.cancelled().await;
+            "sibling"
+        });
+
+        let adapter = pending::<()>();
+        let signal = pending::<()>();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            supervise(workers, shutdown.clone(), signal, adapter),
+        )
+        .await
+        .expect("supervise must drain quickly when token is cancelled");
+
+        assert!(result.is_err());
+        assert!(shutdown.is_cancelled());
+    }
 }
