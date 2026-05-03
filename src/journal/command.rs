@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 
 use crate::messages::MessageSource;
 
@@ -26,10 +26,7 @@ pub enum JournalCommand {
     Today,
     Stats,
     Status,
-    ReviewToday,
-    ReviewDate { date: NaiveDate },
-    ReviewUsage,
-    ReviewError { message: String },
+    DayReviewLast,
     WeekReviewLast,
     Search { query: String },
     SearchUsage,

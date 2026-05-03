@@ -117,7 +117,7 @@ mod tests {
                 source_conversation_id: "42".to_string(),
                 user_id: "7".to_string(),
                 received_at: Utc::now(),
-                command: JournalCommand::ReviewToday,
+                command: JournalCommand::DayReviewLast,
             })
             .await
             .unwrap();
@@ -197,7 +197,7 @@ mod tests {
                 source_conversation_id: "42".to_string(),
                 user_id: "7".to_string(),
                 received_at: Utc::now(),
-                command: JournalCommand::ReviewToday,
+                command: JournalCommand::DayReviewLast,
             })
             .await
             .unwrap();
