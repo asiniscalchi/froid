@@ -144,6 +144,7 @@ fn parse_command(text: &str, received_at: DateTime<Utc>) -> Option<JournalComman
         "/stats" => Some(JournalCommand::Stats),
         "/status" => Some(JournalCommand::Status),
         "/review" => Some(parse_review_argument(argument, received_at)),
+        "/week_review" => Some(JournalCommand::WeekReviewLast),
         "/search" => Some(parse_search_argument(argument)),
         _ if command.starts_with('/') => Some(JournalCommand::Unknown {
             command: command.to_string(),
@@ -474,6 +475,15 @@ mod tests {
         assert_eq!(
             cmd("/review today extra"),
             Some(JournalCommand::ReviewUsage)
+        );
+    }
+
+    #[test]
+    fn parse_week_review_command() {
+        assert_eq!(cmd("/week_review"), Some(JournalCommand::WeekReviewLast));
+        assert_eq!(
+            cmd("/week_review@mybot"),
+            Some(JournalCommand::WeekReviewLast)
         );
     }
 

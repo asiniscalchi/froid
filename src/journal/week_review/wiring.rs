@@ -5,6 +5,7 @@ use tracing::warn;
 
 use crate::journal::{
     review::{repository::DailyReviewRepository, signals::repository::DailyReviewSignalRepository},
+    service::JournalService,
     week_review::{
         generator::{RigOpenAiWeeklyReviewGenerator, WeeklyReviewConfig},
         prompt::WeeklyReviewPromptConfig,
@@ -65,4 +66,16 @@ pub fn build_weekly_review_service(
     );
 
     Ok(Some(service))
+}
+
+pub fn configure_weekly_review(
+    journal_service: JournalService,
+    pool: SqlitePool,
+    config: WeeklyReviewRuntimeConfig,
+) -> Result<JournalService, Box<dyn std::error::Error>> {
+    let Some(weekly_review_service) = build_weekly_review_service(pool, config)? else {
+        return Ok(journal_service);
+    };
+
+    Ok(journal_service.with_weekly_review_runner(weekly_review_service))
 }

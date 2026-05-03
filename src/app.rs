@@ -32,7 +32,9 @@ use crate::{
         search::SemanticSearchService,
         service::JournalService,
         status::EmbeddingStatusConfig,
-        week_review::{WeeklyReviewRuntimeConfig, build_weekly_review_service},
+        week_review::{
+            WeeklyReviewRuntimeConfig, build_weekly_review_service, configure_weekly_review,
+        },
     },
     version,
     workers::{
@@ -100,7 +102,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &shutdown,
         &pool,
         &config,
-        weekly_review_config,
+        weekly_review_config.clone(),
     )?;
     spawn_signal_worker(
         &mut workers,
@@ -114,6 +116,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         embedding_config,
         entry_extraction_config,
         daily_review_config,
+        weekly_review_config,
         delivery_configured,
     )?;
 
@@ -411,6 +414,7 @@ fn build_journal_service(
     embedding_config: Option<EmbeddingConfig>,
     entry_extraction_config: JournalEntryExtractionRuntimeConfig,
     daily_review_config: DailyReviewRuntimeConfig,
+    weekly_review_config: WeeklyReviewRuntimeConfig,
     delivery_configured: bool,
 ) -> Result<JournalService, Box<dyn Error>> {
     let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
@@ -419,6 +423,8 @@ fn build_journal_service(
         configure_journal_entry_extraction(journal_service, pool.clone(), entry_extraction_config)?;
 
     journal_service = configure_daily_review(journal_service, pool.clone(), daily_review_config)?;
+
+    journal_service = configure_weekly_review(journal_service, pool.clone(), weekly_review_config)?;
 
     if delivery_configured {
         journal_service = journal_service.with_daily_review_delivery_configured();

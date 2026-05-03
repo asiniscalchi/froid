@@ -30,6 +30,7 @@ pub enum JournalCommand {
     ReviewDate { date: NaiveDate },
     ReviewUsage,
     ReviewError { message: String },
+    WeekReviewLast,
     Search { query: String },
     SearchUsage,
     Unknown { command: String },

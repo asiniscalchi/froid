@@ -20,7 +20,7 @@ pub(super) fn start_response() -> String {
 }
 
 pub(super) fn help_response() -> String {
-    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/review [today|YYYY-MM-DD|-N] - show daily review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
+    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/review [today|YYYY-MM-DD|-N] - show daily review\n/week_review - show last week's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
 }
 
 pub(super) fn unknown_command_response(command: &str) -> String {
@@ -90,6 +90,17 @@ pub(crate) fn format_weekly_review_for_week(
         "Weekly review for week of {}\n\n{}",
         week_start.format("%Y-%m-%d"),
         review.review_text.as_deref().unwrap_or_default()
+    )
+}
+
+pub(super) fn weekly_review_unavailable_response() -> String {
+    "Weekly review generation is not configured yet.".to_string()
+}
+
+pub(super) fn weekly_review_not_available_response(week_start: NaiveDate) -> String {
+    format!(
+        "No weekly review available for the week of {} yet.",
+        week_start.format("%Y-%m-%d")
     )
 }
 

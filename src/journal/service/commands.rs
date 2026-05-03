@@ -1,3 +1,4 @@
+use chrono::{Duration, NaiveDate};
 use tracing::{error, warn};
 
 use crate::{
@@ -7,10 +8,11 @@ use crate::{
             daily_review_not_available_for_date_response, daily_review_not_available_response,
             daily_review_unavailable_response, daily_review_usage_response,
             deleted_last_entry_response, format_daily_review, format_daily_review_for_date,
-            format_entries, format_last_entry, help_response, no_entries_response,
-            no_entries_today_response, no_entry_to_delete_response, no_last_entry_response,
-            recent_usage_response, start_response, stats_response, status_response,
-            unknown_command_response,
+            format_entries, format_last_entry, format_weekly_review_for_week, help_response,
+            no_entries_response, no_entries_today_response, no_entry_to_delete_response,
+            no_last_entry_response, recent_usage_response, start_response, stats_response,
+            status_response, unknown_command_response, weekly_review_not_available_response,
+            weekly_review_unavailable_response,
         },
         review::DailyReview,
         search::{
@@ -24,6 +26,14 @@ use crate::{
     },
     messages::OutgoingMessage,
 };
+
+fn previous_iso_week_monday(today: NaiveDate) -> NaiveDate {
+    let days_since_monday = today.weekday().num_days_from_monday() as i64;
+    let this_monday = today - Duration::days(days_since_monday);
+    this_monday - Duration::days(7)
+}
+
+use chrono::Datelike;
 
 use super::JournalService;
 
@@ -71,6 +81,9 @@ impl JournalService {
             JournalCommand::ReviewError { message } => Ok(OutgoingMessage {
                 text: message.clone(),
             }),
+            JournalCommand::WeekReviewLast => Ok(self
+                .week_review_last(&request.user_id, request.received_at.date_naive())
+                .await),
             JournalCommand::Search { query } => {
                 Ok(self.search_command(&request.user_id, query).await)
             }
@@ -127,6 +140,31 @@ impl JournalService {
                 error!(%error, "failed to fetch daily review");
                 OutgoingMessage {
                     text: not_found_text,
+                }
+            }
+        }
+    }
+
+    async fn week_review_last(&self, user_id: &str, today: NaiveDate) -> OutgoingMessage {
+        let Some(weekly_review) = &self.weekly_review else {
+            return OutgoingMessage {
+                text: weekly_review_unavailable_response(),
+            };
+        };
+
+        let week_start = previous_iso_week_monday(today);
+
+        match weekly_review.fetch_review(user_id, week_start).await {
+            Ok(Some(review)) => OutgoingMessage {
+                text: format_weekly_review_for_week(&review, week_start),
+            },
+            Ok(None) => OutgoingMessage {
+                text: weekly_review_not_available_response(week_start),
+            },
+            Err(error) => {
+                error!(%error, "failed to fetch weekly review");
+                OutgoingMessage {
+                    text: weekly_review_not_available_response(week_start),
                 }
             }
         }
