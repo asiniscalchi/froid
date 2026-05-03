@@ -11,6 +11,8 @@ Send a message to your Telegram bot. Froid stores it immediately and returns a c
 
 At the end of the day, a review worker synthesises all of that day's raw notes and their structured extractions into a concise reflection delivered via Telegram.
 
+Once a week (Monday by default), a weekly review worker synthesises the previous ISO week's daily reviews and their structured signals into a single reflection covering Monday through Sunday, and delivers it via Telegram. Run `/week_review` in the chat to request the most recent completed weekly review on demand.
+
 ## Running with Docker
 
 A pre-built image is published to the GitHub Container Registry on every push to `main`.
@@ -25,6 +27,7 @@ FROID_EMBEDDING_WORKER_ENABLED=true
 FROID_DAILY_REVIEW_EMBEDDING_WORKER_ENABLED=true
 FROID_EXTRACTION_WORKER_ENABLED=true
 FROID_DAILY_REVIEW_DELIVERY_ENABLED=true
+FROID_WEEK_REVIEW_WORKER_ENABLED=true
 ```
 
 Then run:
