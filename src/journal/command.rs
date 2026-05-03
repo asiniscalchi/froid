@@ -4,7 +4,6 @@ use crate::messages::MessageSource;
 
 pub const DEFAULT_RECENT_LIMIT: u32 = 10;
 pub const MAX_RECENT_LIMIT: u32 = 50;
-pub const MAX_REVIEW_OFFSET: u32 = 365;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalCommandRequest {

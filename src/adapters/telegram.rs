@@ -318,14 +318,20 @@ mod tests {
     fn parse_day_review_command() {
         assert_eq!(cmd("/day_review"), Some(JournalCommand::DayReviewLast));
         assert_eq!(cmd("/day_review "), Some(JournalCommand::DayReviewLast));
-        assert_eq!(cmd("/day_review@mybot"), Some(JournalCommand::DayReviewLast));
+        assert_eq!(
+            cmd("/day_review@mybot"),
+            Some(JournalCommand::DayReviewLast)
+        );
     }
 
     #[test]
     fn parse_week_review_command() {
         assert_eq!(cmd("/week_review"), Some(JournalCommand::WeekReviewLast));
         assert_eq!(cmd("/week_review "), Some(JournalCommand::WeekReviewLast));
-        assert_eq!(cmd("/week_review@mybot"), Some(JournalCommand::WeekReviewLast));
+        assert_eq!(
+            cmd("/week_review@mybot"),
+            Some(JournalCommand::WeekReviewLast)
+        );
     }
 
     #[test]

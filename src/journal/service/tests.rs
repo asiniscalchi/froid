@@ -502,7 +502,11 @@ async fn command_start_returns_welcome_message() {
         .unwrap();
 
     assert!(outgoing.text.contains("Froid is your private journal"));
-    assert!(outgoing.text.contains("/help to see all available commands"));
+    assert!(
+        outgoing
+            .text
+            .contains("/help to see all available commands")
+    );
 }
 
 #[tokio::test]
@@ -517,7 +521,11 @@ async fn command_help_returns_available_commands() {
     assert!(outgoing.text.contains("/recent [number]"));
     assert!(outgoing.text.contains("/today"));
     assert!(outgoing.text.contains("/day_review - show daily review"));
-    assert!(outgoing.text.contains("/week_review - show last week's review"));
+    assert!(
+        outgoing
+            .text
+            .contains("/week_review - show last week's review")
+    );
     assert!(outgoing.text.contains("/stats"));
     assert!(outgoing.text.contains("/status"));
 }
