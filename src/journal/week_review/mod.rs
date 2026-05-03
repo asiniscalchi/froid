@@ -1,7 +1,12 @@
+pub mod delivery_config;
 pub mod generator;
 pub mod prompt;
 pub mod repository;
 pub mod service;
+pub mod wiring;
+
+pub use delivery_config::WeeklyReviewDeliveryWorkerConfig;
+pub use wiring::{WeeklyReviewRuntimeConfig, build_weekly_review_service};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;

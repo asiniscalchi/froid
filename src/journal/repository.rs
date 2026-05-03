@@ -225,6 +225,40 @@ impl JournalRepository {
             .collect())
     }
 
+    pub async fn conversations_with_entries_in_range(
+        &self,
+        source: &MessageSource,
+        start_date: NaiveDate,
+        end_date_exclusive: NaiveDate,
+    ) -> Result<Vec<JournalConversation>, sqlx::Error> {
+        let start = Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).unwrap());
+        let end = Utc.from_utc_datetime(&end_date_exclusive.and_hms_opt(0, 0, 0).unwrap());
+
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT user_id, source_conversation_id
+            FROM journal_entries
+            WHERE source = ?
+              AND received_at >= ?
+              AND received_at < ?
+            ORDER BY user_id ASC, source_conversation_id ASC
+            "#,
+        )
+        .bind(source.to_string())
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| JournalConversation {
+                user_id: row.get("user_id"),
+                source_conversation_id: row.get("source_conversation_id"),
+            })
+            .collect())
+    }
+
     pub async fn fetch_by_ids(
         &self,
         user_id: &str,
