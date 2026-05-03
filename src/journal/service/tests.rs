@@ -501,8 +501,8 @@ async fn command_start_returns_welcome_message() {
         .await
         .unwrap();
 
-    assert!(outgoing.text.contains("Froid is running."));
-    assert!(outgoing.text.contains("/recent [number]"));
+    assert!(outgoing.text.contains("Froid is your private journal"));
+    assert!(outgoing.text.contains("/help to see all available commands"));
 }
 
 #[tokio::test]

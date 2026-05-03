@@ -13,10 +13,7 @@ pub(super) fn message_saved_response() -> String {
 }
 
 pub(super) fn start_response() -> String {
-    format!(
-        "Froid is running.\n\nSend me any text message and I will store it as a journal entry.\n\n{}",
-        help_response()
-    )
+    "Froid is your private journal. Send me any text message and I will store it for you.\n\nI use AI to help you find meaning in your entries and provide daily and weekly reviews of your thoughts.\n\nUse /help to see all available commands.".to_string()
 }
 
 pub(super) fn help_response() -> String {
