@@ -159,6 +159,50 @@ impl JournalRepository {
         Ok(Some(entry))
     }
 
+    pub async fn search_text(
+        &self,
+        user_id: &str,
+        query: &str,
+        from_date: Option<NaiveDate>,
+        to_date_exclusive: Option<NaiveDate>,
+        limit: u32,
+    ) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
+        let mut sql = String::from(
+            r#"SELECT id, raw_text, received_at
+               FROM journal_entries
+               WHERE user_id = ?
+                 AND LOWER(raw_text) LIKE LOWER(?)"#,
+        );
+        if from_date.is_some() {
+            sql.push_str(" AND received_at >= ?");
+        }
+        if to_date_exclusive.is_some() {
+            sql.push_str(" AND received_at < ?");
+        }
+        sql.push_str(" ORDER BY received_at DESC, id DESC LIMIT ?");
+
+        let mut q = sqlx::query(&sql).bind(user_id).bind(format!("%{query}%"));
+        if let Some(d) = from_date {
+            let start = Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap());
+            q = q.bind(start);
+        }
+        if let Some(d) = to_date_exclusive {
+            let end = Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap());
+            q = q.bind(end);
+        }
+        q = q.bind(limit);
+
+        let rows = q.fetch_all(&self.pool).await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| StoredJournalEntry {
+                id: row.get("id"),
+                entry: map_entry(row),
+            })
+            .collect())
+    }
+
     pub async fn fetch_in_range(
         &self,
         user_id: &str,
@@ -806,6 +850,155 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entry.text, "second inserted");
         assert_eq!(entries[1].entry.text, "first inserted");
+    }
+
+    #[tokio::test]
+    async fn search_text_matches_substring_case_insensitively() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "I felt anxious before the call", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "calm afternoon", at(11, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "ANXIETY again today", at(12, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo.search_text("7", "ANXI", None, None, 10).await.unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry.text, "ANXIETY again today");
+        assert_eq!(entries[1].entry.text, "I felt anxious before the call");
+    }
+
+    #[tokio::test]
+    async fn search_text_returns_results_newest_first() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "match one", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "match two", at(12, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "match three", at(11, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo
+            .search_text("7", "match", None, None, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].entry.text, "match two");
+        assert_eq!(entries[1].entry.text, "match three");
+        assert_eq!(entries[2].entry.text, "match one");
+    }
+
+    #[tokio::test]
+    async fn search_text_respects_limit() {
+        let repo = setup().await;
+
+        for i in 0..5u32 {
+            repo.store(&incoming(&i.to_string(), &format!("match {i}"), at(10, i)))
+                .await
+                .unwrap();
+        }
+
+        let entries = repo.search_text("7", "match", None, None, 2).await.unwrap();
+
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn search_text_scopes_to_user() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "mine matches", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: "99".to_string(),
+            source_message_id: "2".to_string(),
+            user_id: "other_user".to_string(),
+            text: "theirs matches too".to_string(),
+            received_at: at(11, 0),
+        })
+        .await
+        .unwrap();
+
+        let entries = repo
+            .search_text("7", "matches", None, None, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.text, "mine matches");
+    }
+
+    #[tokio::test]
+    async fn search_text_filters_by_date_range_with_exclusive_end() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "match before", at_on(2026, 4, 27, 10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "match within", at_on(2026, 4, 28, 10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "match boundary", at_on(2026, 4, 29, 0, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo
+            .search_text(
+                "7",
+                "match",
+                Some(ymd(2026, 4, 28)),
+                Some(ymd(2026, 4, 29)),
+                10,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.text, "match within");
+    }
+
+    #[tokio::test]
+    async fn search_text_returns_empty_when_no_match() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "calm afternoon", at(10, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo
+            .search_text("7", "anxiety", None, None, 10)
+            .await
+            .unwrap();
+
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_text_returns_empty_for_unknown_user() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "match", at(10, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo
+            .search_text("unknown", "match", None, None, 10)
+            .await
+            .unwrap();
+
+        assert!(entries.is_empty());
     }
 
     #[tokio::test]
