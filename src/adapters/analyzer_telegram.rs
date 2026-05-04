@@ -1,10 +1,16 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use teloxide::{prelude::*, types::Message};
+use teloxide::{
+    prelude::*,
+    types::{ChatAction, ChatId, Message},
+};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::journal::analyzer::{AnalyzerAgent, UserContext};
+
+const TYPING_REFRESH_INTERVAL: Duration = Duration::from_secs(4);
 
 const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Send a question as plain text.";
 const ANALYZER_FAILURE_RESPONSE: &str = "Sorry, I couldn't answer that. Please try again.";
@@ -58,7 +64,11 @@ async fn handle_message(
 
     info!(user_id = %user_id, "analyzer received question");
 
-    match agent.ask(ctx, question).await {
+    let typing = spawn_typing_indicator(bot.clone(), message.chat.id);
+    let result = agent.ask(ctx, question).await;
+    typing.abort();
+
+    match result {
         Ok(reply) => {
             let reply = if reply.trim().is_empty() {
                 ANALYZER_FAILURE_RESPONSE.to_string()
@@ -83,6 +93,22 @@ fn derive_user_id(message: &Message) -> String {
         .as_ref()
         .map(|user| user.id.to_string())
         .unwrap_or_else(|| message.chat.id.to_string())
+}
+
+/// Send a Telegram "typing" chat action and refresh it every few seconds so it
+/// stays visible while the analyzer agent is working. Telegram clears the
+/// indicator after about five seconds without an update. Abort the returned
+/// handle once the agent's reply has been sent.
+fn spawn_typing_indicator(bot: Bot, chat_id: ChatId) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            if let Err(error) = bot.send_chat_action(chat_id, ChatAction::Typing).await {
+                warn!(%error, "failed to send analyzer typing indicator");
+                return;
+            }
+            tokio::time::sleep(TYPING_REFRESH_INTERVAL).await;
+        }
+    })
 }
 
 #[cfg(test)]
