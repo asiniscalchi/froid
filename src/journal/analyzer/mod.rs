@@ -12,6 +12,7 @@ pub mod signal;
 pub mod tools;
 pub mod types;
 mod validation;
+pub mod wiring;
 
 pub use agent::{
     AnalyzerAgent, AnalyzerAgentConfig, AnalyzerAgentError, AnalyzerPreamble,
@@ -27,3 +28,4 @@ pub use types::{
     SearchSemanticRequest, SearchSignalsRequest, SearchTextRequest, SemanticHit, SignalView,
     UserContext, WeeklyReviewView,
 };
+pub use wiring::build_analyzer_tool_registry;
