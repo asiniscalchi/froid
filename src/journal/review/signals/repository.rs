@@ -36,6 +36,18 @@ impl From<sqlx::Error> for DailyReviewSignalRepositoryError {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SignalSearchFilters {
+    pub signal_type: Option<SignalType>,
+    pub label_contains: Option<String>,
+    pub status: Option<NeedStatus>,
+    pub valence: Option<BehaviorValence>,
+    pub from_date: Option<NaiveDate>,
+    pub to_date_exclusive: Option<NaiveDate>,
+    pub min_strength: Option<f32>,
+    pub limit: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct DailyReviewSignalRepository {
     pool: SqlitePool,
@@ -190,6 +202,69 @@ impl DailyReviewSignalRepository {
         .fetch_all(&self.pool)
         .await?;
 
+        rows.into_iter().map(row_to_signal).collect()
+    }
+
+    pub async fn search(
+        &self,
+        user_id: &str,
+        filters: &SignalSearchFilters,
+    ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalRepositoryError> {
+        let mut sql = String::from(
+            r#"SELECT id, daily_review_id, user_id, review_date, signal_type, label, status,
+                      valence, strength, confidence, evidence, model, prompt_version,
+                      created_at, updated_at
+               FROM daily_review_signals
+               WHERE user_id = ?"#,
+        );
+        if filters.signal_type.is_some() {
+            sql.push_str(" AND signal_type = ?");
+        }
+        if filters.label_contains.is_some() {
+            sql.push_str(" AND LOWER(label) LIKE LOWER(?)");
+        }
+        if filters.status.is_some() {
+            sql.push_str(" AND status = ?");
+        }
+        if filters.valence.is_some() {
+            sql.push_str(" AND valence = ?");
+        }
+        if filters.from_date.is_some() {
+            sql.push_str(" AND review_date >= ?");
+        }
+        if filters.to_date_exclusive.is_some() {
+            sql.push_str(" AND review_date < ?");
+        }
+        if filters.min_strength.is_some() {
+            sql.push_str(" AND strength >= ?");
+        }
+        sql.push_str(" ORDER BY review_date ASC, id ASC LIMIT ?");
+
+        let mut query = sqlx::query(&sql).bind(user_id);
+        if let Some(t) = filters.signal_type.as_ref() {
+            query = query.bind(t.as_str());
+        }
+        if let Some(l) = filters.label_contains.as_ref() {
+            query = query.bind(format!("%{l}%"));
+        }
+        if let Some(s) = filters.status.as_ref() {
+            query = query.bind(need_status_to_str(s));
+        }
+        if let Some(v) = filters.valence.as_ref() {
+            query = query.bind(behavior_valence_to_str(v));
+        }
+        if let Some(d) = filters.from_date.as_ref() {
+            query = query.bind(d.to_string());
+        }
+        if let Some(d) = filters.to_date_exclusive.as_ref() {
+            query = query.bind(d.to_string());
+        }
+        if let Some(s) = filters.min_strength {
+            query = query.bind(s as f64);
+        }
+        query = query.bind(filters.limit);
+
+        let rows = query.fetch_all(&self.pool).await?;
         rows.into_iter().map(row_to_signal).collect()
     }
 
@@ -534,6 +609,288 @@ mod tests {
 
         let dates: Vec<_> = in_range.iter().map(|s| s.review_date).collect();
         assert_eq!(dates, vec![monday, wednesday, wednesday]);
+    }
+
+    fn behavior_candidate() -> DailyReviewSignalCandidate {
+        DailyReviewSignalCandidate {
+            signal_type: SignalType::Behavior,
+            label: "plan switching".to_string(),
+            status: None,
+            valence: Some(BehaviorValence::Negative),
+            strength: 0.4,
+            confidence: 0.8,
+            evidence: "Review notes plan was changed multiple times.".to_string(),
+        }
+    }
+
+    async fn seed_three_signals(pool: &SqlitePool) {
+        let monday = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+        let tuesday = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
+        let wednesday = NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
+
+        let monday_review = insert_daily_review_for(pool, "user-1", monday).await;
+        let tuesday_review = insert_daily_review_for(pool, "user-1", tuesday).await;
+        let wednesday_review = insert_daily_review_for(pool, "user-1", wednesday).await;
+
+        let repo = DailyReviewSignalRepository::new(pool.clone());
+        repo.replace_in_transaction(
+            monday_review,
+            "user-1",
+            monday,
+            &[theme_candidate()],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+        repo.replace_in_transaction(
+            tuesday_review,
+            "user-1",
+            tuesday,
+            &[need_candidate()],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+        repo.replace_in_transaction(
+            wednesday_review,
+            "user-1",
+            wednesday,
+            &[behavior_candidate()],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+    }
+
+    fn filters(limit: u32) -> SignalSearchFilters {
+        SignalSearchFilters {
+            limit,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn search_with_no_filters_returns_all_signals_for_user_in_date_then_id_order() {
+        let (repo, _reviews, pool) = setup().await;
+        seed_three_signals(&pool).await;
+
+        let rows = repo.search("user-1", &filters(10)).await.unwrap();
+
+        assert_eq!(rows.len(), 3);
+        let dates: Vec<_> = rows.iter().map(|s| s.review_date.to_string()).collect();
+        assert_eq!(dates, vec!["2026-04-27", "2026-04-28", "2026-04-29"]);
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_signal_type() {
+        let (repo, _reviews, pool) = setup().await;
+        seed_three_signals(&pool).await;
+
+        let rows = repo
+            .search(
+                "user-1",
+                &SignalSearchFilters {
+                    signal_type: Some(SignalType::Need),
+                    ..filters(10)
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].signal_type, SignalType::Need);
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_status() {
+        let (repo, _reviews, pool) = setup().await;
+        seed_three_signals(&pool).await;
+
+        let rows = repo
+            .search(
+                "user-1",
+                &SignalSearchFilters {
+                    status: Some(NeedStatus::Unmet),
+                    ..filters(10)
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, Some(NeedStatus::Unmet));
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_valence() {
+        let (repo, _reviews, pool) = setup().await;
+        seed_three_signals(&pool).await;
+
+        let rows = repo
+            .search(
+                "user-1",
+                &SignalSearchFilters {
+                    valence: Some(BehaviorValence::Negative),
+                    ..filters(10)
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].valence, Some(BehaviorValence::Negative));
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_label_contains_case_insensitive() {
+        let (repo, _reviews, pool) = setup().await;
+        seed_three_signals(&pool).await;
+
+        let rows = repo
+            .search(
+                "user-1",
+                &SignalSearchFilters {
+                    label_contains: Some("PHYSICAL".to_string()),
+                    ..filters(10)
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "physical appearance");
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_date_range_with_exclusive_end() {
+        let (repo, _reviews, pool) = setup().await;
+        seed_three_signals(&pool).await;
+
+        let rows = repo
+            .search(
+                "user-1",
+                &SignalSearchFilters {
+                    from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
+                    to_date_exclusive: Some(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()),
+                    ..filters(10)
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].review_date,
+            NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_min_strength() {
+        let (repo, _reviews, pool) = setup().await;
+        seed_three_signals(&pool).await;
+
+        let rows = repo
+            .search(
+                "user-1",
+                &SignalSearchFilters {
+                    min_strength: Some(0.75),
+                    ..filters(10)
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "physical appearance");
+    }
+
+    #[tokio::test]
+    async fn search_respects_limit() {
+        let (repo, _reviews, pool) = setup().await;
+        seed_three_signals(&pool).await;
+
+        let rows = repo.search("user-1", &filters(2)).await.unwrap();
+
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn search_scopes_to_user() {
+        let (repo, _reviews, pool) = setup().await;
+        let target = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+        let user_one_review = insert_daily_review_for(&pool, "user-1", target).await;
+        let user_two_review = insert_daily_review_for(&pool, "user-2", target).await;
+
+        repo.replace_in_transaction(
+            user_one_review,
+            "user-1",
+            target,
+            &[theme_candidate()],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+        repo.replace_in_transaction(
+            user_two_review,
+            "user-2",
+            target,
+            &[theme_candidate()],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+
+        let rows = repo.search("user-1", &filters(10)).await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].user_id, "user-1");
+    }
+
+    #[tokio::test]
+    async fn search_combines_multiple_filters() {
+        let (repo, _reviews, pool) = setup().await;
+        seed_three_signals(&pool).await;
+
+        let rows = repo
+            .search(
+                "user-1",
+                &SignalSearchFilters {
+                    signal_type: Some(SignalType::Behavior),
+                    valence: Some(BehaviorValence::Negative),
+                    min_strength: Some(0.3),
+                    ..filters(10)
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].signal_type, SignalType::Behavior);
+    }
+
+    #[tokio::test]
+    async fn search_returns_empty_when_no_signals_match() {
+        let (repo, _reviews, pool) = setup().await;
+        seed_three_signals(&pool).await;
+
+        let rows = repo
+            .search(
+                "user-1",
+                &SignalSearchFilters {
+                    signal_type: Some(SignalType::Tension),
+                    ..filters(10)
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rows.is_empty());
     }
 
     #[tokio::test]
