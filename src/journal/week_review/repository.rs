@@ -72,6 +72,36 @@ impl WeeklyReviewRepository {
         row.map(row_to_weekly_review).transpose()
     }
 
+    pub async fn fetch_completed_in_range(
+        &self,
+        user_id: &str,
+        start_date: NaiveDate,
+        end_date_exclusive: NaiveDate,
+    ) -> Result<Vec<WeeklyReview>, WeeklyReviewRepositoryError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, user_id, week_start_date, review_text, model, prompt_version, status,
+                   error_message, delivered_at, delivery_error, inputs_snapshot,
+                   created_at, updated_at
+            FROM weekly_reviews
+            WHERE user_id = ?
+              AND week_start_date >= ?
+              AND week_start_date < ?
+              AND status = 'completed'
+              AND review_text IS NOT NULL
+              AND TRIM(review_text) != ''
+            ORDER BY week_start_date ASC
+            "#,
+        )
+        .bind(user_id)
+        .bind(start_date.to_string())
+        .bind(end_date_exclusive.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_weekly_review).collect()
+    }
+
     pub async fn upsert_completed(
         &self,
         user_id: &str,
@@ -607,6 +637,115 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored.inputs_snapshot, Some(r#"{"v":1}"#.to_string()));
+    }
+
+    #[tokio::test]
+    async fn fetch_completed_in_range_returns_completed_reviews_in_ascending_order() {
+        let repo = setup().await;
+        let w1 = NaiveDate::from_ymd_opt(2026, 4, 13).unwrap();
+        let w2 = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
+        let w3 = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+
+        repo.upsert_completed("user-1", w2, "second", "m", "v1", "{}")
+            .await
+            .unwrap();
+        repo.upsert_completed("user-1", w1, "first", "m", "v1", "{}")
+            .await
+            .unwrap();
+        repo.upsert_completed("user-1", w3, "third", "m", "v1", "{}")
+            .await
+            .unwrap();
+
+        let reviews = repo
+            .fetch_completed_in_range("user-1", w1, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(reviews.len(), 3);
+        assert_eq!(reviews[0].week_start_date, w1);
+        assert_eq!(reviews[1].week_start_date, w2);
+        assert_eq!(reviews[2].week_start_date, w3);
+    }
+
+    #[tokio::test]
+    async fn fetch_completed_in_range_treats_end_date_as_exclusive() {
+        let repo = setup().await;
+        let w1 = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
+        let w2 = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+
+        repo.upsert_completed("user-1", w1, "in", "m", "v1", "{}")
+            .await
+            .unwrap();
+        repo.upsert_completed("user-1", w2, "out", "m", "v1", "{}")
+            .await
+            .unwrap();
+
+        let reviews = repo
+            .fetch_completed_in_range("user-1", w1, w2)
+            .await
+            .unwrap();
+
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].review_text, Some("in".to_string()));
+    }
+
+    #[tokio::test]
+    async fn fetch_completed_in_range_scopes_to_user() {
+        let repo = setup().await;
+        let w = week_start();
+
+        repo.upsert_completed("user-1", w, "mine", "m", "v1", "{}")
+            .await
+            .unwrap();
+        repo.upsert_completed("user-2", w, "theirs", "m", "v1", "{}")
+            .await
+            .unwrap();
+
+        let reviews = repo
+            .fetch_completed_in_range("user-1", w, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].review_text, Some("mine".to_string()));
+    }
+
+    #[tokio::test]
+    async fn fetch_completed_in_range_excludes_failed_reviews() {
+        let repo = setup().await;
+        let w1 = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
+        let w2 = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+
+        repo.upsert_completed("user-1", w1, "ok", "m", "v1", "{}")
+            .await
+            .unwrap();
+        repo.upsert_failed("user-1", w2, "m", "v1", "boom")
+            .await
+            .unwrap();
+
+        let reviews = repo
+            .fetch_completed_in_range("user-1", w1, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].week_start_date, w1);
+    }
+
+    #[tokio::test]
+    async fn fetch_completed_in_range_returns_empty_when_no_reviews_match() {
+        let repo = setup().await;
+
+        let reviews = repo
+            .fetch_completed_in_range(
+                "user-1",
+                NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 4, 27).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(reviews.is_empty());
     }
 
     #[tokio::test]
