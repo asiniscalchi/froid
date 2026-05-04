@@ -9,6 +9,7 @@ use crate::journal::review::signals::types::SignalType;
 pub const MAX_RECENT_LIMIT: u32 = 50;
 pub const MAX_TEXT_SEARCH_LIMIT: u32 = 50;
 pub const MAX_SIGNAL_LIMIT: u32 = 50;
+pub const MAX_SEMANTIC_LIMIT: u32 = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserContext {
@@ -114,6 +115,22 @@ pub struct SearchSignalsRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetRecentRequest {
+    pub limit: u32,
+    pub from_date: Option<NaiveDate>,
+    pub to_date_exclusive: Option<NaiveDate>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SemanticHit {
+    pub id: i64,
+    pub received_at: DateTime<Utc>,
+    pub text: String,
+    pub distance: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchSemanticRequest {
+    pub query: String,
     pub limit: u32,
     pub from_date: Option<NaiveDate>,
     pub to_date_exclusive: Option<NaiveDate>,
