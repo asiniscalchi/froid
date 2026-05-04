@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use chrono::NaiveDate;
+use chrono::{Datelike, Duration, NaiveDate};
 use chrono::{TimeZone, Utc};
 use sqlx::SqlitePool;
 
@@ -774,8 +774,15 @@ async fn day_review_last_returns_existing_review() {
         .await
         .unwrap();
 
-    assert_eq!(outgoing.text, "Today's review\n\nstored review");
-    assert_eq!(runner.calls(), vec![("7".to_string(), date())]);
+    let yesterday = date() - Duration::days(1);
+    assert_eq!(
+        outgoing.text,
+        format!(
+            "Daily review for {}\n\nstored review",
+            yesterday.format("%Y-%m-%d")
+        )
+    );
+    assert_eq!(runner.calls(), vec![("7".to_string(), yesterday)]);
 }
 
 #[tokio::test]
@@ -788,7 +795,14 @@ async fn day_review_last_returns_not_available_when_no_review_exists() {
         .await
         .unwrap();
 
-    assert_eq!(outgoing.text, "No review available for today yet.");
+    let yesterday = date() - Duration::days(1);
+    assert_eq!(
+        outgoing.text,
+        format!(
+            "No daily review available for {} yet.",
+            yesterday.format("%Y-%m-%d")
+        )
+    );
 }
 
 #[tokio::test]
@@ -803,7 +817,14 @@ async fn day_review_last_returns_not_available_on_fetch_error() {
         .await
         .unwrap();
 
-    assert_eq!(outgoing.text, "No review available for today yet.");
+    let yesterday = date() - Duration::days(1);
+    assert_eq!(
+        outgoing.text,
+        format!(
+            "No daily review available for {} yet.",
+            yesterday.format("%Y-%m-%d")
+        )
+    );
 }
 
 #[tokio::test]
@@ -826,12 +847,24 @@ async fn day_review_last_command_does_not_store_command_text_as_journal_entry() 
 async fn undo_deletes_daily_review_for_deleted_entry_date() {
     let (service, daily_reviews, journal_entries) =
         setup_with_daily_review_service(FakeReviewGenerator::succeeding("any")).await;
+    let yesterday = date() - Duration::days(1);
+    let yesterday_at_10 = Utc
+        .with_ymd_and_hms(
+            yesterday.year(),
+            yesterday.month(),
+            yesterday.day(),
+            10,
+            0,
+            0,
+        )
+        .unwrap();
+
     journal_entries
-        .store(&incoming("1", "entry for review", at(10, 0)))
+        .store(&incoming("1", "entry for review", yesterday_at_10))
         .await
         .unwrap();
     daily_reviews
-        .upsert_completed("7", date(), "persisted review", "model", "v1")
+        .upsert_completed("7", yesterday, "persisted review", "model", "v1")
         .await
         .unwrap();
 
@@ -844,12 +877,18 @@ async fn undo_deletes_daily_review_for_deleted_entry_date() {
         .await
         .unwrap();
     let persisted_review = daily_reviews
-        .find_by_user_and_date("7", date())
+        .find_by_user_and_date("7", yesterday)
         .await
         .unwrap();
 
     assert_eq!(undo.text, "Deleted last entry.");
-    assert_eq!(review.text, "No review available for today yet.");
+    assert_eq!(
+        review.text,
+        format!(
+            "No daily review available for {} yet.",
+            yesterday.format("%Y-%m-%d")
+        )
+    );
     assert!(persisted_review.is_none());
 }
 

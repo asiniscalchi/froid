@@ -56,14 +56,10 @@ pub(super) fn daily_review_unavailable_response() -> String {
     "Daily review generation is not configured yet.".to_string()
 }
 
-pub(super) fn daily_review_not_available_response() -> String {
-    "No review available for today yet.".to_string()
-}
-
-pub(super) fn format_daily_review(review: &DailyReview) -> String {
+pub(crate) fn daily_review_not_available_for_date_response(date: NaiveDate) -> String {
     format!(
-        "Today's review\n\n{}",
-        review.review_text.as_deref().unwrap_or_default()
+        "No daily review available for {} yet.",
+        date.format("%Y-%m-%d")
     )
 }
 
