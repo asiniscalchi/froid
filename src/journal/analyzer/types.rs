@@ -3,9 +3,12 @@ use std::{error::Error, fmt};
 use chrono::{DateTime, NaiveDate, Utc};
 
 use crate::journal::entry::StoredJournalEntry;
+use crate::journal::extraction::{BehaviorValence, NeedStatus};
+use crate::journal::review::signals::types::SignalType;
 
 pub const MAX_RECENT_LIMIT: u32 = 50;
 pub const MAX_TEXT_SEARCH_LIMIT: u32 = 50;
+pub const MAX_SIGNAL_LIMIT: u32 = 50;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserContext {
@@ -82,6 +85,31 @@ pub struct WeeklyReviewView {
 pub struct GetReviewsRequest {
     pub from_date: NaiveDate,
     pub to_date_exclusive: NaiveDate,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignalView {
+    pub id: i64,
+    pub review_date: NaiveDate,
+    pub signal_type: SignalType,
+    pub label: String,
+    pub status: Option<NeedStatus>,
+    pub valence: Option<BehaviorValence>,
+    pub strength: f32,
+    pub confidence: f32,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SearchSignalsRequest {
+    pub signal_type: Option<SignalType>,
+    pub label_contains: Option<String>,
+    pub status: Option<NeedStatus>,
+    pub valence: Option<BehaviorValence>,
+    pub from_date: Option<NaiveDate>,
+    pub to_date_exclusive: Option<NaiveDate>,
+    pub min_strength: Option<f32>,
+    pub limit: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
