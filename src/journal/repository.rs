@@ -62,10 +62,10 @@ impl JournalRepository {
         &self,
         user_id: &str,
         limit: u32,
-    ) -> Result<Vec<JournalEntry>, sqlx::Error> {
+    ) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT raw_text, received_at
+            SELECT id, raw_text, received_at
             FROM journal_entries
             WHERE user_id = ?
             ORDER BY received_at DESC, id DESC
@@ -77,7 +77,13 @@ impl JournalRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(map_entry).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| StoredJournalEntry {
+                id: row.get("id"),
+                entry: map_entry(row),
+            })
+            .collect())
     }
 
     pub async fn fetch_last_for_conversation(
@@ -524,9 +530,9 @@ mod tests {
         let entries = repo.fetch_recent("7", 10).await.unwrap();
 
         assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].text, "third");
-        assert_eq!(entries[1].text, "second");
-        assert_eq!(entries[2].text, "first");
+        assert_eq!(entries[0].entry.text, "third");
+        assert_eq!(entries[1].entry.text, "second");
+        assert_eq!(entries[2].entry.text, "first");
     }
 
     #[tokio::test]
@@ -610,7 +616,7 @@ mod tests {
         assert_eq!(deleted.id, fetched.id);
         assert_eq!(deleted.entry.text, "second inserted");
         assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].text, "first inserted");
+        assert_eq!(remaining[0].entry.text, "first inserted");
     }
 
     #[tokio::test]
@@ -655,8 +661,8 @@ mod tests {
         let entries = repo.fetch_recent("7", 2).await.unwrap();
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].text, "third");
-        assert_eq!(entries[1].text, "second");
+        assert_eq!(entries[0].entry.text, "third");
+        assert_eq!(entries[1].entry.text, "second");
     }
 
     #[tokio::test]
