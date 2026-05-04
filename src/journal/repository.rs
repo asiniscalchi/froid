@@ -159,6 +159,43 @@ impl JournalRepository {
         Ok(Some(entry))
     }
 
+    pub async fn fetch_in_range(
+        &self,
+        user_id: &str,
+        start_date: NaiveDate,
+        end_date_exclusive: NaiveDate,
+        limit: u32,
+    ) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
+        let start = Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).unwrap());
+        let end = Utc.from_utc_datetime(&end_date_exclusive.and_hms_opt(0, 0, 0).unwrap());
+
+        let rows = sqlx::query(
+            r#"
+            SELECT id, raw_text, received_at
+            FROM journal_entries
+            WHERE user_id = ?
+              AND received_at >= ?
+              AND received_at < ?
+            ORDER BY received_at DESC, id DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(user_id)
+        .bind(start)
+        .bind(end)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| StoredJournalEntry {
+                id: row.get("id"),
+                entry: map_entry(row),
+            })
+            .collect())
+    }
+
     pub async fn fetch_today(
         &self,
         user_id: &str,
@@ -610,6 +647,165 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entry.text, "first");
         assert_eq!(entries[1].entry.text, "second");
+    }
+
+    fn ymd(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    fn at_on(y: i32, m: u32, d: u32, h: u32, mi: u32) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(y, m, d, h, mi, 0).unwrap()
+    }
+
+    #[tokio::test]
+    async fn fetch_in_range_returns_entries_within_range_newest_first() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "before", at_on(2026, 4, 27, 23, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "first", at_on(2026, 4, 28, 10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "second", at_on(2026, 4, 28, 12, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("4", "after", at_on(2026, 4, 29, 0, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo
+            .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry.text, "second");
+        assert_eq!(entries[1].entry.text, "first");
+    }
+
+    #[tokio::test]
+    async fn fetch_in_range_treats_end_date_as_exclusive() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "midnight start", at_on(2026, 4, 28, 0, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "midnight end", at_on(2026, 4, 29, 0, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo
+            .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.text, "midnight start");
+    }
+
+    #[tokio::test]
+    async fn fetch_in_range_respects_limit() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "first", at_on(2026, 4, 28, 9, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second", at_on(2026, 4, 28, 10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "third", at_on(2026, 4, 28, 11, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo
+            .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 2)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry.text, "third");
+        assert_eq!(entries[1].entry.text, "second");
+    }
+
+    #[tokio::test]
+    async fn fetch_in_range_scopes_to_user() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "mine", at_on(2026, 4, 28, 10, 0)))
+            .await
+            .unwrap();
+        repo.store(&IncomingMessage {
+            source: MessageSource::Telegram,
+            source_conversation_id: "99".to_string(),
+            source_message_id: "2".to_string(),
+            user_id: "other_user".to_string(),
+            text: "theirs".to_string(),
+            received_at: at_on(2026, 4, 28, 11, 0),
+        })
+        .await
+        .unwrap();
+
+        let entries = repo
+            .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.text, "mine");
+    }
+
+    #[tokio::test]
+    async fn fetch_in_range_returns_empty_when_no_entries_in_range() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "outside", at_on(2026, 4, 27, 10, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo
+            .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
+            .await
+            .unwrap();
+
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_in_range_returns_empty_for_empty_range() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "entry", at_on(2026, 4, 28, 10, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo
+            .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 28), 10)
+            .await
+            .unwrap();
+
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_in_range_breaks_timestamp_ties_by_id_desc() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "first inserted", at_on(2026, 4, 28, 10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second inserted", at_on(2026, 4, 28, 10, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo
+            .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry.text, "second inserted");
+        assert_eq!(entries[1].entry.text, "first inserted");
     }
 
     #[tokio::test]
