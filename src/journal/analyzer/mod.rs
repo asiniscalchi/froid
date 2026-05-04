@@ -4,6 +4,7 @@
 //! state — `user_id` is never an LLM-supplied argument. Each service enforces
 //! user scoping internally and caps requested limits to a maximum.
 
+pub mod agent;
 pub mod journal;
 pub mod review;
 pub mod semantic;
@@ -12,6 +13,10 @@ pub mod tools;
 pub mod types;
 mod validation;
 
+pub use agent::{
+    AnalyzerAgent, AnalyzerAgentConfig, AnalyzerAgentError, AnalyzerPreamble,
+    AnalyzerPreambleConfig, RigOpenAiAnalyzerAgent,
+};
 pub use journal::{DefaultJournalReadService, JournalReadService};
 pub use review::{DefaultReviewReadService, ReviewReadService};
 pub use semantic::{DefaultSemanticJournalSearcher, SemanticJournalSearcher};
