@@ -1,3 +1,4 @@
+pub mod analyzer;
 pub mod command;
 pub mod embedding;
 pub mod entry;
