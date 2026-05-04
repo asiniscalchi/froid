@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use crate::journal::repository::JournalRepository;
 
+use super::semantic::SemanticJournalSearcher;
 use super::types::{
-    AnalyzerError, GetRecentRequest, JournalEntryView, MAX_RECENT_LIMIT, MAX_TEXT_SEARCH_LIMIT,
-    SearchTextRequest, UserContext,
+    AnalyzerError, GetRecentRequest, JournalEntryView, MAX_RECENT_LIMIT, MAX_SEMANTIC_LIMIT,
+    MAX_TEXT_SEARCH_LIMIT, SearchSemanticRequest, SearchTextRequest, SemanticHit, UserContext,
 };
 use super::validation::{validate_limit, validate_optional_range};
 
@@ -21,16 +24,26 @@ pub trait JournalReadService: Send + Sync {
         ctx: &UserContext,
         request: SearchTextRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError>;
+
+    async fn search_semantic(
+        &self,
+        ctx: &UserContext,
+        request: SearchSemanticRequest,
+    ) -> Result<Vec<SemanticHit>, AnalyzerError>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DefaultJournalReadService {
     repository: JournalRepository,
+    semantic: Arc<dyn SemanticJournalSearcher>,
 }
 
 impl DefaultJournalReadService {
-    pub fn new(repository: JournalRepository) -> Self {
-        Self { repository }
+    pub fn new(repository: JournalRepository, semantic: Arc<dyn SemanticJournalSearcher>) -> Self {
+        Self {
+            repository,
+            semantic,
+        }
     }
 }
 
@@ -95,6 +108,45 @@ impl JournalReadService for DefaultJournalReadService {
 
         Ok(entries.into_iter().map(JournalEntryView::from).collect())
     }
+
+    async fn search_semantic(
+        &self,
+        ctx: &UserContext,
+        request: SearchSemanticRequest,
+    ) -> Result<Vec<SemanticHit>, AnalyzerError> {
+        let limit = validate_limit(request.limit, MAX_SEMANTIC_LIMIT)?;
+        validate_optional_range(request.from_date, request.to_date_exclusive)?;
+        let trimmed = request.query.trim();
+        if trimmed.is_empty() {
+            return Err(AnalyzerError::InvalidArgument(
+                "query must not be empty".into(),
+            ));
+        }
+
+        let date_filter_active = request.from_date.is_some() || request.to_date_exclusive.is_some();
+        let fetch_limit = if date_filter_active {
+            MAX_SEMANTIC_LIMIT as usize
+        } else {
+            limit as usize
+        };
+
+        let mut hits = self
+            .semantic
+            .search(&ctx.user_id, trimmed, fetch_limit)
+            .await?;
+
+        if date_filter_active {
+            let from = request.from_date;
+            let to = request.to_date_exclusive;
+            hits.retain(|hit| {
+                let date = hit.received_at.date_naive();
+                from.is_none_or(|f| date >= f) && to.is_none_or(|t| date < t)
+            });
+        }
+
+        hits.truncate(limit as usize);
+        Ok(hits)
+    }
 }
 
 #[cfg(test)]
@@ -109,12 +161,68 @@ mod tests {
     };
 
     async fn setup() -> (DefaultJournalReadService, JournalRepository) {
+        setup_with_semantic(Arc::new(StubSemanticSearcher::default())).await
+    }
+
+    async fn setup_with_semantic(
+        semantic: Arc<dyn SemanticJournalSearcher>,
+    ) -> (DefaultJournalReadService, JournalRepository) {
         database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
         let repository = JournalRepository::new(pool);
-        let service = DefaultJournalReadService::new(repository.clone());
+        let service = DefaultJournalReadService::new(repository.clone(), semantic);
         (service, repository)
+    }
+
+    #[derive(Default, Clone)]
+    struct StubSemanticSearcher {
+        hits: std::sync::Arc<std::sync::Mutex<Vec<SemanticHit>>>,
+        last_limit: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
+    }
+
+    impl StubSemanticSearcher {
+        fn with_hits(hits: Vec<SemanticHit>) -> Self {
+            Self {
+                hits: std::sync::Arc::new(std::sync::Mutex::new(hits)),
+                last_limit: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            }
+        }
+
+        fn last_limit(&self) -> Option<usize> {
+            *self.last_limit.lock().unwrap()
+        }
+    }
+
+    #[async_trait]
+    impl SemanticJournalSearcher for StubSemanticSearcher {
+        async fn search(
+            &self,
+            _user_id: &str,
+            _query: &str,
+            limit: usize,
+        ) -> Result<Vec<SemanticHit>, AnalyzerError> {
+            *self.last_limit.lock().unwrap() = Some(limit);
+            Ok(self.hits.lock().unwrap().clone())
+        }
+    }
+
+    fn semantic_req(query: &str, limit: u32) -> SearchSemanticRequest {
+        SearchSemanticRequest {
+            query: query.to_string(),
+            limit,
+            from_date: None,
+            to_date_exclusive: None,
+        }
+    }
+
+    fn hit(id: i64, received_at: DateTime<Utc>, text: &str, distance: f32) -> SemanticHit {
+        SemanticHit {
+            id,
+            received_at,
+            text: text.to_string(),
+            distance,
+        }
     }
 
     fn ctx() -> UserContext {
@@ -357,5 +465,104 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "match within");
+    }
+
+    #[tokio::test]
+    async fn search_semantic_returns_hits_from_underlying_searcher() {
+        let stub = StubSemanticSearcher::with_hits(vec![hit(
+            1,
+            at(2026, 4, 28, 10, 0),
+            "anxious entry",
+            0.1,
+        )]);
+        let (service, _) = setup_with_semantic(Arc::new(stub.clone())).await;
+
+        let result = service
+            .search_semantic(&ctx(), semantic_req("anxiety", 5))
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text, "anxious entry");
+        assert_eq!(stub.last_limit(), Some(5));
+    }
+
+    #[tokio::test]
+    async fn search_semantic_rejects_zero_limit() {
+        let (service, _) = setup().await;
+        let err = service
+            .search_semantic(&ctx(), semantic_req("x", 0))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
+    }
+
+    #[tokio::test]
+    async fn search_semantic_rejects_limit_above_max() {
+        let (service, _) = setup().await;
+        let err = service
+            .search_semantic(&ctx(), semantic_req("x", MAX_SEMANTIC_LIMIT + 1))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AnalyzerError::LimitTooLarge { .. }));
+    }
+
+    #[tokio::test]
+    async fn search_semantic_rejects_blank_query() {
+        let (service, _) = setup().await;
+        let err = service
+            .search_semantic(&ctx(), semantic_req("   ", 5))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
+    }
+
+    #[tokio::test]
+    async fn search_semantic_rejects_inverted_range() {
+        let (service, _) = setup().await;
+        let req = SearchSemanticRequest {
+            query: "x".to_string(),
+            limit: 5,
+            from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()),
+            to_date_exclusive: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
+        };
+        let err = service.search_semantic(&ctx(), req).await.unwrap_err();
+        assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
+    }
+
+    #[tokio::test]
+    async fn search_semantic_filters_by_date_and_truncates_to_limit() {
+        let stub = StubSemanticSearcher::with_hits(vec![
+            hit(1, at(2026, 4, 27, 10, 0), "before", 0.1),
+            hit(2, at(2026, 4, 28, 10, 0), "in-1", 0.2),
+            hit(3, at(2026, 4, 28, 12, 0), "in-2", 0.3),
+            hit(4, at(2026, 4, 29, 0, 0), "boundary", 0.4),
+        ]);
+        let (service, _) = setup_with_semantic(Arc::new(stub.clone())).await;
+
+        let req = SearchSemanticRequest {
+            query: "x".to_string(),
+            limit: 1,
+            from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
+            to_date_exclusive: Some(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()),
+        };
+        let result = service.search_semantic(&ctx(), req).await.unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text, "in-1");
+        assert_eq!(stub.last_limit(), Some(MAX_SEMANTIC_LIMIT as usize));
+    }
+
+    #[tokio::test]
+    async fn search_semantic_does_not_oversample_when_no_date_filter() {
+        let stub = StubSemanticSearcher::with_hits(vec![]);
+        let (service, _) = setup_with_semantic(Arc::new(stub.clone())).await;
+
+        let _ = service
+            .search_semantic(&ctx(), semantic_req("x", 3))
+            .await
+            .unwrap();
+
+        assert_eq!(stub.last_limit(), Some(3));
     }
 }
