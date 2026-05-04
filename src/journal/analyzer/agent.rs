@@ -1,4 +1,4 @@
-use std::{env, error::Error, fmt, fs, path::PathBuf, pin::Pin, sync::Arc};
+use std::{env, error::Error, fmt, fs, path::PathBuf, pin::Pin, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use rig::{
@@ -8,6 +8,7 @@ use rig::{
     providers::openai::Client as OpenAiClient,
     tool::{ToolDyn as RigToolDyn, ToolError as RigToolError},
 };
+use tracing::{info, warn};
 
 use super::tools::{Tool, ToolRegistry};
 use super::types::UserContext;
@@ -186,16 +187,78 @@ impl RigToolDyn for AnalyzerToolAdapter {
         args: String,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String, RigToolError>> + Send + 'a>> {
         Box::pin(async move {
-            let value: serde_json::Value =
-                serde_json::from_str(&args).map_err(RigToolError::JsonError)?;
-            let output = self
-                .inner
-                .dispatch(&self.user_context, value)
-                .await
-                .map_err(|e| RigToolError::ToolCallError(Box::new(e)))?;
+            let started = Instant::now();
+            let tool = self.inner.name();
+            let user_id = self.user_context.user_id.as_str();
+
+            let value: serde_json::Value = match serde_json::from_str(&args) {
+                Ok(value) => value,
+                Err(error) => {
+                    let latency_ms = started.elapsed().as_millis();
+                    warn!(
+                        tool = %tool,
+                        user_id = %user_id,
+                        latency_ms = %latency_ms,
+                        %error,
+                        "analyzer tool call rejected: invalid json args"
+                    );
+                    return Err(RigToolError::JsonError(error));
+                }
+            };
+
+            info!(
+                tool = %tool,
+                user_id = %user_id,
+                args = ?arg_keys(&value),
+                "analyzer tool call started"
+            );
+
+            let result = self.inner.dispatch(&self.user_context, value).await;
+            let latency_ms = started.elapsed().as_millis();
+
+            match &result {
+                Ok(output) => info!(
+                    tool = %tool,
+                    user_id = %user_id,
+                    latency_ms = %latency_ms,
+                    result_count = ?result_count(output),
+                    "analyzer tool call ok"
+                ),
+                Err(error) => warn!(
+                    tool = %tool,
+                    user_id = %user_id,
+                    latency_ms = %latency_ms,
+                    %error,
+                    "analyzer tool call failed"
+                ),
+            }
+
+            let output = result.map_err(|e| RigToolError::ToolCallError(Box::new(e)))?;
             serde_json::to_string(&output).map_err(RigToolError::JsonError)
         })
     }
+}
+
+/// Returns the top-level keys of `value` if it is a JSON object, or a single
+/// `<non-object>` marker otherwise. Used for audit logging — keys only, never
+/// values, so that journal text from query arguments is not written to logs.
+fn arg_keys(value: &serde_json::Value) -> Vec<&str> {
+    match value.as_object() {
+        Some(object) => object.keys().map(String::as_str).collect(),
+        None => vec!["<non-object>"],
+    }
+}
+
+/// Best-effort row count for a tool output. Looks for the conventional
+/// wrapper keys our tools use (`entries`, `hits`, `reviews`, `signals`).
+fn result_count(value: &serde_json::Value) -> Option<usize> {
+    let object = value.as_object()?;
+    for key in ["entries", "hits", "reviews", "signals"] {
+        if let Some(array) = object.get(key).and_then(|v| v.as_array()) {
+            return Some(array.len());
+        }
+    }
+    None
 }
 
 /// LLM-backed analyzer agent using rig's OpenAI client + multi-turn tool loop.
@@ -483,6 +546,36 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, AnalyzerAgentError::Configuration(_)));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn arg_keys_returns_object_keys_only() {
+        let value = serde_json::json!({"limit": 5, "from_date": "2026-04-28"});
+        let mut keys = arg_keys(&value);
+        keys.sort();
+        assert_eq!(keys, vec!["from_date", "limit"]);
+    }
+
+    #[test]
+    fn arg_keys_handles_non_object_inputs() {
+        assert_eq!(arg_keys(&serde_json::json!(42)), vec!["<non-object>"]);
+        assert_eq!(arg_keys(&serde_json::json!("hi")), vec!["<non-object>"]);
+        assert_eq!(arg_keys(&serde_json::json!([1, 2])), vec!["<non-object>"]);
+    }
+
+    #[test]
+    fn result_count_extracts_size_from_known_wrapper_keys() {
+        for key in ["entries", "hits", "reviews", "signals"] {
+            let value = serde_json::json!({key: [1, 2, 3]});
+            assert_eq!(result_count(&value), Some(3), "wrapper key: {key}");
+        }
+    }
+
+    #[test]
+    fn result_count_returns_none_for_unknown_shapes() {
+        assert_eq!(result_count(&serde_json::json!({"foo": [1]})), None);
+        assert_eq!(result_count(&serde_json::json!([1, 2, 3])), None);
+        assert_eq!(result_count(&serde_json::json!("text")), None);
     }
 
     #[test]
