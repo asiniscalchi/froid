@@ -81,7 +81,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use chrono::Utc;
+    use chrono::{Duration, Utc};
     use sqlx::SqlitePool;
 
     use super::*;
@@ -202,7 +202,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.text, "No review available for today yet.");
+        let yesterday = Utc::now().date_naive() - Duration::days(1);
+        assert_eq!(
+            response.text,
+            format!(
+                "No daily review available for {} yet.",
+                yesterday.format("%Y-%m-%d")
+            )
+        );
 
         fs::remove_file(prompt_path).unwrap();
     }

@@ -5,9 +5,9 @@ use crate::{
     journal::{
         command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
         responses::{
-            daily_review_not_available_response, daily_review_unavailable_response,
-            deleted_last_entry_response, format_daily_review, format_entries, format_last_entry,
-            format_weekly_review_for_week, help_response, no_entries_response,
+            daily_review_not_available_for_date_response, daily_review_unavailable_response,
+            deleted_last_entry_response, format_daily_review_for_date, format_entries,
+            format_last_entry, format_weekly_review_for_week, help_response, no_entries_response,
             no_entries_today_response, no_entry_to_delete_response, no_last_entry_response,
             recent_usage_response, search_usage_response, start_response, stats_response,
             status_response, unknown_command_response, weekly_review_not_available_response,
@@ -86,12 +86,13 @@ impl JournalService {
         }
     }
 
-    async fn day_review_last(&self, user_id: &str, date: chrono::NaiveDate) -> OutgoingMessage {
+    async fn day_review_last(&self, user_id: &str, today: chrono::NaiveDate) -> OutgoingMessage {
+        let yesterday = today - Duration::days(1);
         self.run_review(
             user_id,
-            date,
-            format_daily_review,
-            daily_review_not_available_response(),
+            yesterday,
+            |r| format_daily_review_for_date(r, yesterday),
+            daily_review_not_available_for_date_response(yesterday),
         )
         .await
     }
