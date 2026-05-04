@@ -5,10 +5,13 @@
 //! user scoping internally and caps requested limits to a maximum.
 
 pub mod journal;
+pub mod review;
 pub mod types;
+mod validation;
 
 pub use journal::{DefaultJournalReadService, JournalReadService};
+pub use review::{DefaultReviewReadService, ReviewReadService};
 pub use types::{
-    AnalyzerError, GetRecentRequest, JournalEntryView, MAX_RECENT_LIMIT, MAX_TEXT_SEARCH_LIMIT,
-    SearchTextRequest, UserContext,
+    AnalyzerError, DailyReviewView, GetRecentRequest, GetReviewsRequest, JournalEntryView,
+    MAX_RECENT_LIMIT, MAX_TEXT_SEARCH_LIMIT, SearchTextRequest, UserContext, WeeklyReviewView,
 };

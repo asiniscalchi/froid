@@ -64,6 +64,27 @@ impl From<StoredJournalEntry> for JournalEntryView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DailyReviewView {
+    pub review_date: NaiveDate,
+    pub review_text: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeeklyReviewView {
+    pub week_start: NaiveDate,
+    pub week_end: NaiveDate,
+    pub review_text: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GetReviewsRequest {
+    pub from_date: NaiveDate,
+    pub to_date_exclusive: NaiveDate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetRecentRequest {
     pub limit: u32,
     pub from_date: Option<NaiveDate>,

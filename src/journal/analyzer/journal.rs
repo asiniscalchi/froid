@@ -6,6 +6,7 @@ use super::types::{
     AnalyzerError, GetRecentRequest, JournalEntryView, MAX_RECENT_LIMIT, MAX_TEXT_SEARCH_LIMIT,
     SearchTextRequest, UserContext,
 };
+use super::validation::{validate_limit, validate_optional_range};
 
 #[async_trait]
 pub trait JournalReadService: Send + Sync {
@@ -33,30 +34,6 @@ impl DefaultJournalReadService {
     }
 }
 
-fn validate_limit(limit: u32, max: u32) -> Result<u32, AnalyzerError> {
-    if limit == 0 {
-        return Err(AnalyzerError::InvalidArgument("limit must be > 0".into()));
-    }
-    if limit > max {
-        return Err(AnalyzerError::LimitTooLarge { max });
-    }
-    Ok(limit)
-}
-
-fn validate_range(
-    from: Option<chrono::NaiveDate>,
-    to_exclusive: Option<chrono::NaiveDate>,
-) -> Result<(), AnalyzerError> {
-    if let (Some(from), Some(to)) = (from, to_exclusive)
-        && to <= from
-    {
-        return Err(AnalyzerError::InvalidArgument(
-            "to_date_exclusive must be greater than from_date".into(),
-        ));
-    }
-    Ok(())
-}
-
 fn map_storage_error(err: sqlx::Error) -> AnalyzerError {
     AnalyzerError::Internal(Box::new(err))
 }
@@ -69,7 +46,7 @@ impl JournalReadService for DefaultJournalReadService {
         request: GetRecentRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_RECENT_LIMIT)?;
-        validate_range(request.from_date, request.to_date_exclusive)?;
+        validate_optional_range(request.from_date, request.to_date_exclusive)?;
 
         let entries = match (request.from_date, request.to_date_exclusive) {
             (None, None) => self
@@ -96,7 +73,7 @@ impl JournalReadService for DefaultJournalReadService {
         request: SearchTextRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_TEXT_SEARCH_LIMIT)?;
-        validate_range(request.from_date, request.to_date_exclusive)?;
+        validate_optional_range(request.from_date, request.to_date_exclusive)?;
         let trimmed = request.query.trim();
         if trimmed.is_empty() {
             return Err(AnalyzerError::InvalidArgument(
