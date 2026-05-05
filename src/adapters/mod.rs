@@ -1,4 +1,3 @@
-pub mod analyzer_telegram;
 pub mod mcp;
 pub mod telegram;
 

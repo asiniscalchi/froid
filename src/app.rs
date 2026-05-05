@@ -12,16 +12,12 @@ use rmcp::transport::streamable_http_server::{
 };
 
 use crate::{
-    adapters::{
-        Adapter, analyzer_telegram::AnalyzerTelegramAdapter, mcp::AnalyzerMcpServer,
-        telegram::TelegramAdapter,
-    },
+    adapters::{Adapter, mcp::AnalyzerMcpServer, telegram::TelegramAdapter},
     cli::{McpConfig, ServeConfig},
     database,
     journal::{
         analyzer::{
-            DefaultSemanticJournalSearcher, RigOpenAiAnalyzerAgent, UserContext,
-            build_analyzer_tool_registry,
+            DefaultSemanticJournalSearcher, UserContext, build_analyzer_tool_registry,
         },
         embedding::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
@@ -122,13 +118,6 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &config,
         signal_runtime_config,
     )?;
-    spawn_analyzer_telegram_worker(
-        &mut workers,
-        &shutdown,
-        &pool,
-        &config,
-        embedding_config.as_ref(),
-    );
     let journal_service = build_journal_service(
         pool,
         embedding_config,
@@ -477,62 +466,6 @@ fn spawn_signal_worker(
     });
 
     Ok(())
-}
-
-fn spawn_analyzer_telegram_worker(
-    workers: &mut JoinSet<&'static str>,
-    shutdown: &CancellationToken,
-    pool: &SqlitePool,
-    config: &ServeConfig,
-    embedding_config: Option<&EmbeddingConfig>,
-) {
-    let Some(bot_token) = config.analyzer_telegram_bot_token.clone() else {
-        return;
-    };
-
-    let Some(embedding_cfg) = embedding_config else {
-        warn!(
-            "analyzer telegram bot is configured but embedding configuration is missing; analyzer bot will not start"
-        );
-        return;
-    };
-
-    let embedder = match RigOpenAiEmbedder::from_env(embedding_cfg.clone()) {
-        Ok(embedder) => embedder,
-        Err(error) => {
-            warn!(
-                error = %error,
-                "failed to construct OpenAI embedder for analyzer; analyzer bot will not start"
-            );
-            return;
-        }
-    };
-
-    let semantic = Arc::new(DefaultSemanticJournalSearcher::new(
-        SqliteEmbeddingRepository::new(pool.clone()),
-        embedder,
-        JournalRepository::new(pool.clone()),
-    ));
-
-    let registry = build_analyzer_tool_registry(pool.clone(), semantic);
-
-    let agent = match RigOpenAiAnalyzerAgent::from_env(registry) {
-        Ok(agent) => Arc::new(agent),
-        Err(error) => {
-            warn!(
-                error = %error,
-                "failed to build analyzer agent; analyzer bot will not start"
-            );
-            return;
-        }
-    };
-
-    let adapter = AnalyzerTelegramAdapter::new(bot_token, agent);
-    let token = shutdown.clone();
-    workers.spawn(async move {
-        adapter.run_until_cancelled(token).await;
-        "analyzer_telegram"
-    });
 }
 
 fn build_journal_service(
