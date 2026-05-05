@@ -16,9 +16,7 @@ use crate::{
     cli::{McpConfig, ServeConfig},
     database,
     journal::{
-        analyzer::{
-            DefaultSemanticJournalSearcher, UserContext, build_analyzer_tool_registry,
-        },
+        analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_tool_registry},
         embedding::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
         },
