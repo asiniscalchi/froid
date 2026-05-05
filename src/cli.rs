@@ -21,14 +21,6 @@ pub struct Cli {
     )]
     telegram_bot_token: Option<String>,
 
-    #[arg(
-        long,
-        env = "FROID_ANALYZER_TELEGRAM_BOT_TOKEN",
-        global = true,
-        hide_env_values = true
-    )]
-    analyzer_telegram_bot_token: Option<String>,
-
     #[arg(long, env = "DATA_DIR", global = true, default_value = "data")]
     data_dir: String,
 
@@ -187,7 +179,6 @@ pub struct McpConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeConfig {
     pub telegram_bot_token: String,
-    pub analyzer_telegram_bot_token: Option<String>,
     pub database_path: String,
     pub database_url: String,
     pub embedding_worker: ReconciliationWorkerConfig,
@@ -289,16 +280,8 @@ impl Cli {
 
         let database_path = format!("{}/{}", self.data_dir, self.database_file);
 
-        let analyzer_telegram_bot_token = self
-            .analyzer_telegram_bot_token
-            .as_ref()
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
-            analyzer_telegram_bot_token,
             database_url: format!("sqlite:{database_path}"),
             database_path,
             embedding_worker,
@@ -320,7 +303,6 @@ mod tests {
     fn default_cli() -> Cli {
         Cli {
             telegram_bot_token: None,
-            analyzer_telegram_bot_token: None,
             data_dir: "data".to_string(),
             database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: None,
@@ -350,39 +332,6 @@ mod tests {
             telegram_bot_token: Some(token.to_string()),
             ..default_cli()
         }
-    }
-
-    #[test]
-    fn analyzer_token_defaults_to_none() {
-        let config = cli_with_token("token").serve_config().unwrap();
-        assert!(config.analyzer_telegram_bot_token.is_none());
-    }
-
-    #[test]
-    fn analyzer_token_propagates_when_set() {
-        let cli = Cli::parse_from([
-            "froid",
-            "--telegram-bot-token",
-            "token",
-            "--analyzer-telegram-bot-token",
-            "analyzer-token",
-        ]);
-        let config = cli.serve_config().unwrap();
-        assert_eq!(
-            config.analyzer_telegram_bot_token.as_deref(),
-            Some("analyzer-token")
-        );
-    }
-
-    #[test]
-    fn analyzer_token_blank_treated_as_unset() {
-        let cli = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            analyzer_telegram_bot_token: Some("   ".to_string()),
-            ..default_cli()
-        };
-        let config = cli.serve_config().unwrap();
-        assert!(config.analyzer_telegram_bot_token.is_none());
     }
 
     #[test]
