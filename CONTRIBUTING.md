@@ -48,7 +48,7 @@ To expose the analyzer's read-only tools over MCP (Streamable HTTP, mounted at `
 cargo run -- mcp --user-id <your-user-id>
 ```
 
-The MCP server reuses the same SQLite database and tool registry as the analyzer Telegram bot, and requires `OPENAI_API_KEY` so the semantic search tool can build embeddings. Every incoming request is scoped to the single `--user-id` configured at startup; there is no per-request authentication.
+The MCP server reuses the same SQLite database the journal writes to and requires `OPENAI_API_KEY` so the semantic search tool can build embeddings. Every incoming request is scoped to the single `--user-id` configured at startup; there is no per-request authentication.
 
 ## Local CI Checks
 
