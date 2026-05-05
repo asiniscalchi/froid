@@ -64,12 +64,14 @@ pub trait DailyReviewSender: Send + Sync {
 #[derive(Clone)]
 pub struct TelegramDailyReviewSender {
     bot: Bot,
+    allowed_user_id: Option<u64>,
 }
 
 impl TelegramDailyReviewSender {
-    pub fn new(bot_token: String) -> Self {
+    pub fn new(bot_token: String, allowed_user_id: Option<u64>) -> Self {
         Self {
             bot: Bot::new(bot_token),
+            allowed_user_id,
         }
     }
 }
@@ -84,6 +86,17 @@ impl DailyReviewSender for TelegramDailyReviewSender {
         let chat_id = source_conversation_id
             .parse::<i64>()
             .map_err(|_| format!("invalid Telegram chat id: {source_conversation_id}"))?;
+
+        if let Some(allowed_user_id) = self.allowed_user_id
+            && chat_id != allowed_user_id as i64
+        {
+            info!(
+                source_conversation_id,
+                allowed_user_id,
+                "skipping daily review delivery outside configured Telegram user scope"
+            );
+            return Ok(());
+        }
 
         self.bot
             .send_message(ChatId(chat_id), text.to_string())

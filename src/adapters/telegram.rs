@@ -18,22 +18,46 @@ const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Unsupported message type";
 
 pub struct TelegramAdapter<H: MessageHandler> {
     bot_token: String,
+    allowed_user_id: Option<u64>,
     handler: H,
 }
 
 impl<H: MessageHandler> TelegramAdapter<H> {
-    pub fn new(bot_token: String, handler: H) -> Self {
-        Self { bot_token, handler }
+    pub fn new(bot_token: String, allowed_user_id: Option<u64>, handler: H) -> Self {
+        Self {
+            bot_token,
+            allowed_user_id,
+            handler,
+        }
     }
 
     pub async fn run(self) {
         let bot = Bot::new(self.bot_token);
+        let allowed_user_id = self.allowed_user_id;
         let handler = self.handler;
+
+        match allowed_user_id {
+            Some(id) => {
+                info!(
+                    allowed_user_id = id,
+                    chat_scope = "private",
+                    "starting Telegram adapter"
+                );
+            }
+            None => {
+                info!(
+                    allowed_user_id = "all",
+                    chat_scope = "private",
+                    "starting Telegram adapter"
+                );
+            }
+        }
 
         teloxide::repl(bot, move |bot: Bot, message: Message| {
             let handler = handler.clone();
+            let allowed_user_id = allowed_user_id;
 
-            async move { handle_message(bot, message, handler).await }
+            async move { handle_message(bot, message, allowed_user_id, handler).await }
         })
         .await;
     }
@@ -42,8 +66,19 @@ impl<H: MessageHandler> TelegramAdapter<H> {
 async fn handle_message<H: MessageHandler>(
     bot: Bot,
     message: Message,
+    allowed_user_id: Option<u64>,
     handler: H,
 ) -> ResponseResult<()> {
+    if !should_handle_message(&message, allowed_user_id) {
+        info!(
+            chat_id = %message.chat.id,
+            sender_user_id = message.from.as_ref().map(|user| user.id.0),
+            allowed_user_id,
+            "ignored Telegram message outside configured private user scope"
+        );
+        return Ok(());
+    }
+
     let Some(text) = message.text() else {
         bot.send_message(message.chat.id, UNSUPPORTED_MESSAGE_RESPONSE)
             .await?;
@@ -95,6 +130,18 @@ async fn handle_message<H: MessageHandler>(
     };
 
     Ok(())
+}
+
+fn should_handle_message(message: &Message, allowed_user_id: Option<u64>) -> bool {
+    if !message.chat.is_private() {
+        return false;
+    }
+
+    let Some(sender) = message.from.as_ref() else {
+        return false;
+    };
+
+    allowed_user_id.is_none_or(|id| sender.id.0 == id)
 }
 
 fn saved_reaction() -> ReactionType {
@@ -208,6 +255,108 @@ mod tests {
             incoming.received_at,
             chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()
         );
+    }
+
+    #[test]
+    fn handles_private_message_from_allowed_user() {
+        let message = telegram_message(json!({
+            "message_id": 100,
+            "from": {
+                "id": 7,
+                "is_bot": false,
+                "first_name": "Ada"
+            },
+            "date": 1_700_000_000,
+            "chat": {
+                "id": 7,
+                "type": "private",
+                "first_name": "Ada"
+            },
+            "text": "hello froid"
+        }));
+
+        assert!(should_handle_message(&message, Some(7)));
+    }
+
+    #[test]
+    fn handles_any_private_sender_when_no_allowed_user_is_configured() {
+        let message = telegram_message(json!({
+            "message_id": 100,
+            "from": {
+                "id": 99,
+                "is_bot": false,
+                "first_name": "Grace"
+            },
+            "date": 1_700_000_000,
+            "chat": {
+                "id": 99,
+                "type": "private",
+                "first_name": "Grace"
+            },
+            "text": "hello froid"
+        }));
+
+        assert!(should_handle_message(&message, None));
+    }
+
+    #[test]
+    fn ignores_private_message_from_other_user() {
+        let message = telegram_message(json!({
+            "message_id": 100,
+            "from": {
+                "id": 8,
+                "is_bot": false,
+                "first_name": "Edsger"
+            },
+            "date": 1_700_000_000,
+            "chat": {
+                "id": 8,
+                "type": "private",
+                "first_name": "Edsger"
+            },
+            "text": "hello froid"
+        }));
+
+        assert!(!should_handle_message(&message, Some(7)));
+    }
+
+    #[test]
+    fn ignores_group_message_even_from_allowed_user() {
+        let message = telegram_message(json!({
+            "message_id": 100,
+            "from": {
+                "id": 7,
+                "is_bot": false,
+                "first_name": "Ada"
+            },
+            "date": 1_700_000_000,
+            "chat": {
+                "id": -42,
+                "type": "group",
+                "title": "Journal"
+            },
+            "text": "hello froid"
+        }));
+
+        assert!(!should_handle_message(&message, Some(7)));
+        assert!(!should_handle_message(&message, None));
+    }
+
+    #[test]
+    fn ignores_message_without_sender() {
+        let message = telegram_message(json!({
+            "message_id": 100,
+            "date": 1_700_000_000,
+            "chat": {
+                "id": 7,
+                "type": "private",
+                "first_name": "Ada"
+            },
+            "text": "hello froid"
+        }));
+
+        assert!(!should_handle_message(&message, Some(7)));
+        assert!(!should_handle_message(&message, None));
     }
 
     #[test]

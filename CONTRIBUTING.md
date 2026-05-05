@@ -24,6 +24,7 @@ Key variables:
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Yes | — | Telegram bot credentials |
+| `TELEGRAM_ALLOWED_USER_ID` | No | allow all private chats | Restrict incoming Telegram handling and scheduled review delivery to one private user |
 | `OPENAI_API_KEY` | Workers only | — | Embeddings and extractions |
 | `DATA_DIR` | No | `data` | Directory for persistent data |
 | `DATABASE_FILE` | No | `froid.sqlite3` | SQLite database path |

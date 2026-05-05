@@ -21,6 +21,7 @@ Create an `.env` file:
 
 ```env
 TELEGRAM_BOT_TOKEN=your-token-here
+TELEGRAM_ALLOWED_USER_ID=123456789    # optional: only accept and answer this Telegram user in private chat
 OPENAI_API_KEY=your-key-here        # required if enabling workers
 
 FROID_EMBEDDING_WORKER_ENABLED=true
