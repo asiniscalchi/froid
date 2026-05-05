@@ -27,6 +27,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let config = cli.serve_config()?;
             app::serve(config).await?;
         }
+        Command::Mcp(args) => {
+            let config = cli.mcp_config(&args)?;
+            app::mcp(config).await?;
+        }
     }
 
     Ok(())

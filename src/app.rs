@@ -9,7 +9,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     adapters::{Adapter, analyzer_telegram::AnalyzerTelegramAdapter, telegram::TelegramAdapter},
-    cli::ServeConfig,
+    cli::{McpConfig, ServeConfig},
     database,
     journal::{
         analyzer::{
@@ -132,6 +132,19 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
 
     let adapter = TelegramAdapter::new(config.telegram_bot_token, journal_service);
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
+}
+
+pub async fn mcp(config: McpConfig) -> Result<(), Box<dyn Error>> {
+    info!(
+        version = version::VERSION,
+        command = "mcp",
+        bind = %config.bind,
+        user_id = %config.user_id,
+        database_path = %config.database_path,
+        "starting service"
+    );
+    // Wired up in a follow-up step.
+    Err("mcp subcommand is not yet implemented".into())
 }
 
 /// Race the adapter against the worker JoinSet and the shutdown signal.
