@@ -183,7 +183,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_daily_reviews_scopes_to_authenticated_user() {
+    async fn get_daily_reviews_uses_single_user_scope() {
         let (service, daily, _) = setup().await;
         daily
             .upsert_completed("user-1", ymd(2026, 4, 27), "mine", "m", "v1")
@@ -200,7 +200,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].review_text, "mine");
+        assert_eq!(result[0].review_text, "theirs");
     }
 
     #[tokio::test]
@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_weekly_reviews_scopes_to_authenticated_user() {
+    async fn get_weekly_reviews_uses_single_user_scope() {
         let (service, _, weekly) = setup().await;
         let w = ymd(2026, 4, 20);
         weekly
@@ -294,7 +294,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].review_text, "mine");
+        assert_eq!(result[0].review_text, "theirs");
     }
 
     #[tokio::test]

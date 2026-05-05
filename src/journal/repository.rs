@@ -1,8 +1,7 @@
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
-use crate::messages::IncomingMessage;
-use crate::messages::MessageSource;
+use crate::messages::{IncomingMessage, MessageSource, SINGLE_USER_ID};
 
 use super::entry::{JournalEntry, JournalStats, StoredJournalEntry};
 
@@ -42,11 +41,10 @@ impl JournalRepository {
         let result = sqlx::query(
             r#"
             INSERT OR IGNORE INTO journal_entries
-                (user_id, source, source_conversation_id, source_message_id, raw_text, received_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (source, source_conversation_id, source_message_id, raw_text, received_at)
+            VALUES (?, ?, ?, ?, ?)
             "#,
         )
-        .bind(&message.user_id)
         .bind(message.source.to_string())
         .bind(&message.source_conversation_id)
         .bind(&message.source_message_id)
@@ -60,19 +58,17 @@ impl JournalRepository {
 
     pub async fn fetch_recent(
         &self,
-        user_id: &str,
+        _user_id: &str,
         limit: u32,
     ) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT id, raw_text, received_at
             FROM journal_entries
-            WHERE user_id = ?
             ORDER BY received_at DESC, id DESC
             LIMIT ?
             "#,
         )
-        .bind(user_id)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -88,7 +84,7 @@ impl JournalRepository {
 
     pub async fn fetch_last_for_conversation(
         &self,
-        user_id: &str,
+        _user_id: &str,
         source: &MessageSource,
         source_conversation_id: &str,
     ) -> Result<Option<StoredJournalEntry>, sqlx::Error> {
@@ -96,14 +92,12 @@ impl JournalRepository {
             r#"
             SELECT id, raw_text, received_at
             FROM journal_entries
-            WHERE user_id = ?
-              AND source = ?
+            WHERE source = ?
               AND source_conversation_id = ?
             ORDER BY received_at DESC, id DESC
             LIMIT 1
             "#,
         )
-        .bind(user_id)
         .bind(source.to_string())
         .bind(source_conversation_id)
         .fetch_optional(&self.pool)
@@ -117,7 +111,7 @@ impl JournalRepository {
 
     pub async fn delete_last_for_conversation(
         &self,
-        user_id: &str,
+        _user_id: &str,
         source: &MessageSource,
         source_conversation_id: &str,
     ) -> Result<Option<StoredJournalEntry>, sqlx::Error> {
@@ -127,14 +121,12 @@ impl JournalRepository {
             r#"
             SELECT id, raw_text, received_at
             FROM journal_entries
-            WHERE user_id = ?
-              AND source = ?
+            WHERE source = ?
               AND source_conversation_id = ?
             ORDER BY received_at DESC, id DESC
             LIMIT 1
             "#,
         )
-        .bind(user_id)
         .bind(source.to_string())
         .bind(source_conversation_id)
         .fetch_optional(&mut *tx)
@@ -167,7 +159,7 @@ impl JournalRepository {
 
     pub async fn search_text(
         &self,
-        user_id: &str,
+        _user_id: &str,
         query: &str,
         from_date: Option<NaiveDate>,
         to_date_exclusive: Option<NaiveDate>,
@@ -176,8 +168,7 @@ impl JournalRepository {
         let mut sql = String::from(
             r#"SELECT id, raw_text, received_at
                FROM journal_entries
-               WHERE user_id = ?
-                 AND LOWER(raw_text) LIKE LOWER(?)"#,
+               WHERE LOWER(raw_text) LIKE LOWER(?)"#,
         );
         if from_date.is_some() {
             sql.push_str(" AND received_at >= ?");
@@ -187,7 +178,7 @@ impl JournalRepository {
         }
         sql.push_str(" ORDER BY received_at DESC, id DESC LIMIT ?");
 
-        let mut q = sqlx::query(&sql).bind(user_id).bind(format!("%{query}%"));
+        let mut q = sqlx::query(&sql).bind(format!("%{query}%"));
         if let Some(d) = from_date {
             let start = Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap());
             q = q.bind(start);
@@ -211,7 +202,7 @@ impl JournalRepository {
 
     pub async fn fetch_in_range(
         &self,
-        user_id: &str,
+        _user_id: &str,
         start_date: NaiveDate,
         end_date_exclusive: NaiveDate,
         limit: u32,
@@ -223,14 +214,12 @@ impl JournalRepository {
             r#"
             SELECT id, raw_text, received_at
             FROM journal_entries
-            WHERE user_id = ?
-              AND received_at >= ?
+            WHERE received_at >= ?
               AND received_at < ?
             ORDER BY received_at DESC, id DESC
             LIMIT ?
             "#,
         )
-        .bind(user_id)
         .bind(start)
         .bind(end)
         .bind(limit)
@@ -248,7 +237,7 @@ impl JournalRepository {
 
     pub async fn fetch_today(
         &self,
-        user_id: &str,
+        _user_id: &str,
         date: NaiveDate,
     ) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
         let start = Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap());
@@ -258,13 +247,11 @@ impl JournalRepository {
             r#"
             SELECT id, raw_text, received_at
             FROM journal_entries
-            WHERE user_id = ?
-              AND received_at >= ?
+            WHERE received_at >= ?
               AND received_at < ?
             ORDER BY received_at ASC, id ASC
             "#,
         )
-        .bind(user_id)
         .bind(start)
         .bind(end)
         .fetch_all(&self.pool)
@@ -289,12 +276,12 @@ impl JournalRepository {
 
         let rows = sqlx::query(
             r#"
-            SELECT DISTINCT user_id, source_conversation_id
+            SELECT DISTINCT source_conversation_id
             FROM journal_entries
             WHERE source = ?
               AND received_at >= ?
               AND received_at < ?
-            ORDER BY user_id ASC, source_conversation_id ASC
+            ORDER BY source_conversation_id ASC
             "#,
         )
         .bind(source.to_string())
@@ -306,7 +293,7 @@ impl JournalRepository {
         Ok(rows
             .into_iter()
             .map(|row| JournalConversation {
-                user_id: row.get("user_id"),
+                user_id: SINGLE_USER_ID.to_string(),
                 source_conversation_id: row.get("source_conversation_id"),
             })
             .collect())
@@ -323,12 +310,12 @@ impl JournalRepository {
 
         let rows = sqlx::query(
             r#"
-            SELECT DISTINCT user_id, source_conversation_id
+            SELECT DISTINCT source_conversation_id
             FROM journal_entries
             WHERE source = ?
               AND received_at >= ?
               AND received_at < ?
-            ORDER BY user_id ASC, source_conversation_id ASC
+            ORDER BY source_conversation_id ASC
             "#,
         )
         .bind(source.to_string())
@@ -340,7 +327,7 @@ impl JournalRepository {
         Ok(rows
             .into_iter()
             .map(|row| JournalConversation {
-                user_id: row.get("user_id"),
+                user_id: SINGLE_USER_ID.to_string(),
                 source_conversation_id: row.get("source_conversation_id"),
             })
             .collect())
@@ -348,7 +335,7 @@ impl JournalRepository {
 
     pub async fn fetch_by_ids(
         &self,
-        user_id: &str,
+        _user_id: &str,
         ids: &[i64],
     ) -> Result<Vec<(i64, JournalEntry)>, sqlx::Error> {
         if ids.is_empty() {
@@ -357,9 +344,9 @@ impl JournalRepository {
 
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
         let sql = format!(
-            "SELECT id, raw_text, received_at FROM journal_entries WHERE user_id = ? AND id IN ({placeholders})"
+            "SELECT id, raw_text, received_at FROM journal_entries WHERE id IN ({placeholders})"
         );
-        let mut query = sqlx::query(&sql).bind(user_id);
+        let mut query = sqlx::query(&sql);
         for id in ids {
             query = query.bind(id);
         }
@@ -376,7 +363,7 @@ impl JournalRepository {
 
     pub async fn stats(
         &self,
-        user_id: &str,
+        _user_id: &str,
         today: NaiveDate,
     ) -> Result<JournalStats, sqlx::Error> {
         let start = Utc.from_utc_datetime(&today.and_hms_opt(0, 0, 0).unwrap());
@@ -389,12 +376,10 @@ impl JournalRepository {
                 COALESCE(SUM(CASE WHEN received_at >= ? AND received_at < ? THEN 1 ELSE 0 END), 0) AS entries_today,
                 MAX(received_at) AS latest_received_at
             FROM journal_entries
-            WHERE user_id = ?
             "#,
         )
         .bind(start)
         .bind(end)
-        .bind(user_id)
         .fetch_one(&self.pool)
         .await?;
 
@@ -462,14 +447,13 @@ mod tests {
         let journal_entry_id = repo.store(&message).await.unwrap();
 
         let row = sqlx::query(
-            "SELECT id, user_id, source, source_conversation_id, source_message_id, raw_text FROM journal_entries",
+            "SELECT id, source, source_conversation_id, source_message_id, raw_text FROM journal_entries",
         )
         .fetch_one(&repo.pool)
         .await
         .unwrap();
 
         assert_eq!(journal_entry_id, Some(row.get("id")));
-        assert_eq!(row.get::<String, _>("user_id"), "7");
         assert_eq!(row.get::<String, _>("source"), "telegram");
         assert_eq!(row.get::<String, _>("source_conversation_id"), "42");
         assert_eq!(row.get::<String, _>("source_message_id"), "100");
@@ -666,10 +650,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_recent_returns_empty_for_unknown_user() {
+    async fn fetch_recent_returns_empty_when_journal_has_no_entries() {
         let repo = setup().await;
 
-        let entries = repo.fetch_recent("unknown", 10).await.unwrap();
+        let entries = repo.fetch_recent("7", 10).await.unwrap();
 
         assert!(entries.is_empty());
     }
@@ -779,7 +763,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_in_range_scopes_to_user() {
+    async fn fetch_in_range_returns_all_entries_in_single_user_journal() {
         let repo = setup().await;
 
         repo.store(&incoming("1", "mine", at_on(2026, 4, 28, 10, 0)))
@@ -801,8 +785,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].entry.text, "mine");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry.text, "theirs");
+        assert_eq!(entries[1].entry.text, "mine");
     }
 
     #[tokio::test]
@@ -920,7 +905,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_text_scopes_to_user() {
+    async fn search_text_returns_matches_from_the_single_user_journal() {
         let repo = setup().await;
 
         repo.store(&incoming("1", "mine matches", at(10, 0)))
@@ -942,8 +927,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].entry.text, "mine matches");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry.text, "theirs matches too");
+        assert_eq!(entries[1].entry.text, "mine matches");
     }
 
     #[tokio::test]
@@ -992,7 +978,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_text_returns_empty_for_unknown_user() {
+    async fn search_text_ignores_caller_user_id() {
         let repo = setup().await;
 
         repo.store(&incoming("1", "match", at(10, 0)))
@@ -1004,7 +990,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(entries.is_empty());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.text, "match");
     }
 
     #[tokio::test]
@@ -1047,11 +1034,11 @@ mod tests {
             conversations,
             vec![
                 JournalConversation {
-                    user_id: "7".to_string(),
+                    user_id: crate::messages::SINGLE_USER_ID.to_string(),
                     source_conversation_id: "42".to_string(),
                 },
                 JournalConversation {
-                    user_id: "8".to_string(),
+                    user_id: crate::messages::SINGLE_USER_ID.to_string(),
                     source_conversation_id: "99".to_string(),
                 },
             ]
@@ -1094,7 +1081,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_by_ids_excludes_entries_for_other_users() {
+    async fn fetch_by_ids_returns_all_matching_entries_in_single_user_journal() {
         let repo = setup().await;
 
         repo.store(&incoming("1", "mine", at(10, 0))).await.unwrap();
@@ -1113,8 +1100,10 @@ mod tests {
 
         let rows = repo.fetch_by_ids("7", &[my_id, other_id]).await.unwrap();
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].0, my_id);
+        let ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
+        assert_eq!(rows.len(), 2);
+        assert!(ids.contains(&my_id));
+        assert!(ids.contains(&other_id));
     }
 
     #[tokio::test]
@@ -1161,10 +1150,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stats_returns_zeroes_for_unknown_user() {
+    async fn stats_returns_zeroes_when_journal_has_no_entries() {
         let repo = setup().await;
 
-        let stats = repo.stats("unknown", date()).await.unwrap();
+        let stats = repo.stats("7", date()).await.unwrap();
 
         assert_eq!(stats.total_entries, 0);
         assert_eq!(stats.entries_today, 0);

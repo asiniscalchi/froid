@@ -513,7 +513,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn users_are_isolated_for_same_review_date() {
+    async fn same_date_reviews_share_single_user_scope() {
         let (service, _daily_reviews, journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::new(vec![
                 Ok("user one review".to_string()),
@@ -540,12 +540,15 @@ mod tests {
             .unwrap();
 
         let user_one = generated_review(service.review_day("user-1", date()).await.unwrap());
-        let user_two = generated_review(service.review_day("user-2", date()).await.unwrap());
+        let user_two = match service.review_day("user-2", date()).await.unwrap() {
+            DailyReviewResult::Existing(review) => review,
+            other => panic!("expected existing review, got {other:?}"),
+        };
 
         assert_eq!(user_one.review_text, Some("user one review".to_string()));
-        assert_eq!(user_two.review_text, Some("user two review".to_string()));
-        assert_ne!(user_one.user_id, user_two.user_id);
-        assert_eq!(generator.calls(), 2);
+        assert_eq!(user_two.review_text, Some("user one review".to_string()));
+        assert_eq!(user_one.user_id, user_two.user_id);
+        assert_eq!(generator.calls(), 1);
     }
 
     #[tokio::test]

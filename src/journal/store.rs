@@ -21,11 +21,10 @@ impl JournalEntryStore {
         let result = sqlx::query(
             r#"
             INSERT OR IGNORE INTO journal_entries
-                (user_id, source, source_conversation_id, source_message_id, raw_text, received_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (source, source_conversation_id, source_message_id, raw_text, received_at)
+            VALUES (?, ?, ?, ?, ?)
             "#,
         )
-        .bind(&message.user_id)
         .bind(message.source.to_string())
         .bind(&message.source_conversation_id)
         .bind(&message.source_message_id)
@@ -37,8 +36,7 @@ impl JournalEntryStore {
         let journal_entry_id = if result.rows_affected() == 0 {
             None
         } else {
-            delete_daily_review(&mut tx, &message.user_id, message.received_at.date_naive())
-                .await?;
+            delete_daily_review(&mut tx, message.received_at.date_naive()).await?;
             Some(result.last_insert_rowid())
         };
 
@@ -49,7 +47,7 @@ impl JournalEntryStore {
 
     pub async fn delete_last_for_conversation(
         &self,
-        user_id: &str,
+        _user_id: &str,
         source: &MessageSource,
         source_conversation_id: &str,
     ) -> Result<Option<StoredJournalEntry>, sqlx::Error> {
@@ -59,14 +57,12 @@ impl JournalEntryStore {
             r#"
             SELECT id, raw_text, received_at
             FROM journal_entries
-            WHERE user_id = ?
-              AND source = ?
+            WHERE source = ?
               AND source_conversation_id = ?
             ORDER BY received_at DESC, id DESC
             LIMIT 1
             "#,
         )
-        .bind(user_id)
         .bind(source.to_string())
         .bind(source_conversation_id)
         .fetch_optional(&mut *tx)
@@ -113,7 +109,7 @@ impl JournalEntryStore {
         .execute(&mut *tx)
         .await?;
 
-        delete_daily_review(&mut tx, user_id, entry.entry.received_at.date_naive()).await?;
+        delete_daily_review(&mut tx, entry.entry.received_at.date_naive()).await?;
 
         tx.commit().await?;
 
@@ -133,16 +129,14 @@ fn row_to_stored_entry(row: SqliteRow) -> StoredJournalEntry {
 
 async fn delete_daily_review(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    user_id: &str,
     date: NaiveDate,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         DELETE FROM daily_reviews
-        WHERE user_id = ? AND review_date = ?
+        WHERE review_date = ?
         "#,
     )
-    .bind(user_id)
     .bind(date.to_string())
     .execute(&mut **tx)
     .await?;
@@ -200,8 +194,8 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO daily_reviews
-                (user_id, review_date, review_text, model, prompt_version, status)
-            VALUES ('7', '2026-04-28', 'persisted review', 'model', 'v1', 'completed')
+                (review_date, review_text, model, prompt_version, status)
+            VALUES ('2026-04-28', 'persisted review', 'model', 'v1', 'completed')
             "#,
         )
         .execute(&pool)
@@ -230,8 +224,8 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO daily_reviews
-                (user_id, review_date, review_text, model, prompt_version, status)
-            VALUES ('7', '2026-04-28', 'persisted review', 'model', 'v1', 'completed')
+                (review_date, review_text, model, prompt_version, status)
+            VALUES ('2026-04-28', 'persisted review', 'model', 'v1', 'completed')
             "#,
         )
         .execute(&pool)

@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
 
+pub const SINGLE_USER_ID: &str = "default";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageSource {
     Telegram,

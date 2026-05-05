@@ -32,7 +32,6 @@ Key variables:
 | `FROID_EXTRACTION_WORKER_ENABLED` | No | `false` | Enable extraction reconciliation |
 | `FROID_DAILY_REVIEW_DELIVERY_ENABLED` | No | `false` | Enable scheduled daily reviews |
 | `FROID_MCP_BIND` | No | `127.0.0.1:8080` | Bind address for the `mcp` subcommand |
-| `FROID_MCP_USER_ID` | `mcp` only | — | User identity all MCP requests are scoped to |
 
 ## Running Locally
 
@@ -45,10 +44,10 @@ Database migrations are applied automatically on startup via `sqlx::migrate!()`.
 To expose the analyzer's read-only tools over MCP (Streamable HTTP, mounted at `/mcp`):
 
 ```bash
-cargo run -- mcp --user-id <your-user-id>
+cargo run -- mcp
 ```
 
-The MCP server reuses the same SQLite database the journal writes to and requires `OPENAI_API_KEY` so the semantic search tool can build embeddings. Every incoming request is scoped to the single `--user-id` configured at startup; there is no per-request authentication.
+The MCP server reuses the same SQLite database the journal writes to and requires `OPENAI_API_KEY` so the semantic search tool can build embeddings. Froid is a single-user journal, so every incoming request uses the local journal; there is no per-request authentication or user-id configuration.
 
 ## Local CI Checks
 

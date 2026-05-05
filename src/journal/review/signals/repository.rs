@@ -3,7 +3,10 @@ use std::{error::Error, fmt};
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
-use crate::journal::extraction::{BehaviorValence, NeedStatus};
+use crate::{
+    journal::extraction::{BehaviorValence, NeedStatus},
+    messages::SINGLE_USER_ID,
+};
 
 use super::types::{DailyReviewSignal, DailyReviewSignalCandidate, SignalType};
 
@@ -63,7 +66,7 @@ impl DailyReviewSignalRepository {
     pub async fn replace_in_transaction(
         &self,
         daily_review_id: i64,
-        user_id: &str,
+        _user_id: &str,
         review_date: NaiveDate,
         candidates: &[DailyReviewSignalCandidate],
         model: &str,
@@ -80,13 +83,12 @@ impl DailyReviewSignalRepository {
             sqlx::query(
                 r#"
                 INSERT INTO daily_review_signals
-                    (daily_review_id, user_id, review_date, signal_type, label, status, valence,
+                    (daily_review_id, review_date, signal_type, label, status, valence,
                      strength, confidence, evidence, model, prompt_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(daily_review_id)
-            .bind(user_id)
             .bind(review_date.to_string())
             .bind(candidate.signal_type.as_str())
             .bind(&candidate.label)
@@ -112,7 +114,7 @@ impl DailyReviewSignalRepository {
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalRepositoryError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, daily_review_id, user_id, review_date, signal_type, label, status,
+            SELECT id, daily_review_id, review_date, signal_type, label, status,
                    valence, strength, confidence, evidence, model, prompt_version,
                    created_at, updated_at
             FROM daily_review_signals
@@ -133,7 +135,7 @@ impl DailyReviewSignalRepository {
     ) -> Result<Vec<(i64, String, NaiveDate)>, DailyReviewSignalRepositoryError> {
         let rows = sqlx::query(
             r#"
-            SELECT dr.id, dr.user_id, dr.review_date
+            SELECT dr.id, dr.review_date
             FROM daily_reviews dr
             WHERE dr.status = 'completed'
               AND dr.review_text IS NOT NULL
@@ -156,7 +158,7 @@ impl DailyReviewSignalRepository {
                     })?;
                 Ok((
                     row.get::<i64, _>("id"),
-                    row.get::<String, _>("user_id"),
+                    SINGLE_USER_ID.to_string(),
                     review_date,
                 ))
             })
@@ -184,20 +186,19 @@ impl DailyReviewSignalRepository {
 
     pub async fn find_by_user_and_date(
         &self,
-        user_id: &str,
+        _user_id: &str,
         review_date: NaiveDate,
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalRepositoryError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, daily_review_id, user_id, review_date, signal_type, label, status,
+            SELECT id, daily_review_id, review_date, signal_type, label, status,
                    valence, strength, confidence, evidence, model, prompt_version,
                    created_at, updated_at
             FROM daily_review_signals
-            WHERE user_id = ? AND review_date = ?
+            WHERE review_date = ?
             ORDER BY id ASC
             "#,
         )
-        .bind(user_id)
         .bind(review_date.to_string())
         .fetch_all(&self.pool)
         .await?;
@@ -207,15 +208,15 @@ impl DailyReviewSignalRepository {
 
     pub async fn search(
         &self,
-        user_id: &str,
+        _user_id: &str,
         filters: &SignalSearchFilters,
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalRepositoryError> {
         let mut sql = String::from(
-            r#"SELECT id, daily_review_id, user_id, review_date, signal_type, label, status,
+            r#"SELECT id, daily_review_id, review_date, signal_type, label, status,
                       valence, strength, confidence, evidence, model, prompt_version,
                       created_at, updated_at
                FROM daily_review_signals
-               WHERE user_id = ?"#,
+               WHERE 1 = 1"#,
         );
         if filters.signal_type.is_some() {
             sql.push_str(" AND signal_type = ?");
@@ -240,7 +241,7 @@ impl DailyReviewSignalRepository {
         }
         sql.push_str(" ORDER BY review_date ASC, id ASC LIMIT ?");
 
-        let mut query = sqlx::query(&sql).bind(user_id);
+        let mut query = sqlx::query(&sql);
         if let Some(t) = filters.signal_type.as_ref() {
             query = query.bind(t.as_str());
         }
@@ -270,23 +271,21 @@ impl DailyReviewSignalRepository {
 
     pub async fn find_by_user_in_range(
         &self,
-        user_id: &str,
+        _user_id: &str,
         start_date: NaiveDate,
         end_date_exclusive: NaiveDate,
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalRepositoryError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, daily_review_id, user_id, review_date, signal_type, label, status,
+            SELECT id, daily_review_id, review_date, signal_type, label, status,
                    valence, strength, confidence, evidence, model, prompt_version,
                    created_at, updated_at
             FROM daily_review_signals
-            WHERE user_id = ?
-              AND review_date >= ?
+            WHERE review_date >= ?
               AND review_date < ?
             ORDER BY review_date ASC, id ASC
             "#,
         )
-        .bind(user_id)
         .bind(start_date.to_string())
         .bind(end_date_exclusive.to_string())
         .fetch_all(&self.pool)
@@ -319,7 +318,7 @@ fn row_to_signal(row: SqliteRow) -> Result<DailyReviewSignal, DailyReviewSignalR
     Ok(DailyReviewSignal {
         id: row.get("id"),
         daily_review_id: row.get("daily_review_id"),
-        user_id: row.get("user_id"),
+        user_id: SINGLE_USER_ID.to_string(),
         review_date,
         signal_type,
         label: row.get("label"),
@@ -819,7 +818,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_scopes_to_user() {
+    async fn search_uses_single_user_scope() {
         let (repo, _reviews, pool) = setup().await;
         let target = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
         let user_one_review = insert_daily_review_for(&pool, "user-1", target).await;
@@ -849,7 +848,7 @@ mod tests {
         let rows = repo.search("user-1", &filters(10)).await.unwrap();
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].user_id, "user-1");
+        assert!(rows.iter().all(|row| row.user_id == SINGLE_USER_ID));
     }
 
     #[tokio::test]
@@ -894,7 +893,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_by_user_in_range_isolates_users() {
+    async fn find_by_user_in_range_uses_single_user_scope() {
         let (repo, _reviews, pool) = setup().await;
         let target = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
         let user_one_review = insert_daily_review_for(&pool, "user-1", target).await;
@@ -931,6 +930,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].user_id, "user-1");
+        assert!(rows.iter().all(|row| row.user_id == SINGLE_USER_ID));
     }
 }

@@ -40,7 +40,7 @@ See the [project wiki](https://github.com/asiniscalchi/froid/wiki) for the full 
 
 ## Exposing tools over MCP
 
-Run `cargo run -- mcp --user-id <your-user-id>` to expose the analyzer's read-only tools (recent entries, text and semantic search, daily and weekly reviews, signals) over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. See [CONTRIBUTING.md](CONTRIBUTING.md#running-locally) for details.
+Run `cargo run -- mcp` to expose the analyzer's read-only tools (recent entries, text and semantic search, daily and weekly reviews, signals) over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. Froid is a single-user journal, so MCP requests use the local journal without a user-id argument. See [CONTRIBUTING.md](CONTRIBUTING.md#running-locally) for details.
 
 ## Contributing
 

@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_scopes_to_searching_user() {
+    async fn search_uses_single_user_scope() {
         let (repo, index) = setup().await;
         store_entry(&repo, &index, "1", "mine", at(10, 0), 0).await;
 
@@ -334,8 +334,9 @@ mod tests {
 
         let hits = searcher.search("user-1", "query", 10).await.unwrap();
 
-        assert_eq!(hits.len(), 1);
+        assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].text, "mine");
+        assert_eq!(hits[1].text, "theirs");
     }
 
     #[tokio::test]
