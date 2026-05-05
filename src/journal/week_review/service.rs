@@ -630,7 +630,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn users_are_isolated_for_same_week() {
+    async fn same_week_reviews_share_single_user_scope() {
         let (service, _weekly, daily, _signals, generator) =
             setup(FakeWeeklyReviewGenerator::new(vec![
                 Ok("user one review".to_string()),
@@ -643,12 +643,15 @@ mod tests {
         }
 
         let one = generated(service.review_week("user-1", week_start()).await.unwrap());
-        let two = generated(service.review_week("user-2", week_start()).await.unwrap());
+        let two = match service.review_week("user-2", week_start()).await.unwrap() {
+            WeeklyReviewResult::Existing(review) => review,
+            other => panic!("expected existing review, got {other:?}"),
+        };
 
         assert_eq!(one.review_text, Some("user one review".to_string()));
-        assert_eq!(two.review_text, Some("user two review".to_string()));
-        assert_ne!(one.user_id, two.user_id);
-        assert_eq!(generator.calls(), 2);
+        assert_eq!(two.review_text, Some("user one review".to_string()));
+        assert_eq!(one.user_id, two.user_id);
+        assert_eq!(generator.calls(), 1);
     }
 
     #[tokio::test]

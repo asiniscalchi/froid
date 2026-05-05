@@ -337,7 +337,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_scopes_to_authenticated_user() {
+    async fn search_uses_single_user_scope() {
         let (service, signals, reviews) = setup().await;
         seed(&signals, &reviews, "user-1", ymd(2026, 4, 27), &[theme()]).await;
         seed(&signals, &reviews, "user-2", ymd(2026, 4, 27), &[theme()]).await;

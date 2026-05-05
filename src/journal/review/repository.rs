@@ -3,6 +3,8 @@ use std::{error::Error, fmt};
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
+use crate::messages::SINGLE_USER_ID;
+
 use super::{DailyReview, DailyReviewStatus, SignalGenerationStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,20 +55,19 @@ impl DailyReviewRepository {
 
     pub async fn find_by_user_and_date(
         &self,
-        user_id: &str,
+        _user_id: &str,
         review_date: NaiveDate,
     ) -> Result<Option<DailyReview>, DailyReviewRepositoryError> {
         let row = sqlx::query(
             r#"
-            SELECT id, user_id, review_date, review_text, model, prompt_version, status,
+            SELECT id, review_date, review_text, model, prompt_version, status,
                    error_message, delivered_at, delivery_error,
                    signals_status, signals_error, signals_model, signals_prompt_version, signals_updated_at,
                    created_at, updated_at
             FROM daily_reviews
-            WHERE user_id = ? AND review_date = ?
+            WHERE review_date = ?
             "#,
         )
-        .bind(user_id)
         .bind(review_date.to_string())
         .fetch_optional(&self.pool)
         .await?;
@@ -80,7 +81,7 @@ impl DailyReviewRepository {
     ) -> Result<Option<DailyReview>, DailyReviewRepositoryError> {
         let row = sqlx::query(
             r#"
-            SELECT id, user_id, review_date, review_text, model, prompt_version, status,
+            SELECT id, review_date, review_text, model, prompt_version, status,
                    error_message, delivered_at, delivery_error,
                    signals_status, signals_error, signals_model, signals_prompt_version, signals_updated_at,
                    created_at, updated_at
@@ -97,7 +98,7 @@ impl DailyReviewRepository {
 
     pub async fn fetch_by_ids(
         &self,
-        user_id: &str,
+        _user_id: &str,
         ids: &[i64],
     ) -> Result<Vec<(i64, DailyReview)>, DailyReviewRepositoryError> {
         if ids.is_empty() {
@@ -106,17 +107,17 @@ impl DailyReviewRepository {
 
         let query = format!(
             r#"
-            SELECT id, user_id, review_date, review_text, model, prompt_version, status,
+            SELECT id, review_date, review_text, model, prompt_version, status,
                    error_message, delivered_at, delivery_error,
                    signals_status, signals_error, signals_model, signals_prompt_version, signals_updated_at,
                    created_at, updated_at
             FROM daily_reviews
-            WHERE user_id = ? AND id IN ({})
+            WHERE id IN ({})
             "#,
             vec!["?"; ids.len()].join(", ")
         );
 
-        let mut q = sqlx::query(&query).bind(user_id);
+        let mut q = sqlx::query(&query);
         for id in ids {
             q = q.bind(id);
         }
@@ -134,19 +135,18 @@ impl DailyReviewRepository {
 
     pub async fn fetch_completed_in_range(
         &self,
-        user_id: &str,
+        _user_id: &str,
         start_date: NaiveDate,
         end_date_exclusive: NaiveDate,
     ) -> Result<Vec<DailyReview>, DailyReviewRepositoryError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, review_date, review_text, model, prompt_version, status,
+            SELECT id, review_date, review_text, model, prompt_version, status,
                    error_message, delivered_at, delivery_error,
                    signals_status, signals_error, signals_model, signals_prompt_version, signals_updated_at,
                    created_at, updated_at
             FROM daily_reviews
-            WHERE user_id = ?
-              AND review_date >= ?
+            WHERE review_date >= ?
               AND review_date < ?
               AND status = 'completed'
               AND review_text IS NOT NULL
@@ -154,7 +154,6 @@ impl DailyReviewRepository {
             ORDER BY review_date ASC
             "#,
         )
-        .bind(user_id)
         .bind(start_date.to_string())
         .bind(end_date_exclusive.to_string())
         .fetch_all(&self.pool)
@@ -174,9 +173,9 @@ impl DailyReviewRepository {
         sqlx::query(
             r#"
             INSERT INTO daily_reviews
-                (user_id, review_date, review_text, model, prompt_version, status, error_message)
-            VALUES (?, ?, ?, ?, ?, 'completed', NULL)
-            ON CONFLICT(user_id, review_date) DO UPDATE SET
+                (review_date, review_text, model, prompt_version, status, error_message)
+            VALUES (?, ?, ?, ?, 'completed', NULL)
+            ON CONFLICT(review_date) DO UPDATE SET
                 review_text = excluded.review_text,
                 model = excluded.model,
                 prompt_version = excluded.prompt_version,
@@ -191,7 +190,6 @@ impl DailyReviewRepository {
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             "#,
         )
-        .bind(user_id)
         .bind(review_date.to_string())
         .bind(review_text)
         .bind(model)
@@ -217,9 +215,9 @@ impl DailyReviewRepository {
         sqlx::query(
             r#"
             INSERT INTO daily_reviews
-                (user_id, review_date, review_text, model, prompt_version, status, error_message)
-            VALUES (?, ?, NULL, ?, ?, 'failed', ?)
-            ON CONFLICT(user_id, review_date) DO UPDATE SET
+                (review_date, review_text, model, prompt_version, status, error_message)
+            VALUES (?, NULL, ?, ?, 'failed', ?)
+            ON CONFLICT(review_date) DO UPDATE SET
                 review_text = NULL,
                 model = excluded.model,
                 prompt_version = excluded.prompt_version,
@@ -235,7 +233,6 @@ impl DailyReviewRepository {
             WHERE daily_reviews.status = 'failed'
             "#,
         )
-        .bind(user_id)
         .bind(review_date.to_string())
         .bind(model)
         .bind(prompt_version)
@@ -252,7 +249,7 @@ impl DailyReviewRepository {
 
     pub async fn mark_delivered(
         &self,
-        user_id: &str,
+        _user_id: &str,
         review_date: NaiveDate,
     ) -> Result<(), DailyReviewRepositoryError> {
         sqlx::query(
@@ -261,12 +258,10 @@ impl DailyReviewRepository {
             SET delivered_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                 delivery_error = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE user_id = ?
-              AND review_date = ?
+            WHERE review_date = ?
               AND status = 'completed'
             "#,
         )
-        .bind(user_id)
         .bind(review_date.to_string())
         .execute(&self.pool)
         .await?;
@@ -276,7 +271,7 @@ impl DailyReviewRepository {
 
     pub async fn mark_delivery_failed(
         &self,
-        user_id: &str,
+        _user_id: &str,
         review_date: NaiveDate,
         error_message: &str,
     ) -> Result<(), DailyReviewRepositoryError> {
@@ -285,12 +280,10 @@ impl DailyReviewRepository {
             UPDATE daily_reviews
             SET delivery_error = ?,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE user_id = ?
-              AND review_date = ?
+            WHERE review_date = ?
             "#,
         )
         .bind(error_message)
-        .bind(user_id)
         .bind(review_date.to_string())
         .execute(&self.pool)
         .await?;
@@ -396,7 +389,7 @@ fn row_to_daily_review(row: SqliteRow) -> Result<DailyReview, DailyReviewReposit
 
     Ok(DailyReview {
         id: row.get("id"),
-        user_id: row.get("user_id"),
+        user_id: SINGLE_USER_ID.to_string(),
         review_date,
         review_text: row.get("review_text"),
         model: row.get("model"),
@@ -443,7 +436,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(review.user_id, "user-1");
+        assert_eq!(review.user_id, SINGLE_USER_ID);
         assert_eq!(review.review_date, date());
         assert_eq!(review.review_text, Some("review text".to_string()));
         assert_eq!(review.model, "test-model");
@@ -490,7 +483,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_reviews_are_separate_by_user_and_date() {
+    async fn completed_reviews_are_unique_by_date_in_single_user_journal() {
         let repo = setup().await;
         let other_date = NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
 
@@ -504,14 +497,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            repo.find_by_user_and_date("user-1", date())
-                .await
-                .unwrap()
-                .unwrap()
-                .review_text,
-            Some("user one".to_string())
-        );
         assert_eq!(
             repo.find_by_user_and_date("user-2", date())
                 .await
@@ -723,7 +708,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_completed_in_range_isolates_users() {
+    async fn fetch_completed_in_range_ignores_caller_user_id() {
         let repo = setup().await;
         let target = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
         repo.upsert_completed("user-1", target, "user one", "m", "v1")
@@ -743,6 +728,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].user_id, "user-1");
+        assert_eq!(rows[0].user_id, SINGLE_USER_ID);
+        assert_eq!(rows[0].review_text, Some("user two".to_string()));
     }
 }

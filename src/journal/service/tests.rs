@@ -546,7 +546,7 @@ async fn status_returns_stable_sections_when_optional_subsystems_are_unavailable
 }
 
 #[tokio::test]
-async fn status_uses_user_scoped_journal_stats_and_command_received_at_date() {
+async fn status_uses_single_user_journal_stats_and_command_received_at_date() {
     let (service, pool) = setup_with_pool().await;
     service
         .process(&incoming(
@@ -587,8 +587,8 @@ async fn status_uses_user_scoped_journal_stats_and_command_received_at_date() {
         .await
         .unwrap();
 
-    assert!(outgoing.text.contains("- Total entries: 2"));
-    assert!(outgoing.text.contains("- Entries today: 1"));
+    assert!(outgoing.text.contains("- Total entries: 3"));
+    assert!(outgoing.text.contains("- Entries today: 2"));
 }
 
 #[tokio::test]
@@ -608,7 +608,7 @@ async fn status_command_does_not_store_command_text_as_journal_entry() {
 }
 
 #[tokio::test]
-async fn status_reports_configured_embedding_status_and_user_scoped_pending_count() {
+async fn status_reports_configured_embedding_status_and_single_user_pending_count() {
     let (service, index, repo) = setup_with_search(FakeEmbedder::fails()).await;
     let service = service
         .with_embedding_status_config(EmbeddingStatusConfig {
@@ -659,7 +659,7 @@ async fn status_reports_configured_embedding_status_and_user_scoped_pending_coun
     assert!(outgoing.text.contains("- Semantic search: enabled"));
     assert!(outgoing.text.contains("- Model: test-model"));
     assert!(outgoing.text.contains("- Dimensions: 1536"));
-    assert!(outgoing.text.contains("- Pending embeddings: 1"));
+    assert!(outgoing.text.contains("- Pending embeddings: 2"));
 }
 
 #[tokio::test]

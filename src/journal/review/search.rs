@@ -275,7 +275,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_filters_out_reviews_for_other_users() {
+    async fn search_returns_reviews_from_single_user_journal() {
         let (repo, mut index) = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
         let review = repo
@@ -283,7 +283,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Index returns the review, but repository.fetch_by_ids will scope by user-1
+        // Index returns the review and the repository uses the single local journal.
         index.results = vec![EmbeddingSearchResult {
             id: review.id,
             distance: 0.1,
@@ -297,7 +297,11 @@ mod tests {
 
         let results = service.search("user-1", "query").await.unwrap();
 
-        assert!(results.is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].review.review_text,
+            Some("other user review".to_string())
+        );
     }
 
     #[tokio::test]

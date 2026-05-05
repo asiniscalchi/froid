@@ -450,7 +450,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_skips_entries_not_belonging_to_the_searching_user() {
+    async fn search_returns_entries_from_single_user_journal() {
         let (repo, index) = setup().await;
 
         // Entry for user "7" at dim 0.
@@ -482,17 +482,18 @@ mod tests {
             .await
             .unwrap();
 
-        // Query at dim 1 — other user's entry is closest, but user "7" must not see it.
+        // Query at dim 1: in single-user mode, every stored entry is part of the same journal.
         let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
 
         let results = service.search("7", "query").await.unwrap();
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].journal_entry.text, "real entry");
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].journal_entry.text, "other user entry");
+        assert_eq!(results[1].journal_entry.text, "real entry");
     }
 
     #[tokio::test]
-    async fn search_scopes_vector_candidates_to_searching_user_before_limiting() {
+    async fn search_applies_default_limit_to_single_user_vector_candidates() {
         let (repo, index) = setup().await;
 
         store_and_embed(&repo, &index, "real", "real entry", at(10, 0), 0).await;
@@ -529,8 +530,12 @@ mod tests {
 
         let results = service.search("7", "query").await.unwrap();
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].journal_entry.text, "real entry");
+        assert_eq!(results.len(), DEFAULT_SEARCH_LIMIT);
+        assert!(
+            results
+                .iter()
+                .all(|result| result.journal_entry.text.starts_with("other user entry"))
+        );
     }
 
     #[tokio::test]

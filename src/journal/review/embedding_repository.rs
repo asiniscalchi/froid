@@ -157,7 +157,7 @@ impl SqliteDailyReviewEmbeddingRepository {
 
     async fn search_for_user(
         &self,
-        user_id: &str,
+        _user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
         limit: usize,
@@ -171,14 +171,12 @@ impl SqliteDailyReviewEmbeddingRepository {
             JOIN daily_review_embedding_vec v ON v.rowid = m.id
             JOIN daily_reviews r ON r.id = m.daily_review_id
             WHERE m.embedding_model = ?
-              AND r.user_id = ?
             ORDER BY distance ASC
             LIMIT ?
             "#,
         )
         .bind(embedding.to_blob())
         .bind(embedding_model)
-        .bind(user_id)
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;

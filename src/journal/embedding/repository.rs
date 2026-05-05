@@ -259,7 +259,7 @@ impl SqliteEmbeddingRepository {
 
     pub async fn count_entries_missing_embedding_for_user(
         &self,
-        user_id: &str,
+        _user_id: &str,
         embedding_model: &str,
     ) -> Result<i64, sqlx::Error> {
         sqlx::query_scalar(
@@ -269,13 +269,11 @@ impl SqliteEmbeddingRepository {
             LEFT JOIN journal_entry_embedding_metadata
               ON journal_entry_embedding_metadata.journal_entry_id = journal_entries.id
              AND journal_entry_embedding_metadata.embedding_model = ?
-            WHERE journal_entries.user_id = ?
-              AND (journal_entry_embedding_metadata.id IS NULL
-                   OR journal_entry_embedding_metadata.status = 'failed')
+            WHERE journal_entry_embedding_metadata.id IS NULL
+               OR journal_entry_embedding_metadata.status = 'failed'
             "#,
         )
         .bind(embedding_model)
-        .bind(user_id)
         .fetch_one(&self.pool)
         .await
     }
@@ -310,7 +308,7 @@ impl SqliteEmbeddingRepository {
 
     pub async fn search_for_user(
         &self,
-        user_id: &str,
+        _user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
         limit: usize,
@@ -324,14 +322,12 @@ impl SqliteEmbeddingRepository {
             JOIN journal_entry_embedding_vec v ON v.rowid = m.id
             JOIN journal_entries j ON j.id = m.journal_entry_id
             WHERE m.embedding_model = ?
-              AND j.user_id = ?
             ORDER BY distance ASC
             LIMIT ?
             "#,
         )
         .bind(embedding.to_blob())
         .bind(embedding_model)
-        .bind(user_id)
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;

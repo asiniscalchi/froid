@@ -3,6 +3,8 @@ use std::{error::Error, fmt};
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
+use crate::messages::SINGLE_USER_ID;
+
 use super::{WeeklyReview, WeeklyReviewStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,19 +54,18 @@ impl WeeklyReviewRepository {
 
     pub async fn find_by_user_and_week(
         &self,
-        user_id: &str,
+        _user_id: &str,
         week_start_date: NaiveDate,
     ) -> Result<Option<WeeklyReview>, WeeklyReviewRepositoryError> {
         let row = sqlx::query(
             r#"
-            SELECT id, user_id, week_start_date, review_text, model, prompt_version, status,
+            SELECT id, week_start_date, review_text, model, prompt_version, status,
                    error_message, delivered_at, delivery_error, inputs_snapshot,
                    created_at, updated_at
             FROM weekly_reviews
-            WHERE user_id = ? AND week_start_date = ?
+            WHERE week_start_date = ?
             "#,
         )
-        .bind(user_id)
         .bind(week_start_date.to_string())
         .fetch_optional(&self.pool)
         .await?;
@@ -74,18 +75,17 @@ impl WeeklyReviewRepository {
 
     pub async fn fetch_completed_in_range(
         &self,
-        user_id: &str,
+        _user_id: &str,
         start_date: NaiveDate,
         end_date_exclusive: NaiveDate,
     ) -> Result<Vec<WeeklyReview>, WeeklyReviewRepositoryError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, week_start_date, review_text, model, prompt_version, status,
+            SELECT id, week_start_date, review_text, model, prompt_version, status,
                    error_message, delivered_at, delivery_error, inputs_snapshot,
                    created_at, updated_at
             FROM weekly_reviews
-            WHERE user_id = ?
-              AND week_start_date >= ?
+            WHERE week_start_date >= ?
               AND week_start_date < ?
               AND status = 'completed'
               AND review_text IS NOT NULL
@@ -93,7 +93,6 @@ impl WeeklyReviewRepository {
             ORDER BY week_start_date ASC
             "#,
         )
-        .bind(user_id)
         .bind(start_date.to_string())
         .bind(end_date_exclusive.to_string())
         .fetch_all(&self.pool)
@@ -114,9 +113,9 @@ impl WeeklyReviewRepository {
         sqlx::query(
             r#"
             INSERT INTO weekly_reviews
-                (user_id, week_start_date, review_text, model, prompt_version, status, error_message, inputs_snapshot)
-            VALUES (?, ?, ?, ?, ?, 'completed', NULL, ?)
-            ON CONFLICT(user_id, week_start_date) DO UPDATE SET
+                (week_start_date, review_text, model, prompt_version, status, error_message, inputs_snapshot)
+            VALUES (?, ?, ?, ?, 'completed', NULL, ?)
+            ON CONFLICT(week_start_date) DO UPDATE SET
                 review_text = excluded.review_text,
                 model = excluded.model,
                 prompt_version = excluded.prompt_version,
@@ -127,7 +126,6 @@ impl WeeklyReviewRepository {
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             "#,
         )
-        .bind(user_id)
         .bind(week_start_date.to_string())
         .bind(review_text)
         .bind(model)
@@ -154,9 +152,9 @@ impl WeeklyReviewRepository {
         sqlx::query(
             r#"
             INSERT INTO weekly_reviews
-                (user_id, week_start_date, review_text, model, prompt_version, status, error_message)
-            VALUES (?, ?, NULL, ?, ?, 'failed', ?)
-            ON CONFLICT(user_id, week_start_date) DO UPDATE SET
+                (week_start_date, review_text, model, prompt_version, status, error_message)
+            VALUES (?, NULL, ?, ?, 'failed', ?)
+            ON CONFLICT(week_start_date) DO UPDATE SET
                 review_text = NULL,
                 model = excluded.model,
                 prompt_version = excluded.prompt_version,
@@ -167,7 +165,6 @@ impl WeeklyReviewRepository {
             WHERE weekly_reviews.status = 'failed'
             "#,
         )
-        .bind(user_id)
         .bind(week_start_date.to_string())
         .bind(model)
         .bind(prompt_version)
@@ -184,7 +181,7 @@ impl WeeklyReviewRepository {
 
     pub async fn mark_delivered(
         &self,
-        user_id: &str,
+        _user_id: &str,
         week_start_date: NaiveDate,
     ) -> Result<(), WeeklyReviewRepositoryError> {
         sqlx::query(
@@ -193,12 +190,10 @@ impl WeeklyReviewRepository {
             SET delivered_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                 delivery_error = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE user_id = ?
-              AND week_start_date = ?
+            WHERE week_start_date = ?
               AND status = 'completed'
             "#,
         )
-        .bind(user_id)
         .bind(week_start_date.to_string())
         .execute(&self.pool)
         .await?;
@@ -208,7 +203,7 @@ impl WeeklyReviewRepository {
 
     pub async fn mark_delivery_failed(
         &self,
-        user_id: &str,
+        _user_id: &str,
         week_start_date: NaiveDate,
         error_message: &str,
     ) -> Result<(), WeeklyReviewRepositoryError> {
@@ -217,12 +212,10 @@ impl WeeklyReviewRepository {
             UPDATE weekly_reviews
             SET delivery_error = ?,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE user_id = ?
-              AND week_start_date = ?
+            WHERE week_start_date = ?
             "#,
         )
         .bind(error_message)
-        .bind(user_id)
         .bind(week_start_date.to_string())
         .execute(&self.pool)
         .await?;
@@ -245,7 +238,7 @@ fn row_to_weekly_review(row: SqliteRow) -> Result<WeeklyReview, WeeklyReviewRepo
 
     Ok(WeeklyReview {
         id: row.get("id"),
-        user_id: row.get("user_id"),
+        user_id: SINGLE_USER_ID.to_string(),
         week_start_date,
         review_text: row.get("review_text"),
         model: row.get("model"),
@@ -295,7 +288,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(review.user_id, "user-1");
+        assert_eq!(review.user_id, SINGLE_USER_ID);
         assert_eq!(review.week_start_date, week_start());
         assert_eq!(review.review_text, Some("review text".to_string()));
         assert_eq!(review.model, "test-model");
@@ -349,7 +342,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_reviews_are_separate_by_user_and_week() {
+    async fn completed_reviews_are_unique_by_week_in_single_user_journal() {
         let repo = setup().await;
         let other_week = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
 
@@ -363,14 +356,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            repo.find_by_user_and_week("user-1", week_start())
-                .await
-                .unwrap()
-                .unwrap()
-                .review_text,
-            Some("user one".to_string())
-        );
         assert_eq!(
             repo.find_by_user_and_week("user-2", week_start())
                 .await
@@ -690,7 +675,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_completed_in_range_scopes_to_user() {
+    async fn fetch_completed_in_range_ignores_caller_user_id() {
         let repo = setup().await;
         let w = week_start();
 
@@ -707,7 +692,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(reviews.len(), 1);
-        assert_eq!(reviews[0].review_text, Some("mine".to_string()));
+        assert_eq!(reviews[0].review_text, Some("theirs".to_string()));
     }
 
     #[tokio::test]

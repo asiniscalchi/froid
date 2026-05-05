@@ -674,7 +674,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_once_delivers_to_multiple_conversations() {
+    async fn run_once_delivers_single_review_once_for_multiple_conversations() {
         let sender = FakeSender::succeeding();
         let (worker, daily_reviews, journal_entries, sender) =
             setup(FakeReviewGenerator::succeeding("review text"), sender).await;
@@ -693,16 +693,15 @@ mod tests {
             result,
             DailyReviewDeliveryResult {
                 attempted: 2,
-                delivered: 2,
-                skipped: 0,
+                delivered: 1,
+                skipped: 1,
                 failed: 0,
             }
         );
         let sent = sender.sent();
-        assert_eq!(sent.len(), 2);
+        assert_eq!(sent.len(), 1);
         let chat_ids: Vec<&str> = sent.iter().map(|(id, _)| id.as_str()).collect();
         assert!(chat_ids.contains(&"42"));
-        assert!(chat_ids.contains(&"99"));
         assert!(
             daily_reviews
                 .find_by_user_and_date("7", date())

@@ -354,7 +354,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_recent_scopes_to_authenticated_user() {
+    async fn get_recent_returns_all_single_user_entries() {
         let (service, repo) = setup().await;
         repo.store(&message("1", "mine", at(2026, 4, 28, 10, 0)))
             .await
@@ -372,8 +372,9 @@ mod tests {
 
         let result = service.get_recent(&ctx(), recent(10)).await.unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text, "mine");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].text, "theirs");
+        assert_eq!(result[1].text, "mine");
     }
 
     #[tokio::test]
@@ -420,7 +421,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_text_scopes_to_authenticated_user() {
+    async fn search_text_returns_all_single_user_matches() {
         let (service, repo) = setup().await;
         repo.store(&message("1", "mine matches", at(2026, 4, 28, 10, 0)))
             .await
@@ -441,8 +442,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text, "mine matches");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].text, "theirs matches");
+        assert_eq!(result[1].text, "mine matches");
     }
 
     #[tokio::test]
