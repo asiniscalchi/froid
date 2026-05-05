@@ -54,11 +54,10 @@ impl AnalyzerMcpServer {
             .collect::<Vec<_>>()
             .into();
 
-        let server_info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new(
-                env!("CARGO_PKG_NAME"),
-                crate::version::VERSION,
-            ));
+        let server_info =
+            ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+                Implementation::new(env!("CARGO_PKG_NAME"), crate::version::VERSION),
+            );
 
         Self {
             registry,
@@ -105,9 +104,7 @@ impl ServerHandler for AnalyzerMcpServer {
                 format!("unknown tool: {name}"),
                 None,
             )),
-            Err(ToolError::InvalidInput(message)) => {
-                Err(McpError::invalid_params(message, None))
-            }
+            Err(ToolError::InvalidInput(message)) => Err(McpError::invalid_params(message, None)),
             Err(ToolError::Analyzer(AnalyzerError::InvalidArgument(message))) => {
                 Err(McpError::invalid_params(message, None))
             }
@@ -146,11 +143,7 @@ mod tests {
         fn input_schema(&self) -> Value {
             json!({"type": "object", "properties": {"x": {"type": "integer"}}})
         }
-        async fn dispatch(
-            &self,
-            ctx: &UserContext,
-            args: Value,
-        ) -> Result<Value, ToolError> {
+        async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
             Ok(json!({"user": ctx.user_id, "args": args}))
         }
     }
@@ -168,11 +161,7 @@ mod tests {
         fn input_schema(&self) -> Value {
             json!({"type": "object"})
         }
-        async fn dispatch(
-            &self,
-            _ctx: &UserContext,
-            _args: Value,
-        ) -> Result<Value, ToolError> {
+        async fn dispatch(&self, _ctx: &UserContext, _args: Value) -> Result<Value, ToolError> {
             Err(ToolError::Analyzer(AnalyzerError::InvalidArgument(
                 "limit must be > 0".into(),
             )))
