@@ -14,8 +14,6 @@ use crate::{
     messages::{IncomingMessage, MessageSource},
 };
 
-use super::Adapter;
-
 const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Unsupported message type";
 
 pub struct TelegramAdapter<H: MessageHandler> {
@@ -27,10 +25,8 @@ impl<H: MessageHandler> TelegramAdapter<H> {
     pub fn new(bot_token: String, handler: H) -> Self {
         Self { bot_token, handler }
     }
-}
 
-impl<H: MessageHandler> Adapter for TelegramAdapter<H> {
-    async fn run(self) {
+    pub async fn run(self) {
         let bot = Bot::new(self.bot_token);
         let handler = self.handler;
 

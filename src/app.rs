@@ -12,7 +12,7 @@ use rmcp::transport::streamable_http_server::{
 };
 
 use crate::{
-    adapters::{Adapter, mcp::AnalyzerMcpServer, telegram::TelegramAdapter},
+    adapters::{mcp::AnalyzerMcpServer, telegram::TelegramAdapter},
     cli::{McpConfig, ServeConfig},
     database,
     journal::{
