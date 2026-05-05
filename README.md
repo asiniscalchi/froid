@@ -38,6 +38,10 @@ docker run --env-file .env -v ./data:/app/data ghcr.io/asiniscalchi/froid:latest
 
 See the [project wiki](https://github.com/asiniscalchi/froid/wiki) for the full list of configuration options.
 
+## Exposing tools over MCP
+
+Run `cargo run -- mcp --user-id <your-user-id>` to expose the analyzer's read-only tools (recent entries, text and semantic search, daily and weekly reviews, signals) over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. See [CONTRIBUTING.md](CONTRIBUTING.md#running-locally) for details.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, build instructions, and project conventions.

@@ -1,4 +1,6 @@
-use clap::{Parser, Subcommand};
+use std::net::SocketAddr;
+
+use clap::{Args, Parser, Subcommand};
 
 use crate::{
     journal::{
@@ -18,14 +20,6 @@ pub struct Cli {
         hide_env_values = true
     )]
     telegram_bot_token: Option<String>,
-
-    #[arg(
-        long,
-        env = "FROID_ANALYZER_TELEGRAM_BOT_TOKEN",
-        global = true,
-        hide_env_values = true
-    )]
-    analyzer_telegram_bot_token: Option<String>,
 
     #[arg(long, env = "DATA_DIR", global = true, default_value = "data")]
     data_dir: String,
@@ -155,16 +149,36 @@ pub struct Cli {
     command: Option<Command>,
 }
 
-#[derive(Debug, Default, Clone, Copy, Subcommand)]
+#[derive(Debug, Default, Clone, Subcommand)]
 pub enum Command {
     #[default]
     Serve,
+    /// Run the MCP server exposing analyzer tools over Streamable HTTP.
+    Mcp(McpArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpArgs {
+    /// Address to bind the HTTP server to.
+    #[arg(long, env = "FROID_MCP_BIND", default_value = "127.0.0.1:8080")]
+    pub bind: SocketAddr,
+
+    /// User identity that all incoming MCP requests are scoped to.
+    #[arg(long, env = "FROID_MCP_USER_ID")]
+    pub user_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpConfig {
+    pub bind: SocketAddr,
+    pub user_id: String,
+    pub database_path: String,
+    pub database_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeConfig {
     pub telegram_bot_token: String,
-    pub analyzer_telegram_bot_token: Option<String>,
     pub database_path: String,
     pub database_url: String,
     pub embedding_worker: ReconciliationWorkerConfig,
@@ -177,7 +191,25 @@ pub struct ServeConfig {
 
 impl Cli {
     pub fn selected_command(&self) -> Command {
-        self.command.unwrap_or_default()
+        self.command.clone().unwrap_or_default()
+    }
+
+    pub fn mcp_config(&self, args: &McpArgs) -> Result<McpConfig, clap::Error> {
+        let user_id = args.user_id.trim();
+        if user_id.is_empty() {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                "FROID_MCP_USER_ID environment variable or --user-id must not be empty",
+            ));
+        }
+
+        let database_path = format!("{}/{}", self.data_dir, self.database_file);
+        Ok(McpConfig {
+            bind: args.bind,
+            user_id: user_id.to_string(),
+            database_url: format!("sqlite:{database_path}"),
+            database_path,
+        })
     }
 
     pub fn serve_config(&self) -> Result<ServeConfig, clap::Error> {
@@ -248,16 +280,8 @@ impl Cli {
 
         let database_path = format!("{}/{}", self.data_dir, self.database_file);
 
-        let analyzer_telegram_bot_token = self
-            .analyzer_telegram_bot_token
-            .as_ref()
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
-            analyzer_telegram_bot_token,
             database_url: format!("sqlite:{database_path}"),
             database_path,
             embedding_worker,
@@ -279,7 +303,6 @@ mod tests {
     fn default_cli() -> Cli {
         Cli {
             telegram_bot_token: None,
-            analyzer_telegram_bot_token: None,
             data_dir: "data".to_string(),
             database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: None,
@@ -309,39 +332,6 @@ mod tests {
             telegram_bot_token: Some(token.to_string()),
             ..default_cli()
         }
-    }
-
-    #[test]
-    fn analyzer_token_defaults_to_none() {
-        let config = cli_with_token("token").serve_config().unwrap();
-        assert!(config.analyzer_telegram_bot_token.is_none());
-    }
-
-    #[test]
-    fn analyzer_token_propagates_when_set() {
-        let cli = Cli::parse_from([
-            "froid",
-            "--telegram-bot-token",
-            "token",
-            "--analyzer-telegram-bot-token",
-            "analyzer-token",
-        ]);
-        let config = cli.serve_config().unwrap();
-        assert_eq!(
-            config.analyzer_telegram_bot_token.as_deref(),
-            Some("analyzer-token")
-        );
-    }
-
-    #[test]
-    fn analyzer_token_blank_treated_as_unset() {
-        let cli = Cli {
-            telegram_bot_token: Some("token".to_string()),
-            analyzer_telegram_bot_token: Some("   ".to_string()),
-            ..default_cli()
-        };
-        let config = cli.serve_config().unwrap();
-        assert!(config.analyzer_telegram_bot_token.is_none());
     }
 
     #[test]
@@ -655,6 +645,49 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn parses_mcp_command_with_bind_and_user_id() {
+        let cli = Cli::parse_from([
+            "froid",
+            "mcp",
+            "--bind",
+            "0.0.0.0:9000",
+            "--user-id",
+            "alice",
+        ]);
+
+        let Command::Mcp(args) = cli.selected_command() else {
+            panic!("expected Mcp command");
+        };
+        let config = cli.mcp_config(&args).unwrap();
+
+        assert_eq!(config.bind.to_string(), "0.0.0.0:9000");
+        assert_eq!(config.user_id, "alice");
+        assert_eq!(config.database_path, "data/froid.sqlite3");
+        assert_eq!(config.database_url, "sqlite:data/froid.sqlite3");
+    }
+
+    #[test]
+    fn mcp_config_rejects_blank_user_id() {
+        let cli = Cli::parse_from(["froid", "mcp", "--user-id", ""]);
+        let Command::Mcp(args) = cli.selected_command() else {
+            panic!("expected Mcp command");
+        };
+        let error = cli.mcp_config(&args).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("must not be empty"));
+    }
+
+    #[test]
+    fn mcp_command_uses_default_bind() {
+        let cli = Cli::parse_from(["froid", "mcp", "--user-id", "alice"]);
+        let Command::Mcp(args) = cli.selected_command() else {
+            panic!("expected Mcp command");
+        };
+        let config = cli.mcp_config(&args).unwrap();
+        assert_eq!(config.bind.to_string(), "127.0.0.1:8080");
     }
 
     #[test]
