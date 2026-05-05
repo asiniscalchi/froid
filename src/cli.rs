@@ -22,6 +22,9 @@ pub struct Cli {
     )]
     telegram_bot_token: Option<String>,
 
+    #[arg(long, env = "TELEGRAM_ALLOWED_USER_ID", global = true)]
+    telegram_allowed_user_id: Option<u64>,
+
     #[arg(long, env = "DATA_DIR", global = true, default_value = "data")]
     data_dir: String,
 
@@ -176,6 +179,7 @@ pub struct McpConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeConfig {
     pub telegram_bot_token: String,
+    pub telegram_allowed_user_id: Option<u64>,
     pub database_path: String,
     pub database_url: String,
     pub embedding_worker: ReconciliationWorkerConfig,
@@ -271,6 +275,7 @@ impl Cli {
 
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
+            telegram_allowed_user_id: self.telegram_allowed_user_id,
             database_url: format!("sqlite:{database_path}"),
             database_path,
             embedding_worker,
@@ -292,6 +297,7 @@ mod tests {
     fn default_cli() -> Cli {
         Cli {
             telegram_bot_token: None,
+            telegram_allowed_user_id: None,
             data_dir: "data".to_string(),
             database_file: "froid.sqlite3".to_string(),
             embedding_worker_enabled: None,
@@ -339,6 +345,7 @@ mod tests {
         let config = cli.serve_config().unwrap();
 
         assert_eq!(config.telegram_bot_token, "token");
+        assert_eq!(config.telegram_allowed_user_id, None);
         assert_eq!(config.database_path, "custom/app.db");
         assert_eq!(config.database_url, "sqlite:custom/app.db");
     }
@@ -368,6 +375,21 @@ mod tests {
                 .to_string()
                 .contains("TELEGRAM_BOT_TOKEN environment variable or --telegram-bot-token")
         );
+    }
+
+    #[test]
+    fn parses_optional_telegram_allowed_user_id() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--telegram-allowed-user-id",
+            "42",
+        ]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.telegram_allowed_user_id, Some(42));
     }
 
     #[test]

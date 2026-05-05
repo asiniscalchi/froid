@@ -125,7 +125,11 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         delivery_configured,
     )?;
 
-    let adapter = TelegramAdapter::new(config.telegram_bot_token, journal_service);
+    let adapter = TelegramAdapter::new(
+        config.telegram_bot_token,
+        config.telegram_allowed_user_id,
+        journal_service,
+    );
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
 }
 
@@ -388,7 +392,10 @@ fn spawn_daily_review_delivery_worker(
         JournalRepository::new(pool.clone()),
         crate::journal::review::repository::DailyReviewRepository::new(pool.clone()),
         daily_review_service,
-        TelegramDailyReviewSender::new(config.telegram_bot_token.clone()),
+        TelegramDailyReviewSender::new(
+            config.telegram_bot_token.clone(),
+            config.telegram_allowed_user_id,
+        ),
         config.daily_review_delivery.clone(),
     );
     let token = shutdown.clone();
@@ -421,7 +428,10 @@ fn spawn_weekly_review_delivery_worker(
         JournalRepository::new(pool.clone()),
         crate::journal::week_review::repository::WeeklyReviewRepository::new(pool.clone()),
         weekly_review_service,
-        TelegramWeeklyReviewSender::new(config.telegram_bot_token.clone()),
+        TelegramWeeklyReviewSender::new(
+            config.telegram_bot_token.clone(),
+            config.telegram_allowed_user_id,
+        ),
         config.weekly_review_delivery.clone(),
     );
     let token = shutdown.clone();
