@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use crate::{
     handler::MessageHandler,
     journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
-    messages::{IncomingMessage, MessageSource},
+    messages::{IncomingMessage, MessageSource, SINGLE_USER_ID},
 };
 
 const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Unsupported message type";
@@ -50,22 +50,16 @@ async fn handle_message<H: MessageHandler>(
         return Ok(());
     };
 
-    let user_id = message
-        .from
-        .as_ref()
-        .map(|u| u.id.to_string())
-        .unwrap_or_else(|| message.chat.id.to_string());
-
     if let Some(command) = parse_command(text, message.date) {
         let request = JournalCommandRequest {
             source: MessageSource::Telegram,
             source_conversation_id: message.chat.id.to_string(),
-            user_id: user_id.clone(),
+            user_id: SINGLE_USER_ID.to_string(),
             received_at: message.date,
             command,
         };
 
-        info!(user_id = %user_id, "received Telegram command");
+        info!("received Telegram command");
 
         match handler.command(&request).await {
             Ok(outgoing) => {
@@ -79,12 +73,11 @@ async fn handle_message<H: MessageHandler>(
         return Ok(());
     }
 
-    let incoming = incoming_from_text_message(&message, user_id);
+    let incoming = incoming_from_text_message(&message);
 
     info!(
         source_conversation_id = %incoming.source_conversation_id,
         source_message_id = %incoming.source_message_id,
-        user_id = %incoming.user_id,
         "received Telegram text message"
     );
 
@@ -110,12 +103,12 @@ fn saved_reaction() -> ReactionType {
     }
 }
 
-fn incoming_from_text_message(message: &Message, user_id: String) -> IncomingMessage {
+fn incoming_from_text_message(message: &Message) -> IncomingMessage {
     IncomingMessage {
         source: MessageSource::Telegram,
         source_conversation_id: message.chat.id.to_string(),
         source_message_id: message.id.to_string(),
-        user_id,
+        user_id: SINGLE_USER_ID.to_string(),
         text: message.text().unwrap_or_default().to_string(),
         received_at: message.date,
     }
@@ -204,14 +197,12 @@ mod tests {
             },
             "text": "hello froid"
         }));
-        let user_id = "7".to_string();
-
-        let incoming = incoming_from_text_message(&message, user_id);
+        let incoming = incoming_from_text_message(&message);
 
         assert_eq!(incoming.source, MessageSource::Telegram);
         assert_eq!(incoming.source_conversation_id, "42");
         assert_eq!(incoming.source_message_id, "100");
-        assert_eq!(incoming.user_id, "7");
+        assert_eq!(incoming.user_id, SINGLE_USER_ID);
         assert_eq!(incoming.text, "hello froid");
         assert_eq!(
             incoming.received_at,

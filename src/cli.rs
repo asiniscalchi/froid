@@ -6,6 +6,7 @@ use crate::{
     journal::{
         review::DailyReviewDeliveryWorkerConfig, week_review::WeeklyReviewDeliveryWorkerConfig,
     },
+    messages::SINGLE_USER_ID,
     version,
     workers::{ReconciliationWorkerConfig, weekly_review::weekday_from_str},
 };
@@ -162,10 +163,6 @@ pub struct McpArgs {
     /// Address to bind the HTTP server to.
     #[arg(long, env = "FROID_MCP_BIND", default_value = "127.0.0.1:8080")]
     pub bind: SocketAddr,
-
-    /// User identity that all incoming MCP requests are scoped to.
-    #[arg(long, env = "FROID_MCP_USER_ID")]
-    pub user_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,18 +192,10 @@ impl Cli {
     }
 
     pub fn mcp_config(&self, args: &McpArgs) -> Result<McpConfig, clap::Error> {
-        let user_id = args.user_id.trim();
-        if user_id.is_empty() {
-            return Err(clap::Error::raw(
-                clap::error::ErrorKind::ValueValidation,
-                "FROID_MCP_USER_ID environment variable or --user-id must not be empty",
-            ));
-        }
-
         let database_path = format!("{}/{}", self.data_dir, self.database_file);
         Ok(McpConfig {
             bind: args.bind,
-            user_id: user_id.to_string(),
+            user_id: SINGLE_USER_ID.to_string(),
             database_url: format!("sqlite:{database_path}"),
             database_path,
         })
@@ -648,15 +637,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_mcp_command_with_bind_and_user_id() {
-        let cli = Cli::parse_from([
-            "froid",
-            "mcp",
-            "--bind",
-            "0.0.0.0:9000",
-            "--user-id",
-            "alice",
-        ]);
+    fn parses_mcp_command_with_bind_and_single_user_scope() {
+        let cli = Cli::parse_from(["froid", "mcp", "--bind", "0.0.0.0:9000"]);
 
         let Command::Mcp(args) = cli.selected_command() else {
             panic!("expected Mcp command");
@@ -664,30 +646,20 @@ mod tests {
         let config = cli.mcp_config(&args).unwrap();
 
         assert_eq!(config.bind.to_string(), "0.0.0.0:9000");
-        assert_eq!(config.user_id, "alice");
+        assert_eq!(config.user_id, SINGLE_USER_ID);
         assert_eq!(config.database_path, "data/froid.sqlite3");
         assert_eq!(config.database_url, "sqlite:data/froid.sqlite3");
     }
 
     #[test]
-    fn mcp_config_rejects_blank_user_id() {
-        let cli = Cli::parse_from(["froid", "mcp", "--user-id", ""]);
-        let Command::Mcp(args) = cli.selected_command() else {
-            panic!("expected Mcp command");
-        };
-        let error = cli.mcp_config(&args).unwrap_err();
-        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(error.to_string().contains("must not be empty"));
-    }
-
-    #[test]
     fn mcp_command_uses_default_bind() {
-        let cli = Cli::parse_from(["froid", "mcp", "--user-id", "alice"]);
+        let cli = Cli::parse_from(["froid", "mcp"]);
         let Command::Mcp(args) = cli.selected_command() else {
             panic!("expected Mcp command");
         };
         let config = cli.mcp_config(&args).unwrap();
         assert_eq!(config.bind.to_string(), "127.0.0.1:8080");
+        assert_eq!(config.user_id, SINGLE_USER_ID);
     }
 
     #[test]
