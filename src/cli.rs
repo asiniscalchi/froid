@@ -1,12 +1,11 @@
 use std::net::SocketAddr;
 
-use clap::{Args, Parser, Subcommand};
+use clap::Parser;
 
 use crate::{
     journal::{
         review::DailyReviewDeliveryWorkerConfig, week_review::WeeklyReviewDeliveryWorkerConfig,
     },
-    messages::SINGLE_USER_ID,
     version,
     workers::{ReconciliationWorkerConfig, weekly_review::weekday_from_str},
 };
@@ -149,31 +148,22 @@ pub struct Cli {
     )]
     signal_worker_interval_seconds: Option<u64>,
 
-    #[command(subcommand)]
-    command: Option<Command>,
-}
+    #[arg(long, env = "FROID_MCP_ENABLED", global = true)]
+    mcp_enabled: Option<bool>,
 
-#[derive(Debug, Default, Clone, Subcommand)]
-pub enum Command {
-    #[default]
-    Serve,
-    /// Run the MCP server exposing analyzer tools over Streamable HTTP.
-    Mcp(McpArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct McpArgs {
-    /// Address to bind the HTTP server to.
-    #[arg(long, env = "FROID_MCP_BIND", default_value = "127.0.0.1:8080")]
-    pub bind: SocketAddr,
+    #[arg(
+        long,
+        env = "FROID_MCP_BIND",
+        global = true,
+        default_value = "127.0.0.1:8080"
+    )]
+    mcp_bind: SocketAddr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpConfig {
+pub struct McpServerConfig {
+    pub enabled: bool,
     pub bind: SocketAddr,
-    pub user_id: String,
-    pub database_path: String,
-    pub database_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,23 +178,10 @@ pub struct ServeConfig {
     pub daily_review_delivery: DailyReviewDeliveryWorkerConfig,
     pub weekly_review_delivery: WeeklyReviewDeliveryWorkerConfig,
     pub signal_worker: ReconciliationWorkerConfig,
+    pub mcp_server: McpServerConfig,
 }
 
 impl Cli {
-    pub fn selected_command(&self) -> Command {
-        self.command.clone().unwrap_or_default()
-    }
-
-    pub fn mcp_config(&self, args: &McpArgs) -> Result<McpConfig, clap::Error> {
-        let database_path = format!("{}/{}", self.data_dir, self.database_file);
-        Ok(McpConfig {
-            bind: args.bind,
-            user_id: SINGLE_USER_ID.to_string(),
-            database_url: format!("sqlite:{database_path}"),
-            database_path,
-        })
-    }
-
     pub fn serve_config(&self) -> Result<ServeConfig, clap::Error> {
         let Some(telegram_bot_token) = self.telegram_bot_token.as_ref() else {
             return Err(clap::Error::raw(
@@ -273,6 +250,11 @@ impl Cli {
 
         let database_path = format!("{}/{}", self.data_dir, self.database_file);
 
+        let mcp_server = McpServerConfig {
+            enabled: self.mcp_enabled.unwrap_or(false),
+            bind: self.mcp_bind,
+        };
+
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
             telegram_allowed_user_id: self.telegram_allowed_user_id,
@@ -284,6 +266,7 @@ impl Cli {
             daily_review_delivery,
             weekly_review_delivery,
             signal_worker,
+            mcp_server,
         })
     }
 }
@@ -318,7 +301,8 @@ mod tests {
             signal_worker_enabled: None,
             signal_worker_batch_size: None,
             signal_worker_interval_seconds: None,
-            command: None,
+            mcp_enabled: None,
+            mcp_bind: "127.0.0.1:8080".parse().unwrap(),
         }
     }
 
@@ -339,7 +323,6 @@ mod tests {
             "custom",
             "--database-file",
             "app.db",
-            "serve",
         ]);
 
         let config = cli.serve_config().unwrap();
@@ -358,11 +341,6 @@ mod tests {
 
         assert_eq!(config.database_path, "data/froid.sqlite3");
         assert_eq!(config.database_url, "sqlite:data/froid.sqlite3");
-    }
-
-    #[test]
-    fn defaults_to_serve_command() {
-        assert!(matches!(default_cli().selected_command(), Command::Serve));
     }
 
     #[test]
@@ -659,29 +637,29 @@ mod tests {
     }
 
     #[test]
-    fn parses_mcp_command_with_bind_and_single_user_scope() {
-        let cli = Cli::parse_from(["froid", "mcp", "--bind", "0.0.0.0:9000"]);
+    fn serve_config_mcp_disabled_by_default() {
+        let config = cli_with_token("token").serve_config().unwrap();
 
-        let Command::Mcp(args) = cli.selected_command() else {
-            panic!("expected Mcp command");
-        };
-        let config = cli.mcp_config(&args).unwrap();
-
-        assert_eq!(config.bind.to_string(), "0.0.0.0:9000");
-        assert_eq!(config.user_id, SINGLE_USER_ID);
-        assert_eq!(config.database_path, "data/froid.sqlite3");
-        assert_eq!(config.database_url, "sqlite:data/froid.sqlite3");
+        assert!(!config.mcp_server.enabled);
+        assert_eq!(config.mcp_server.bind.to_string(), "127.0.0.1:8080");
     }
 
     #[test]
-    fn mcp_command_uses_default_bind() {
-        let cli = Cli::parse_from(["froid", "mcp"]);
-        let Command::Mcp(args) = cli.selected_command() else {
-            panic!("expected Mcp command");
-        };
-        let config = cli.mcp_config(&args).unwrap();
-        assert_eq!(config.bind.to_string(), "127.0.0.1:8080");
-        assert_eq!(config.user_id, SINGLE_USER_ID);
+    fn serve_config_mcp_enabled_with_custom_bind() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--mcp-enabled",
+            "true",
+            "--mcp-bind",
+            "0.0.0.0:9000",
+        ]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert!(config.mcp_server.enabled);
+        assert_eq!(config.mcp_server.bind.to_string(), "0.0.0.0:9000");
     }
 
     #[test]
