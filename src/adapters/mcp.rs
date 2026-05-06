@@ -93,28 +93,38 @@ impl ServerHandler for AnalyzerMcpServer {
             .map(serde_json::Value::Object)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-        match self
+        let result = self
             .registry
             .dispatch(request.name.as_ref(), &self.user, arguments)
-            .await
-        {
-            Ok(value) => Ok(CallToolResult::structured(value)),
-            Err(ToolError::UnknownTool(name)) => Err(McpError::new(
-                ErrorCode::METHOD_NOT_FOUND,
-                format!("unknown tool: {name}"),
-                None,
-            )),
-            Err(ToolError::InvalidInput(message)) => Err(McpError::invalid_params(message, None)),
-            Err(ToolError::Analyzer(AnalyzerError::InvalidArgument(message))) => {
-                Err(McpError::invalid_params(message, None))
-            }
-            Err(ToolError::Analyzer(AnalyzerError::LimitTooLarge { max })) => Err(
-                McpError::invalid_params(format!("limit exceeds maximum (max {max})"), None),
-            ),
-            Err(ToolError::Analyzer(AnalyzerError::Internal(source))) => Err(
-                McpError::internal_error(format!("internal error: {source}"), None),
-            ),
+            .await;
+        map_dispatch_result(result)
+    }
+}
+
+/// Map a `ToolRegistry::dispatch` outcome onto an MCP `CallToolResult` /
+/// `McpError`. Extracted from `call_tool` so the error-code mapping can be
+/// unit-tested without constructing a `RequestContext`.
+fn map_dispatch_result(
+    result: Result<serde_json::Value, ToolError>,
+) -> Result<CallToolResult, McpError> {
+    match result {
+        Ok(value) => Ok(CallToolResult::structured(value)),
+        Err(ToolError::UnknownTool(name)) => Err(McpError::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            format!("unknown tool: {name}"),
+            None,
+        )),
+        Err(ToolError::InvalidInput(message)) => Err(McpError::invalid_params(message, None)),
+        Err(ToolError::Analyzer(AnalyzerError::InvalidArgument(message))) => {
+            Err(McpError::invalid_params(message, None))
         }
+        Err(ToolError::Analyzer(AnalyzerError::LimitTooLarge { max })) => Err(
+            McpError::invalid_params(format!("limit exceeds maximum (max {max})"), None),
+        ),
+        Err(ToolError::Analyzer(AnalyzerError::Internal(source))) => Err(McpError::internal_error(
+            format!("internal error: {source}"),
+            None,
+        )),
     }
 }
 
@@ -253,5 +263,69 @@ mod tests {
             err,
             ToolError::Analyzer(AnalyzerError::InvalidArgument(_))
         ));
+    }
+
+    #[test]
+    fn map_dispatch_result_forwards_structured_value() {
+        let result = map_dispatch_result(Ok(json!({"hello": "world"})))
+            .expect("ok dispatch maps to CallToolResult");
+        assert_ne!(result.is_error, Some(true));
+        assert_eq!(
+            result.structured_content,
+            Some(json!({"hello": "world"})),
+            "Ok value should be forwarded as structured_content"
+        );
+    }
+
+    #[test]
+    fn map_dispatch_result_unknown_tool_to_method_not_found() {
+        let err = map_dispatch_result(Err(ToolError::UnknownTool("missing".into())))
+            .expect_err("UnknownTool maps to McpError");
+        assert_eq!(err.code, ErrorCode::METHOD_NOT_FOUND);
+        assert!(err.message.contains("missing"));
+    }
+
+    #[test]
+    fn map_dispatch_result_invalid_input_to_invalid_params() {
+        let err = map_dispatch_result(Err(ToolError::InvalidInput("bad json".into())))
+            .expect_err("InvalidInput maps to McpError");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("bad json"));
+    }
+
+    #[test]
+    fn map_dispatch_result_analyzer_invalid_argument_to_invalid_params() {
+        let err = map_dispatch_result(Err(ToolError::Analyzer(AnalyzerError::InvalidArgument(
+            "query is empty".into(),
+        ))))
+        .expect_err("InvalidArgument maps to McpError");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("query is empty"));
+    }
+
+    #[test]
+    fn map_dispatch_result_limit_too_large_to_invalid_params() {
+        let err = map_dispatch_result(Err(ToolError::Analyzer(AnalyzerError::LimitTooLarge {
+            max: 50,
+        })))
+        .expect_err("LimitTooLarge maps to McpError");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(
+            err.message.contains("50"),
+            "message should include the max ({})",
+            err.message
+        );
+    }
+
+    #[test]
+    fn map_dispatch_result_internal_to_internal_error() {
+        let err = map_dispatch_result(Err(ToolError::Analyzer(AnalyzerError::Internal(Box::<
+            dyn std::error::Error + Send + Sync,
+        >::from(
+            "boom"
+        )))))
+        .expect_err("Internal maps to McpError");
+        assert_eq!(err.code, ErrorCode::INTERNAL_ERROR);
+        assert!(err.message.contains("boom"));
     }
 }
