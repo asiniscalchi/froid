@@ -13,7 +13,7 @@ use rmcp::transport::streamable_http_server::{
 
 use crate::{
     adapters::{mcp::AnalyzerMcpServer, telegram::TelegramAdapter},
-    cli::{McpConfig, ServeConfig},
+    cli::ServeConfig,
     database,
     journal::{
         analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_tool_registry},
@@ -58,6 +58,8 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         command = "serve",
         adapter = "telegram",
         database_path = %config.database_path,
+        mcp_enabled = config.mcp_server.enabled,
+        mcp_bind = %config.mcp_server.bind,
         "starting service"
     );
 
@@ -116,6 +118,14 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &config,
         signal_runtime_config,
     )?;
+    spawn_mcp_server(
+        &mut workers,
+        &shutdown,
+        &pool,
+        &config,
+        embedding_config.as_ref(),
+    )
+    .await?;
     let journal_service = build_journal_service(
         pool,
         embedding_config,
@@ -133,32 +143,35 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
 }
 
-pub async fn mcp(config: McpConfig) -> Result<(), Box<dyn Error>> {
-    info!(
-        version = version::VERSION,
-        command = "mcp",
-        bind = %config.bind,
-        user_id = %config.user_id,
-        database_path = %config.database_path,
-        "starting service"
-    );
+async fn spawn_mcp_server(
+    workers: &mut JoinSet<&'static str>,
+    shutdown: &CancellationToken,
+    pool: &SqlitePool,
+    config: &ServeConfig,
+    embedding_config: Option<&EmbeddingConfig>,
+) -> Result<(), Box<dyn Error>> {
+    if !config.mcp_server.enabled {
+        return Ok(());
+    }
 
-    let pool = database::connect_pool(&config.database_url).await?;
-    sqlx::migrate!().run(&pool).await?;
+    let Some(cfg) = embedding_config else {
+        warn!(
+            "MCP server is enabled but embedding configuration is missing; skipping (semantic search requires it)"
+        );
+        return Ok(());
+    };
 
-    let embedding_config = EmbeddingConfig::from_env()?;
-    let embedder = RigOpenAiEmbedder::from_env(embedding_config)?;
+    let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
     let semantic = Arc::new(DefaultSemanticJournalSearcher::new(
         SqliteEmbeddingRepository::new(pool.clone()),
         embedder,
         JournalRepository::new(pool.clone()),
     ));
 
-    let registry = build_analyzer_tool_registry(pool, semantic);
-    let user = UserContext::new(config.user_id);
+    let registry = build_analyzer_tool_registry(pool.clone(), semantic);
+    let user = UserContext::new(crate::messages::SINGLE_USER_ID);
     let server = AnalyzerMcpServer::new(registry, user);
 
-    let shutdown = CancellationToken::new();
     let service = StreamableHttpService::new(
         {
             let server = server.clone();
@@ -169,19 +182,21 @@ pub async fn mcp(config: McpConfig) -> Result<(), Box<dyn Error>> {
     );
 
     let router = axum::Router::new().nest_service("/mcp", service);
-    let listener = tokio::net::TcpListener::bind(config.bind).await?;
+    let listener = tokio::net::TcpListener::bind(config.mcp_server.bind).await?;
     let local_addr = listener.local_addr()?;
     info!(addr = %local_addr, "MCP server listening");
 
-    let serve = axum::serve(listener, router).with_graceful_shutdown({
-        let shutdown = shutdown.clone();
-        async move {
-            shutdown_signal().await;
-            shutdown.cancel();
+    let token = shutdown.clone();
+    workers.spawn(async move {
+        let serve = axum::serve(listener, router).with_graceful_shutdown(async move {
+            token.cancelled().await;
+        });
+        if let Err(err) = serve.await {
+            error!(error = %err, "MCP server exited with error");
         }
+        "mcp"
     });
 
-    serve.await?;
     Ok(())
 }
 

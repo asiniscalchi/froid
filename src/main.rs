@@ -1,9 +1,5 @@
 use clap::Parser;
-use froid::{
-    app,
-    cli::{Cli, Command},
-    version,
-};
+use froid::{app, cli::Cli, version};
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -22,16 +18,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
     info!(version = version::VERSION, "starting froid");
 
-    match cli.selected_command() {
-        Command::Serve => {
-            let config = cli.serve_config()?;
-            app::serve(config).await?;
-        }
-        Command::Mcp(args) => {
-            let config = cli.mcp_config(&args)?;
-            app::mcp(config).await?;
-        }
-    }
+    let config = cli.serve_config()?;
+    app::serve(config).await?;
 
     Ok(())
 }
