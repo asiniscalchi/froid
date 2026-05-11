@@ -1,9 +1,5 @@
 # CONTRIBUTING.md
 
-## Project
-
-Froid is a journaling backend that receives user messages through external channels (currently Telegram) and stores them as journal entries. It supports semantic search via vector embeddings, structured data extraction, and daily review generation — all backed by SQLite and powered by OpenAI models via `rig-core`.
-
 ## Prerequisites
 
 - Rust (edition 2024, see `Cargo.toml` for the exact toolchain)
@@ -19,21 +15,7 @@ Copy the example environment file and fill in your values:
 cp .env.example .env
 ```
 
-Key variables:
-
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | Yes | — | Telegram bot credentials |
-| `TELEGRAM_ALLOWED_USER_ID` | No | allow all private chats | Restrict incoming Telegram handling and scheduled review delivery to one private user |
-| `OPENAI_API_KEY` | Workers only | — | Embeddings and extractions |
-| `DATA_DIR` | No | `data` | Directory for persistent data |
-| `DATABASE_FILE` | No | `froid.sqlite3` | SQLite database path |
-| `RUST_LOG` | No | `info` | Log level filter |
-| `FROID_EMBEDDING_WORKER_ENABLED` | No | `false` | Enable embedding reconciliation |
-| `FROID_EXTRACTION_WORKER_ENABLED` | No | `false` | Enable extraction reconciliation |
-| `FROID_DAILY_REVIEW_DELIVERY_ENABLED` | No | `false` | Enable scheduled daily reviews |
-| `FROID_MCP_ENABLED` | No | `false` | Expose analyzer tools over the MCP HTTP server alongside the bot |
-| `FROID_MCP_BIND` | No | `127.0.0.1:8080` | Loopback bind address for the MCP HTTP server (used when `FROID_MCP_ENABLED=true`) |
+See [README.md — Configuration](README.md#configuration) for the full list of environment variables and their defaults.
 
 ## Running Locally
 
@@ -42,14 +24,6 @@ cargo run -- serve
 ```
 
 Database migrations are applied automatically on startup via `sqlx::migrate!()`.
-
-To expose the analyzer's read-only tools over MCP (Streamable HTTP, mounted at `/mcp`), enable the MCP server alongside the bot:
-
-```bash
-FROID_MCP_ENABLED=true cargo run -- serve
-```
-
-The MCP server runs in the same process as the Telegram adapter and shares the SQLite pool. It requires `OPENAI_API_KEY` so the semantic search tool can build embeddings. Froid is a single-user journal, so every incoming request uses the local journal; there is no per-request authentication or user-id configuration. For that reason, `FROID_MCP_BIND` must be a loopback address.
 
 ## Local CI Checks
 
@@ -89,20 +63,25 @@ src/
 ├── messages.rs          # IncomingMessage / OutgoingMessage types
 ├── version.rs           # Version populated by build.rs
 ├── adapters/
-│   └── telegram.rs      # Telegram adapter (teloxide)
+│   ├── telegram.rs      # Telegram adapter (teloxide)
+│   └── mcp.rs           # MCP Streamable HTTP adapter
 ├── journal/
-│   ├── service.rs       # Orchestrates all journal operations
+│   ├── service/         # Orchestrates all journal operations
 │   ├── repository.rs    # DB access for entries
 │   ├── entry.rs         # JournalEntry struct
 │   ├── command.rs       # Command types
 │   ├── search.rs        # Semantic search
 │   ├── embedding/       # Vector embedding pipeline
 │   ├── extraction/      # Structured extraction (OpenAI)
-│   └── review/          # Daily review generation (OpenAI)
+│   ├── review/          # Daily review generation (OpenAI) + signals
+│   ├── week_review/     # Weekly review generation (OpenAI)
+│   └── analyzer/        # Read-only query layer; tools exposed over MCP
 └── workers/
     ├── embedding.rs     # EmbeddingReconciliationWorker
     ├── extraction.rs    # ExtractionReconciliationWorker
-    └── daily_review.rs  # DailyReviewDeliveryWorker
+    ├── daily_review.rs  # DailyReviewDeliveryWorker
+    ├── signals.rs       # SignalReconciliationWorker
+    └── weekly_review.rs # WeeklyReviewDeliveryWorker
 migrations/              # sqlx migrations (applied automatically)
 prompts/                 # Versioned LLM prompt files
 ```
@@ -111,7 +90,7 @@ prompts/                 # Versioned LLM prompt files
 
 - **Async throughout** — tokio multi-thread runtime; workers run as spawned background tasks.
 - **SQLite + sqlite-vec** — vector similarity search runs in-process; no external vector store needed.
-- **Adapter pattern** — `Adapter` trait decouples the core from the transport layer; Telegram is the only current implementation.
+- **Adapter pattern** — `MessageHandler` trait decouples the core from the transport layer; Telegram and MCP are the two current adapters.
 - **Configuration via env** — all runtime config is read from environment variables (or `.env`); CLI args forward to `ServeConfig`.
 - **LLM integration** — embeddings and structured extraction use `rig-core` with the OpenAI provider; prompts live in `prompts/` and are versioned by filename.
 - **Migrations** — add new `.sql` files under `migrations/` following the `000N_description.sql` naming convention; sqlx runs them in order.
