@@ -182,10 +182,19 @@ mod tests {
             user_id: &str,
             embedding: &Embedding,
             embedding_model: &str,
+            from_date: Option<chrono::NaiveDate>,
+            to_date_exclusive: Option<chrono::NaiveDate>,
             limit: usize,
         ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
             self.inner
-                .search_for_user(user_id, embedding, embedding_model, limit)
+                .search_for_user(
+                    user_id,
+                    embedding,
+                    embedding_model,
+                    from_date,
+                    to_date_exclusive,
+                    limit,
+                )
                 .await
                 .map_err(Into::into)
         }

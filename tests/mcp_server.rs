@@ -36,6 +36,8 @@ impl SemanticJournalSearcher for StubSemanticSearcher {
         &self,
         _user_id: &str,
         _query: &str,
+        _from_date: Option<chrono::NaiveDate>,
+        _to_date_exclusive: Option<chrono::NaiveDate>,
         _limit: usize,
     ) -> Result<Vec<SemanticHit>, AnalyzerError> {
         Ok(Vec::new())

@@ -123,28 +123,17 @@ impl JournalReadService for DefaultJournalReadService {
             ));
         }
 
-        let date_filter_active = request.from_date.is_some() || request.to_date_exclusive.is_some();
-        let fetch_limit = if date_filter_active {
-            MAX_SEMANTIC_LIMIT as usize
-        } else {
-            limit as usize
-        };
-
-        let mut hits = self
+        let hits = self
             .semantic
-            .search(&ctx.user_id, trimmed, fetch_limit)
+            .search(
+                &ctx.user_id,
+                trimmed,
+                request.from_date,
+                request.to_date_exclusive,
+                limit as usize,
+            )
             .await?;
 
-        if date_filter_active {
-            let from = request.from_date;
-            let to = request.to_date_exclusive;
-            hits.retain(|hit| {
-                let date = hit.received_at.date_naive();
-                from.is_none_or(|f| date >= f) && to.is_none_or(|t| date < t)
-            });
-        }
-
-        hits.truncate(limit as usize);
         Ok(hits)
     }
 }
@@ -178,6 +167,8 @@ mod tests {
     #[derive(Default, Clone)]
     struct StubSemanticSearcher {
         hits: std::sync::Arc<std::sync::Mutex<Vec<SemanticHit>>>,
+        last_from_date: std::sync::Arc<std::sync::Mutex<Option<NaiveDate>>>,
+        last_to_date_exclusive: std::sync::Arc<std::sync::Mutex<Option<NaiveDate>>>,
         last_limit: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
     }
 
@@ -185,6 +176,8 @@ mod tests {
         fn with_hits(hits: Vec<SemanticHit>) -> Self {
             Self {
                 hits: std::sync::Arc::new(std::sync::Mutex::new(hits)),
+                last_from_date: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                last_to_date_exclusive: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 last_limit: std::sync::Arc::new(std::sync::Mutex::new(None)),
             }
         }
@@ -200,10 +193,20 @@ mod tests {
             &self,
             _user_id: &str,
             _query: &str,
+            from_date: Option<NaiveDate>,
+            to_date_exclusive: Option<NaiveDate>,
             limit: usize,
         ) -> Result<Vec<SemanticHit>, AnalyzerError> {
+            *self.last_from_date.lock().unwrap() = from_date;
+            *self.last_to_date_exclusive.lock().unwrap() = to_date_exclusive;
             *self.last_limit.lock().unwrap() = Some(limit);
-            Ok(self.hits.lock().unwrap().clone())
+            let mut hits = self.hits.lock().unwrap().clone();
+            hits.retain(|hit| {
+                let date = hit.received_at.date_naive();
+                from_date.is_none_or(|f| date >= f) && to_date_exclusive.is_none_or(|t| date < t)
+            });
+            hits.truncate(limit);
+            Ok(hits)
         }
     }
 
@@ -533,7 +536,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_semantic_filters_by_date_and_truncates_to_limit() {
+    async fn search_semantic_passes_date_filter_and_limit_to_searcher() {
         let stub = StubSemanticSearcher::with_hits(vec![
             hit(1, at(2026, 4, 27, 10, 0), "before", 0.1),
             hit(2, at(2026, 4, 28, 10, 0), "in-1", 0.2),
@@ -552,7 +555,15 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "in-1");
-        assert_eq!(stub.last_limit(), Some(MAX_SEMANTIC_LIMIT as usize));
+        assert_eq!(
+            *stub.last_from_date.lock().unwrap(),
+            NaiveDate::from_ymd_opt(2026, 4, 28)
+        );
+        assert_eq!(
+            *stub.last_to_date_exclusive.lock().unwrap(),
+            NaiveDate::from_ymd_opt(2026, 4, 29)
+        );
+        assert_eq!(stub.last_limit(), Some(1));
     }
 
     #[tokio::test]

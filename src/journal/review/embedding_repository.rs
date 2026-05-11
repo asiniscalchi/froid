@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::NaiveDate;
 use sqlx::{Row, SqlitePool};
 
 use crate::journal::embedding::{
@@ -160,9 +161,11 @@ impl SqliteDailyReviewEmbeddingRepository {
         _user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
+        from_date: Option<NaiveDate>,
+        to_date_exclusive: Option<NaiveDate>,
         limit: usize,
     ) -> Result<Vec<EmbeddingSearchResult<i64>>, sqlx::Error> {
-        let rows = sqlx::query(
+        let mut sql = String::from(
             r#"
             SELECT
                 m.daily_review_id,
@@ -171,15 +174,26 @@ impl SqliteDailyReviewEmbeddingRepository {
             JOIN daily_review_embedding_vec v ON v.rowid = m.id
             JOIN daily_reviews r ON r.id = m.daily_review_id
             WHERE m.embedding_model = ?
-            ORDER BY distance ASC
-            LIMIT ?
             "#,
-        )
-        .bind(embedding.to_blob())
-        .bind(embedding_model)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
+        );
+        if from_date.is_some() {
+            sql.push_str(" AND r.review_date >= ?");
+        }
+        if to_date_exclusive.is_some() {
+            sql.push_str(" AND r.review_date < ?");
+        }
+        sql.push_str(" ORDER BY distance ASC LIMIT ?");
+
+        let mut query = sqlx::query(&sql)
+            .bind(embedding.to_blob())
+            .bind(embedding_model);
+        if let Some(date) = from_date {
+            query = query.bind(date.to_string());
+        }
+        if let Some(date) = to_date_exclusive {
+            query = query.bind(date.to_string());
+        }
+        let rows = query.bind(limit as i64).fetch_all(&self.pool).await?;
 
         Ok(rows
             .into_iter()
@@ -250,11 +264,20 @@ impl EmbeddingIndex<i64> for SqliteDailyReviewEmbeddingRepository {
         user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
+        from_date: Option<NaiveDate>,
+        to_date_exclusive: Option<NaiveDate>,
         limit: usize,
     ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
-        self.search_for_user(user_id, embedding, embedding_model, limit)
-            .await
-            .map_err(Into::into)
+        self.search_for_user(
+            user_id,
+            embedding,
+            embedding_model,
+            from_date,
+            to_date_exclusive,
+            limit,
+        )
+        .await
+        .map_err(Into::into)
     }
 }
 
@@ -444,7 +467,7 @@ mod tests {
 
         let query = directional_embedding(1);
         let results = embedding_repo
-            .search_for_user("user-1", &query, TEST_EMBEDDING_MODEL, 10)
+            .search_for_user("user-1", &query, TEST_EMBEDDING_MODEL, None, None, 10)
             .await
             .unwrap();
 

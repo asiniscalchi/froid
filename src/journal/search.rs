@@ -89,7 +89,7 @@ where
 
         let index_results: Vec<EmbeddingSearchResult<i64>> = self
             .index
-            .search_for_user(user_id, &embedding, model, MAX_SEARCH_LIMIT)
+            .search_for_user(user_id, &embedding, model, None, None, MAX_SEARCH_LIMIT)
             .await
             .map_err(SemanticSearchError::Index)?;
 
@@ -317,6 +317,8 @@ mod tests {
             _user_id: &str,
             _embedding: &Embedding,
             _embedding_model: &str,
+            _from_date: Option<chrono::NaiveDate>,
+            _to_date_exclusive: Option<chrono::NaiveDate>,
             _limit: usize,
         ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
             Ok(self.results.clone())

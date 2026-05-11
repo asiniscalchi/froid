@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use chrono::NaiveDate;
 
 use crate::journal::embedding::{Embedder, EmbeddingIndex};
 use crate::journal::entry::JournalEntry;
@@ -11,11 +12,13 @@ use super::types::{AnalyzerError, SemanticHit};
 #[async_trait]
 pub trait SemanticJournalSearcher: Send + Sync {
     /// Returns up to `limit` journal entries semantically similar to `query`,
-    /// scoped to `user_id`. Date filtering, if any, is applied by the caller.
+    /// scoped to `user_id` and the optional date bounds.
     async fn search(
         &self,
         user_id: &str,
         query: &str,
+        from_date: Option<NaiveDate>,
+        to_date_exclusive: Option<NaiveDate>,
         limit: usize,
     ) -> Result<Vec<SemanticHit>, AnalyzerError>;
 }
@@ -51,6 +54,8 @@ where
         &self,
         user_id: &str,
         query: &str,
+        from_date: Option<NaiveDate>,
+        to_date_exclusive: Option<NaiveDate>,
         limit: usize,
     ) -> Result<Vec<SemanticHit>, AnalyzerError> {
         let embedding = self
@@ -63,7 +68,14 @@ where
 
         let index_results = self
             .index
-            .search_for_user(user_id, &embedding, model, limit)
+            .search_for_user(
+                user_id,
+                &embedding,
+                model,
+                from_date,
+                to_date_exclusive,
+                limit,
+            )
             .await
             .map_err(|e| AnalyzerError::Internal(Box::new(e)))?;
 
@@ -252,6 +264,8 @@ mod tests {
             _user_id: &str,
             _embedding: &Embedding,
             _embedding_model: &str,
+            _from_date: Option<NaiveDate>,
+            _to_date_exclusive: Option<NaiveDate>,
             _limit: usize,
         ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
             Ok(self.results.clone())
@@ -268,7 +282,10 @@ mod tests {
         let searcher =
             DefaultSemanticJournalSearcher::new(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
 
-        let hits = searcher.search("user-1", "query", 10).await.unwrap();
+        let hits = searcher
+            .search("user-1", "query", None, None, 10)
+            .await
+            .unwrap();
 
         assert!(!hits.is_empty());
         assert_eq!(hits[0].text, "closest");
@@ -294,7 +311,10 @@ mod tests {
         let searcher =
             DefaultSemanticJournalSearcher::new(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
 
-        let hits = searcher.search("user-1", "query", 3).await.unwrap();
+        let hits = searcher
+            .search("user-1", "query", None, None, 3)
+            .await
+            .unwrap();
 
         assert_eq!(hits.len(), 3);
     }
@@ -332,7 +352,10 @@ mod tests {
         let searcher =
             DefaultSemanticJournalSearcher::new(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
 
-        let hits = searcher.search("user-1", "query", 10).await.unwrap();
+        let hits = searcher
+            .search("user-1", "query", None, None, 10)
+            .await
+            .unwrap();
 
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].text, "mine");
@@ -345,7 +368,10 @@ mod tests {
         let searcher =
             DefaultSemanticJournalSearcher::new(index, FakeEmbedder::fails(TEST_MODEL), repo);
 
-        let err = searcher.search("user-1", "query", 5).await.unwrap_err();
+        let err = searcher
+            .search("user-1", "query", None, None, 5)
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, AnalyzerError::Internal(_)));
     }
@@ -389,7 +415,10 @@ mod tests {
             repo,
         );
 
-        let hits = searcher.search("user-1", "query", 5).await.unwrap();
+        let hits = searcher
+            .search("user-1", "query", None, None, 5)
+            .await
+            .unwrap();
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].text, "kept");
