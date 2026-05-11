@@ -33,7 +33,7 @@ Key variables:
 | `FROID_EXTRACTION_WORKER_ENABLED` | No | `false` | Enable extraction reconciliation |
 | `FROID_DAILY_REVIEW_DELIVERY_ENABLED` | No | `false` | Enable scheduled daily reviews |
 | `FROID_MCP_ENABLED` | No | `false` | Expose analyzer tools over the MCP HTTP server alongside the bot |
-| `FROID_MCP_BIND` | No | `127.0.0.1:8080` | Bind address for the MCP HTTP server (used when `FROID_MCP_ENABLED=true`) |
+| `FROID_MCP_BIND` | No | `127.0.0.1:8080` | Loopback bind address for the MCP HTTP server (used when `FROID_MCP_ENABLED=true`) |
 
 ## Running Locally
 
@@ -49,7 +49,7 @@ To expose the analyzer's read-only tools over MCP (Streamable HTTP, mounted at `
 FROID_MCP_ENABLED=true cargo run -- serve
 ```
 
-The MCP server runs in the same process as the Telegram adapter and shares the SQLite pool. It requires `OPENAI_API_KEY` so the semantic search tool can build embeddings. Froid is a single-user journal, so every incoming request uses the local journal; there is no per-request authentication or user-id configuration.
+The MCP server runs in the same process as the Telegram adapter and shares the SQLite pool. It requires `OPENAI_API_KEY` so the semantic search tool can build embeddings. Froid is a single-user journal, so every incoming request uses the local journal; there is no per-request authentication or user-id configuration. For that reason, `FROID_MCP_BIND` must be a loopback address.
 
 ## Local CI Checks
 

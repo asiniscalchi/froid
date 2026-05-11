@@ -1,6 +1,7 @@
 use std::{error::Error, fmt};
 
 use async_trait::async_trait;
+use chrono::{NaiveDate, TimeZone, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
 use super::{Embedding, EmbeddingCandidate, EmbeddingSearchResult};
@@ -72,6 +73,8 @@ pub trait EmbeddingIndex<ID>: Send + Sync {
         user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
+        from_date: Option<NaiveDate>,
+        to_date_exclusive: Option<NaiveDate>,
         limit: usize,
     ) -> Result<Vec<EmbeddingSearchResult<ID>>, EmbeddingRepositoryError>;
 }
@@ -311,9 +314,11 @@ impl SqliteEmbeddingRepository {
         _user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
+        from_date: Option<NaiveDate>,
+        to_date_exclusive: Option<NaiveDate>,
         limit: usize,
     ) -> Result<Vec<EmbeddingSearchResult<i64>>, sqlx::Error> {
-        let rows = sqlx::query(
+        let mut sql = String::from(
             r#"
             SELECT
                 m.journal_entry_id,
@@ -322,15 +327,26 @@ impl SqliteEmbeddingRepository {
             JOIN journal_entry_embedding_vec v ON v.rowid = m.id
             JOIN journal_entries j ON j.id = m.journal_entry_id
             WHERE m.embedding_model = ?
-            ORDER BY distance ASC
-            LIMIT ?
             "#,
-        )
-        .bind(embedding.to_blob())
-        .bind(embedding_model)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
+        );
+        if from_date.is_some() {
+            sql.push_str(" AND j.received_at >= ?");
+        }
+        if to_date_exclusive.is_some() {
+            sql.push_str(" AND j.received_at < ?");
+        }
+        sql.push_str(" ORDER BY distance ASC LIMIT ?");
+
+        let mut query = sqlx::query(&sql)
+            .bind(embedding.to_blob())
+            .bind(embedding_model);
+        if let Some(date) = from_date {
+            query = query.bind(Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap()));
+        }
+        if let Some(date) = to_date_exclusive {
+            query = query.bind(Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap()));
+        }
+        let rows = query.bind(limit as i64).fetch_all(&self.pool).await?;
 
         Ok(rows.into_iter().map(map_search_result).collect())
     }
@@ -448,11 +464,21 @@ impl EmbeddingIndex<i64> for SqliteEmbeddingRepository {
         user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
+        from_date: Option<NaiveDate>,
+        to_date_exclusive: Option<NaiveDate>,
         limit: usize,
     ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::search_for_user(self, user_id, embedding, embedding_model, limit)
-            .await
-            .map_err(Into::into)
+        SqliteEmbeddingRepository::search_for_user(
+            self,
+            user_id,
+            embedding,
+            embedding_model,
+            from_date,
+            to_date_exclusive,
+            limit,
+        )
+        .await
+        .map_err(Into::into)
     }
 }
 
@@ -485,7 +511,7 @@ pub(crate) struct StoredEmbedding {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
+    use chrono::{NaiveDate, TimeZone, Utc};
     use sqlx::SqlitePool;
 
     use super::*;
@@ -523,6 +549,10 @@ mod tests {
 
     fn at(h: u32, m: u32) -> chrono::DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 4, 28, h, m, 0).unwrap()
+    }
+
+    fn at_date(y: i32, month: u32, day: u32, h: u32, m: u32) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(y, month, day, h, m, 0).unwrap()
     }
 
     async fn store_entry(
@@ -1003,6 +1033,59 @@ mod tests {
             .unwrap();
 
         assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_for_user_applies_date_filter_before_limit() {
+        let (journal_repository, embedding_repository) = setup().await;
+        let outside = store_entry(
+            &journal_repository,
+            "1",
+            "outside but closest",
+            at_date(2026, 4, 27, 10, 0),
+        )
+        .await;
+        let inside = store_entry(
+            &journal_repository,
+            "2",
+            "inside range",
+            at_date(2026, 4, 28, 10, 0),
+        )
+        .await;
+
+        embedding_repository
+            .store_embedding(
+                outside,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(0, 1.0),
+            )
+            .await
+            .unwrap();
+        embedding_repository
+            .store_embedding(
+                inside,
+                TEST_EMBEDDING_MODEL,
+                TEST_EMBEDDING_DIMENSIONS,
+                &directional_embedding(1, 1.0),
+            )
+            .await
+            .unwrap();
+
+        let results = embedding_repository
+            .search_for_user(
+                "user-1",
+                &directional_embedding(0, 1.0),
+                TEST_EMBEDDING_MODEL,
+                NaiveDate::from_ymd_opt(2026, 4, 28),
+                NaiveDate::from_ymd_opt(2026, 4, 29),
+                1,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, inside);
     }
 
     #[tokio::test]

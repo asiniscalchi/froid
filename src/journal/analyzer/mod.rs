@@ -1,8 +1,9 @@
 //! Read-only services exposed to MCP clients.
 //!
-//! Every method takes a [`UserContext`] populated from authenticated session
-//! state — `user_id` is never an LLM-supplied argument. Each service enforces
-//! user scoping internally and caps requested limits to a maximum.
+//! Froid is a single-user journal. Every method takes a fixed [`UserContext`]
+//! from server startup, never an LLM-supplied user id. The MCP adapter is
+//! restricted to loopback binds by configuration validation, and each service
+//! caps requested limits to a maximum.
 
 pub mod journal;
 pub mod review;

@@ -2,7 +2,8 @@
 //!
 //! Each registered analyzer tool surfaces as an MCP tool of the same name.
 //! Every incoming MCP request is scoped to a single, fixed `UserContext`
-//! configured at startup — there is no per-request authentication here.
+//! configured at startup. MCP serving is intended for local clients and the
+//! CLI rejects non-loopback bind addresses when MCP is enabled.
 
 use std::{borrow::Cow, sync::Arc};
 
