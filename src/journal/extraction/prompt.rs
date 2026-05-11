@@ -1,7 +1,6 @@
 use std::{env, error::Error, fmt, fs, path::PathBuf};
 
 pub const DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_PATH: &str = "prompts/entry_extraction_v1.md";
-pub const DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_VERSION: &str = "entry_extraction_v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryExtractionPrompt {
@@ -12,36 +11,27 @@ pub struct JournalEntryExtractionPrompt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryExtractionPromptConfig {
     pub path: PathBuf,
-    pub version: String,
 }
 
 impl Default for JournalEntryExtractionPromptConfig {
     fn default() -> Self {
         Self {
             path: PathBuf::from(DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_PATH),
-            version: DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_VERSION.to_string(),
         }
     }
 }
 
 impl JournalEntryExtractionPromptConfig {
     pub fn from_env() -> Self {
-        Self::from_values(
-            env::var("FROID_ENTRY_EXTRACTION_PROMPT_PATH").ok(),
-            env::var("FROID_ENTRY_EXTRACTION_PROMPT_VERSION").ok(),
-        )
+        Self::from_values(env::var("FROID_ENTRY_EXTRACTION_PROMPT_PATH").ok())
     }
 
-    pub(crate) fn from_values(path: Option<String>, version: Option<String>) -> Self {
-        let defaults = Self::default();
+    pub(crate) fn from_values(path: Option<String>) -> Self {
         Self {
             path: path
                 .filter(|value| !value.trim().is_empty())
                 .map(PathBuf::from)
-                .unwrap_or(defaults.path),
-            version: version
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or(defaults.version),
+                .unwrap_or_else(|| Self::default().path),
         }
     }
 
@@ -59,10 +49,14 @@ impl JournalEntryExtractionPromptConfig {
             });
         }
 
-        Ok(JournalEntryExtractionPrompt {
-            version: self.version.clone(),
-            text,
-        })
+        let version = self
+            .path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+
+        Ok(JournalEntryExtractionPrompt { version, text })
     }
 }
 

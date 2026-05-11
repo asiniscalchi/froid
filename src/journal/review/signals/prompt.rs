@@ -2,7 +2,6 @@ use std::{env, error::Error, fmt, fs, path::PathBuf};
 
 pub const DEFAULT_SIGNAL_EXTRACTION_PROMPT_PATH: &str =
     "prompts/daily_review_signal_extraction_v1.md";
-pub const DEFAULT_SIGNAL_EXTRACTION_PROMPT_VERSION: &str = "signal-extraction-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyReviewSignalPrompt {
@@ -13,36 +12,27 @@ pub struct DailyReviewSignalPrompt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyReviewSignalPromptConfig {
     pub path: PathBuf,
-    pub version: String,
 }
 
 impl Default for DailyReviewSignalPromptConfig {
     fn default() -> Self {
         Self {
             path: PathBuf::from(DEFAULT_SIGNAL_EXTRACTION_PROMPT_PATH),
-            version: DEFAULT_SIGNAL_EXTRACTION_PROMPT_VERSION.to_string(),
         }
     }
 }
 
 impl DailyReviewSignalPromptConfig {
     pub fn from_env() -> Self {
-        Self::from_values(
-            env::var("FROID_SIGNAL_EXTRACTION_PROMPT_PATH").ok(),
-            env::var("FROID_SIGNAL_EXTRACTION_PROMPT_VERSION").ok(),
-        )
+        Self::from_values(env::var("FROID_SIGNAL_EXTRACTION_PROMPT_PATH").ok())
     }
 
-    pub(crate) fn from_values(path: Option<String>, version: Option<String>) -> Self {
-        let defaults = Self::default();
+    pub(crate) fn from_values(path: Option<String>) -> Self {
         Self {
             path: path
                 .filter(|v| !v.trim().is_empty())
                 .map(PathBuf::from)
-                .unwrap_or(defaults.path),
-            version: version
-                .filter(|v| !v.trim().is_empty())
-                .unwrap_or(defaults.version),
+                .unwrap_or_else(|| Self::default().path),
         }
     }
 
@@ -60,10 +50,14 @@ impl DailyReviewSignalPromptConfig {
             });
         }
 
-        Ok(DailyReviewSignalPrompt {
-            version: self.version.clone(),
-            text,
-        })
+        let version = self
+            .path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+
+        Ok(DailyReviewSignalPrompt { version, text })
     }
 }
 
@@ -112,40 +106,32 @@ mod tests {
     }
 
     #[test]
-    fn prompt_config_uses_defaults() {
-        let config = DailyReviewSignalPromptConfig::from_values(None, None);
+    fn prompt_config_uses_default_path() {
+        let config = DailyReviewSignalPromptConfig::from_values(None);
 
         assert_eq!(
             config.path,
             PathBuf::from(DEFAULT_SIGNAL_EXTRACTION_PROMPT_PATH)
         );
-        assert_eq!(config.version, DEFAULT_SIGNAL_EXTRACTION_PROMPT_VERSION);
     }
 
     #[test]
-    fn prompt_config_accepts_overrides() {
-        let config = DailyReviewSignalPromptConfig::from_values(
-            Some("custom.md".to_string()),
-            Some("custom-v2".to_string()),
-        );
+    fn prompt_config_accepts_path_override() {
+        let config = DailyReviewSignalPromptConfig::from_values(Some("custom.md".to_string()));
 
         assert_eq!(config.path, PathBuf::from("custom.md"));
-        assert_eq!(config.version, "custom-v2");
     }
 
     #[test]
-    fn loads_prompt_file() {
+    fn loads_prompt_file_and_derives_version_from_filename() {
         let path = temp_path("load");
         fs::write(&path, "Extract signals.").unwrap();
 
-        let prompt = DailyReviewSignalPromptConfig {
-            path: path.clone(),
-            version: "v1".to_string(),
-        }
-        .load()
-        .unwrap();
+        let prompt = DailyReviewSignalPromptConfig { path: path.clone() }
+            .load()
+            .unwrap();
 
-        assert_eq!(prompt.version, "v1");
+        assert_eq!(prompt.version, path.file_stem().unwrap().to_string_lossy());
         assert_eq!(prompt.text, "Extract signals.");
 
         fs::remove_file(path).unwrap();
@@ -155,12 +141,9 @@ mod tests {
     fn missing_prompt_file_returns_error() {
         let path = temp_path("missing");
 
-        let error = DailyReviewSignalPromptConfig {
-            path: path.clone(),
-            version: "v1".to_string(),
-        }
-        .load()
-        .unwrap_err();
+        let error = DailyReviewSignalPromptConfig { path: path.clone() }
+            .load()
+            .unwrap_err();
 
         assert!(matches!(
             error,
@@ -174,12 +157,9 @@ mod tests {
         let path = temp_path("empty");
         fs::write(&path, "   \n").unwrap();
 
-        let error = DailyReviewSignalPromptConfig {
-            path: path.clone(),
-            version: "v1".to_string(),
-        }
-        .load()
-        .unwrap_err();
+        let error = DailyReviewSignalPromptConfig { path: path.clone() }
+            .load()
+            .unwrap_err();
 
         assert_eq!(
             error,

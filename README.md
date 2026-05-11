@@ -109,18 +109,14 @@ Override the OpenAI model used by each pipeline stage. Accepts any model name re
 
 ### Prompts
 
-Override the prompt file or version used by each pipeline stage. Useful for prompt development and A/B testing without recompiling.
+Override the prompt file used by each pipeline stage. The version tag recorded in the database is derived automatically from the filename stem (e.g. `entry_extraction_v2` from `entry_extraction_v2.md`).
 
-| Variable | Default | Description |
-|---|---|---|
-| `FROID_ENTRY_EXTRACTION_PROMPT_PATH` | `prompts/entry_extraction_v1.md` | Path to the entry extraction prompt file |
-| `FROID_ENTRY_EXTRACTION_PROMPT_VERSION` | `entry_extraction_v1` | Version tag recorded alongside each extraction |
-| `FROID_REVIEW_PROMPT_PATH` | `prompts/daily_review_with_entry_extractions_v1.md` | Path to the daily review prompt file |
-| `FROID_REVIEW_PROMPT_VERSION` | `daily-review-with-extractions-v1` | Version tag recorded alongside each daily review |
-| `FROID_SIGNAL_EXTRACTION_PROMPT_PATH` | `prompts/daily_review_signal_extraction_v1.md` | Path to the signal extraction prompt file |
-| `FROID_SIGNAL_EXTRACTION_PROMPT_VERSION` | `signal-extraction-v1` | Version tag recorded alongside each signal extraction |
-| `FROID_WEEK_REVIEW_PROMPT_PATH` | `prompts/weekly_review_v1.md` | Path to the weekly review prompt file |
-| `FROID_WEEK_REVIEW_PROMPT_VERSION` | `weekly-review-v1` | Version tag recorded alongside each weekly review |
+| Variable | Default |
+|---|---|
+| `FROID_ENTRY_EXTRACTION_PROMPT_PATH` | `prompts/entry_extraction_v1.md` |
+| `FROID_REVIEW_PROMPT_PATH` | `prompts/daily_review_with_entry_extractions_v1.md` |
+| `FROID_SIGNAL_EXTRACTION_PROMPT_PATH` | `prompts/daily_review_signal_extraction_v1.md` |
+| `FROID_WEEK_REVIEW_PROMPT_PATH` | `prompts/weekly_review_v1.md` |
 
 ## Contributing
 
