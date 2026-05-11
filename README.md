@@ -101,7 +101,6 @@ Override the OpenAI model used by each pipeline stage. Accepts any model name re
 | Variable | Default | Description |
 |---|---|---|
 | `FROID_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model for journal entries and daily reviews |
-| `FROID_EMBEDDING_DIMENSIONS` | `1536` | Embedding vector dimensions (must match the model) |
 | `FROID_ENTRY_EXTRACTION_MODEL` | `gpt-5-mini` | Model used for structured entry extraction |
 | `FROID_REVIEW_MODEL` | `gpt-5-mini` | Model used for daily review generation |
 | `FROID_SIGNAL_EXTRACTION_MODEL` | `gpt-5-mini` | Model used for daily review signal extraction |

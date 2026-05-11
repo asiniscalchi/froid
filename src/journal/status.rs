@@ -17,7 +17,6 @@ pub struct EmbeddingStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbeddingStatusConfig {
     pub model: String,
-    pub dimensions: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
