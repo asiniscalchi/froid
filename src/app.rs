@@ -178,7 +178,9 @@ async fn spawn_mcp_server(
             move || Ok(server.clone())
         },
         Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default().with_cancellation_token(shutdown.child_token()),
+        StreamableHttpServerConfig::default()
+            .disable_allowed_hosts()
+            .with_cancellation_token(shutdown.child_token()),
     );
 
     let router = axum::Router::new().nest_service("/mcp", service);
