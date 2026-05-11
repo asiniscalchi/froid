@@ -58,7 +58,13 @@ pub trait DailyReviewSender: Send + Sync {
         &self,
         source_conversation_id: &str,
         text: &str,
-    ) -> Result<(), String>;
+    ) -> Result<DailyReviewSendOutcome, String>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DailyReviewSendOutcome {
+    Sent,
+    Skipped,
 }
 
 #[derive(Clone)]
@@ -82,7 +88,7 @@ impl DailyReviewSender for TelegramDailyReviewSender {
         &self,
         source_conversation_id: &str,
         text: &str,
-    ) -> Result<(), String> {
+    ) -> Result<DailyReviewSendOutcome, String> {
         let chat_id = source_conversation_id
             .parse::<i64>()
             .map_err(|_| format!("invalid Telegram chat id: {source_conversation_id}"))?;
@@ -95,13 +101,13 @@ impl DailyReviewSender for TelegramDailyReviewSender {
                 allowed_user_id,
                 "skipping daily review delivery outside configured Telegram user scope"
             );
-            return Ok(());
+            return Ok(DailyReviewSendOutcome::Skipped);
         }
 
         self.bot
             .send_message(ChatId(chat_id), text.to_string())
             .await
-            .map(|_| ())
+            .map(|_| DailyReviewSendOutcome::Sent)
             .map_err(|error| error.to_string())
     }
 }
@@ -201,11 +207,14 @@ where
                 .send_daily_review(&target.source_conversation_id, &text)
                 .await
             {
-                Ok(()) => {
+                Ok(DailyReviewSendOutcome::Sent) => {
                     self.daily_reviews
                         .mark_delivered(&target.user_id, review_date)
                         .await?;
                     result.delivered += 1;
+                }
+                Ok(DailyReviewSendOutcome::Skipped) => {
+                    result.skipped += 1;
                 }
                 Err(error) => {
                     self.daily_reviews
@@ -312,14 +321,21 @@ mod tests {
     #[derive(Debug, Clone)]
     struct FakeSender {
         sent: Arc<Mutex<Vec<(String, String)>>>,
-        result: Result<(), String>,
+        result: Result<DailyReviewSendOutcome, String>,
     }
 
     impl FakeSender {
         fn succeeding() -> Self {
             Self {
                 sent: Arc::new(Mutex::new(Vec::new())),
-                result: Ok(()),
+                result: Ok(DailyReviewSendOutcome::Sent),
+            }
+        }
+
+        fn skipped() -> Self {
+            Self {
+                sent: Arc::new(Mutex::new(Vec::new())),
+                result: Ok(DailyReviewSendOutcome::Skipped),
             }
         }
 
@@ -341,7 +357,7 @@ mod tests {
             &self,
             source_conversation_id: &str,
             text: &str,
-        ) -> Result<(), String> {
+        ) -> Result<DailyReviewSendOutcome, String> {
             self.sent
                 .lock()
                 .unwrap()
@@ -578,6 +594,38 @@ mod tests {
             review.delivery_error,
             Some("telegram unavailable".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn run_once_does_not_mark_skipped_delivery_as_delivered() {
+        let sender = FakeSender::skipped();
+        let (worker, daily_reviews, journal_entries, sender) =
+            setup(FakeReviewGenerator::succeeding("generated review"), sender).await;
+        journal_entries
+            .store(&at_date("1", "first entry"))
+            .await
+            .unwrap();
+
+        let result = worker.run_once_for_date(date()).await.unwrap();
+
+        assert_eq!(
+            result,
+            DailyReviewDeliveryResult {
+                attempted: 1,
+                delivered: 0,
+                skipped: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(sender.sent().len(), 1);
+
+        let review = daily_reviews
+            .find_by_user_and_date("7", date())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(review.delivered_at, None);
+        assert_eq!(review.delivery_error, None);
     }
 
     #[tokio::test]

@@ -60,7 +60,13 @@ pub trait WeeklyReviewSender: Send + Sync {
         &self,
         source_conversation_id: &str,
         text: &str,
-    ) -> Result<(), String>;
+    ) -> Result<WeeklyReviewSendOutcome, String>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeeklyReviewSendOutcome {
+    Sent,
+    Skipped,
 }
 
 #[derive(Clone)]
@@ -84,7 +90,7 @@ impl WeeklyReviewSender for TelegramWeeklyReviewSender {
         &self,
         source_conversation_id: &str,
         text: &str,
-    ) -> Result<(), String> {
+    ) -> Result<WeeklyReviewSendOutcome, String> {
         let chat_id = source_conversation_id
             .parse::<i64>()
             .map_err(|_| format!("invalid Telegram chat id: {source_conversation_id}"))?;
@@ -97,13 +103,13 @@ impl WeeklyReviewSender for TelegramWeeklyReviewSender {
                 allowed_user_id,
                 "skipping weekly review delivery outside configured Telegram user scope"
             );
-            return Ok(());
+            return Ok(WeeklyReviewSendOutcome::Skipped);
         }
 
         self.bot
             .send_message(ChatId(chat_id), text.to_string())
             .await
-            .map(|_| ())
+            .map(|_| WeeklyReviewSendOutcome::Sent)
             .map_err(|error| error.to_string())
     }
 }
@@ -213,11 +219,14 @@ where
                 .send_weekly_review(&target.source_conversation_id, &text)
                 .await
             {
-                Ok(()) => {
+                Ok(WeeklyReviewSendOutcome::Sent) => {
                     self.weekly_reviews
                         .mark_delivered(&target.user_id, week_start)
                         .await?;
                     result.delivered += 1;
+                }
+                Ok(WeeklyReviewSendOutcome::Skipped) => {
+                    result.skipped += 1;
                 }
                 Err(error) => {
                     self.weekly_reviews
@@ -340,14 +349,21 @@ mod tests {
     #[derive(Debug, Clone)]
     struct FakeSender {
         sent: Arc<Mutex<Vec<(String, String)>>>,
-        result: Result<(), String>,
+        result: Result<WeeklyReviewSendOutcome, String>,
     }
 
     impl FakeSender {
         fn succeeding() -> Self {
             Self {
                 sent: Arc::new(Mutex::new(Vec::new())),
-                result: Ok(()),
+                result: Ok(WeeklyReviewSendOutcome::Sent),
+            }
+        }
+
+        fn skipped() -> Self {
+            Self {
+                sent: Arc::new(Mutex::new(Vec::new())),
+                result: Ok(WeeklyReviewSendOutcome::Skipped),
             }
         }
 
@@ -369,7 +385,7 @@ mod tests {
             &self,
             source_conversation_id: &str,
             text: &str,
-        ) -> Result<(), String> {
+        ) -> Result<WeeklyReviewSendOutcome, String> {
             self.sent
                 .lock()
                 .unwrap()
@@ -616,6 +632,36 @@ mod tests {
             stored.delivery_error,
             Some("telegram unavailable".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn run_once_does_not_mark_skipped_delivery_as_delivered() {
+        let sender = FakeSender::skipped();
+        let (worker, weekly_reviews, daily, journal, sender) =
+            setup(FakeWeeklyReviewGenerator::succeeding("week review"), sender).await;
+        seed_three_daily_reviews(&daily, "7").await;
+        journal.store(&entry("7", "42", "1", 0)).await.unwrap();
+
+        let result = worker.run_once_for_week(week_start()).await.unwrap();
+
+        assert_eq!(
+            result,
+            WeeklyReviewDeliveryResult {
+                attempted: 1,
+                delivered: 0,
+                skipped: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(sender.sent().len(), 1);
+
+        let stored = weekly_reviews
+            .find_by_user_and_week("7", week_start())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.delivered_at, None);
+        assert_eq!(stored.delivery_error, None);
     }
 
     #[tokio::test]
