@@ -35,7 +35,13 @@ pub fn configure_daily_review(
     pool: SqlitePool,
     config: DailyReviewRuntimeConfig,
 ) -> Result<JournalService, Box<dyn std::error::Error>> {
-    let prompt_version = config.prompt.version.clone();
+    let prompt_version = config
+        .prompt
+        .path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
     let Some(daily_review_service) = build_daily_review_service(pool, config)? else {
         return Ok(journal_service);
     };
@@ -105,7 +111,6 @@ mod tests {
                 review: ReviewConfig::default(),
                 prompt: DailyReviewPromptConfig {
                     path: PathBuf::from("missing-review-prompt.md"),
-                    version: "v1".to_string(),
                 },
             },
         )
@@ -139,7 +144,6 @@ mod tests {
                 review: ReviewConfig::default(),
                 prompt: DailyReviewPromptConfig {
                     path: PathBuf::from("missing-review-prompt.md"),
-                    version: "v1".to_string(),
                 },
             },
         )
@@ -164,7 +168,6 @@ mod tests {
                 review: ReviewConfig::default(),
                 prompt: DailyReviewPromptConfig {
                     path: PathBuf::from(DEFAULT_REVIEW_PROMPT_PATH),
-                    version: "v1".to_string(),
                 },
             },
         )
@@ -172,8 +175,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configured_prompt_version_is_used_by_review_service() {
-        let prompt_path = temp_prompt_path("configured-version");
+    async fn configured_prompt_path_allows_startup_when_review_api_key_is_configured() {
+        let prompt_path = temp_prompt_path("configured-path");
         fs::write(&prompt_path, "Prompt text").unwrap();
         let pool = setup_pool().await;
 
@@ -185,7 +188,6 @@ mod tests {
                 review: ReviewConfig::default(),
                 prompt: DailyReviewPromptConfig {
                     path: prompt_path.clone(),
-                    version: "custom-version".to_string(),
                 },
             },
         )
@@ -215,9 +217,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configured_prompt_version_is_exposed_to_status() {
-        let prompt_path = temp_prompt_path("status-configured-version");
+    async fn prompt_version_derived_from_filename_is_exposed_to_status() {
+        let prompt_path = temp_prompt_path("daily-review-v-test");
         fs::write(&prompt_path, "Prompt text").unwrap();
+        let expected_version = prompt_path
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let pool = setup_pool().await;
 
         let service = configure_daily_review(
@@ -228,7 +235,6 @@ mod tests {
                 review: ReviewConfig::default(),
                 prompt: DailyReviewPromptConfig {
                     path: prompt_path.clone(),
-                    version: "daily-review-v-test".to_string(),
                 },
             },
         )
@@ -246,7 +252,7 @@ mod tests {
             .unwrap();
 
         assert!(response.text.contains("- Generation: configured"));
-        assert!(response.text.contains("- Prompt: daily-review-v-test"));
+        assert!(response.text.contains(&format!("- Prompt: {expected_version}")));
 
         fs::remove_file(prompt_path).unwrap();
     }

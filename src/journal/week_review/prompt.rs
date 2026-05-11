@@ -1,7 +1,6 @@
 use std::{env, error::Error, fmt, fs, path::PathBuf};
 
 pub const DEFAULT_WEEK_REVIEW_PROMPT_PATH: &str = "prompts/weekly_review_v1.md";
-pub const DEFAULT_WEEK_REVIEW_PROMPT_VERSION: &str = "weekly-review-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeeklyReviewPrompt {
@@ -12,36 +11,27 @@ pub struct WeeklyReviewPrompt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeeklyReviewPromptConfig {
     pub path: PathBuf,
-    pub version: String,
 }
 
 impl Default for WeeklyReviewPromptConfig {
     fn default() -> Self {
         Self {
             path: PathBuf::from(DEFAULT_WEEK_REVIEW_PROMPT_PATH),
-            version: DEFAULT_WEEK_REVIEW_PROMPT_VERSION.to_string(),
         }
     }
 }
 
 impl WeeklyReviewPromptConfig {
     pub fn from_env() -> Self {
-        Self::from_values(
-            env::var("FROID_WEEK_REVIEW_PROMPT_PATH").ok(),
-            env::var("FROID_WEEK_REVIEW_PROMPT_VERSION").ok(),
-        )
+        Self::from_values(env::var("FROID_WEEK_REVIEW_PROMPT_PATH").ok())
     }
 
-    pub(crate) fn from_values(path: Option<String>, version: Option<String>) -> Self {
-        let defaults = Self::default();
+    pub(crate) fn from_values(path: Option<String>) -> Self {
         Self {
             path: path
                 .filter(|value| !value.trim().is_empty())
                 .map(PathBuf::from)
-                .unwrap_or(defaults.path),
-            version: version
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or(defaults.version),
+                .unwrap_or_else(|| Self::default().path),
         }
     }
 
@@ -59,10 +49,14 @@ impl WeeklyReviewPromptConfig {
             });
         }
 
-        Ok(WeeklyReviewPrompt {
-            version: self.version.clone(),
-            text,
-        })
+        let version = self
+            .path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+
+        Ok(WeeklyReviewPrompt { version, text })
     }
 }
 
@@ -101,37 +95,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prompt_config_uses_defaults() {
-        let config = WeeklyReviewPromptConfig::from_values(None, None);
+    fn prompt_config_uses_default_path() {
+        let config = WeeklyReviewPromptConfig::from_values(None);
 
         assert_eq!(config.path, PathBuf::from(DEFAULT_WEEK_REVIEW_PROMPT_PATH));
-        assert_eq!(config.version, DEFAULT_WEEK_REVIEW_PROMPT_VERSION);
     }
 
     #[test]
-    fn prompt_config_accepts_overrides() {
-        let config = WeeklyReviewPromptConfig::from_values(
-            Some("custom.md".to_string()),
-            Some("custom-version".to_string()),
-        );
+    fn prompt_config_accepts_path_override() {
+        let config = WeeklyReviewPromptConfig::from_values(Some("custom.md".to_string()));
 
         assert_eq!(config.path, PathBuf::from("custom.md"));
-        assert_eq!(config.version, "custom-version");
     }
 
     #[test]
-    fn loads_prompt_file() {
+    fn loads_prompt_file_and_derives_version_from_filename() {
         let path = temp_prompt_path("weekly-review-load");
         fs::write(&path, "# Prompt\n\nSynthesize the week.").unwrap();
 
-        let prompt = WeeklyReviewPromptConfig {
-            path: path.clone(),
-            version: "v1".to_string(),
-        }
-        .load()
-        .unwrap();
+        let prompt = WeeklyReviewPromptConfig { path: path.clone() }
+            .load()
+            .unwrap();
 
-        assert_eq!(prompt.version, "v1");
+        assert_eq!(prompt.version, path.file_stem().unwrap().to_string_lossy());
         assert_eq!(prompt.text, "# Prompt\n\nSynthesize the week.");
 
         fs::remove_file(path).unwrap();
@@ -141,12 +127,9 @@ mod tests {
     fn missing_prompt_file_returns_clear_error() {
         let path = temp_prompt_path("weekly-review-missing");
 
-        let error = WeeklyReviewPromptConfig {
-            path: path.clone(),
-            version: "v1".to_string(),
-        }
-        .load()
-        .unwrap_err();
+        let error = WeeklyReviewPromptConfig { path: path.clone() }
+            .load()
+            .unwrap_err();
 
         assert!(matches!(error, WeeklyReviewPromptError::ReadFailed { .. }));
         assert!(error.to_string().contains(path.to_str().unwrap()));
@@ -157,12 +140,9 @@ mod tests {
         let path = temp_prompt_path("weekly-review-empty");
         fs::write(&path, "  \n").unwrap();
 
-        let error = WeeklyReviewPromptConfig {
-            path: path.clone(),
-            version: "v1".to_string(),
-        }
-        .load()
-        .unwrap_err();
+        let error = WeeklyReviewPromptConfig { path: path.clone() }
+            .load()
+            .unwrap_err();
 
         assert_eq!(error, WeeklyReviewPromptError::Empty { path: path.clone() });
 
