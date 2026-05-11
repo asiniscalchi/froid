@@ -82,6 +82,47 @@ impl Tool for DailyReviewGetRangeTool {
     }
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GetDailyReviewInput {
+    /// Date of the daily review in YYYY-MM-DD form.
+    date: NaiveDate,
+}
+
+#[derive(Debug, Serialize)]
+struct DailyReviewOutput {
+    review: Option<DailyReviewItem>,
+}
+
+pub struct DailyReviewGetTool {
+    service: Arc<dyn ReviewReadService>,
+}
+
+impl DailyReviewGetTool {
+    pub fn new(service: Arc<dyn ReviewReadService>) -> Self {
+        Self { service }
+    }
+}
+
+#[async_trait]
+impl Tool for DailyReviewGetTool {
+    fn name(&self) -> &'static str {
+        "daily_review_get"
+    }
+    fn description(&self) -> &'static str {
+        "Retrieve the completed daily review for a specific date. Returns review: null when no completed review exists for that date; never generates a new review."
+    }
+    fn input_schema(&self) -> Value {
+        schema_value::<GetDailyReviewInput>()
+    }
+    async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
+        let input: GetDailyReviewInput = deserialize_input(args)?;
+        let review = self.service.get_daily_review(ctx, input.date).await?;
+        serialize_output(DailyReviewOutput {
+            review: review.map(DailyReviewItem::from),
+        })
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct WeeklyReviewItem {
     week_start: NaiveDate,
@@ -145,6 +186,50 @@ impl Tool for WeeklyReviewGetRangeTool {
     }
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GetWeeklyReviewInput {
+    /// First day of the review week (Monday) in YYYY-MM-DD form.
+    week_start: NaiveDate,
+}
+
+#[derive(Debug, Serialize)]
+struct WeeklyReviewOutput {
+    review: Option<WeeklyReviewItem>,
+}
+
+pub struct WeeklyReviewGetTool {
+    service: Arc<dyn ReviewReadService>,
+}
+
+impl WeeklyReviewGetTool {
+    pub fn new(service: Arc<dyn ReviewReadService>) -> Self {
+        Self { service }
+    }
+}
+
+#[async_trait]
+impl Tool for WeeklyReviewGetTool {
+    fn name(&self) -> &'static str {
+        "weekly_review_get"
+    }
+    fn description(&self) -> &'static str {
+        "Retrieve the completed weekly review whose week_start_date matches the given date. Returns review: null when no completed review exists; never generates a new review."
+    }
+    fn input_schema(&self) -> Value {
+        schema_value::<GetWeeklyReviewInput>()
+    }
+    async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
+        let input: GetWeeklyReviewInput = deserialize_input(args)?;
+        let review = self
+            .service
+            .get_weekly_review(ctx, input.week_start)
+            .await?;
+        serialize_output(WeeklyReviewOutput {
+            review: review.map(WeeklyReviewItem::from),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
@@ -158,8 +243,12 @@ mod tests {
     struct StubReviewService {
         last_daily: Mutex<Option<GetReviewsRequest>>,
         last_weekly: Mutex<Option<GetReviewsRequest>>,
+        last_daily_single: Mutex<Option<NaiveDate>>,
+        last_weekly_single: Mutex<Option<NaiveDate>>,
         daily_response: Mutex<Vec<DailyReviewView>>,
         weekly_response: Mutex<Vec<WeeklyReviewView>>,
+        daily_single_response: Mutex<Option<DailyReviewView>>,
+        weekly_single_response: Mutex<Option<WeeklyReviewView>>,
     }
 
     #[async_trait]
@@ -179,6 +268,22 @@ mod tests {
         ) -> Result<Vec<WeeklyReviewView>, AnalyzerError> {
             *self.last_weekly.lock().unwrap() = Some(request);
             Ok(self.weekly_response.lock().unwrap().clone())
+        }
+        async fn get_daily_review(
+            &self,
+            _ctx: &UserContext,
+            review_date: NaiveDate,
+        ) -> Result<Option<DailyReviewView>, AnalyzerError> {
+            *self.last_daily_single.lock().unwrap() = Some(review_date);
+            Ok(self.daily_single_response.lock().unwrap().clone())
+        }
+        async fn get_weekly_review(
+            &self,
+            _ctx: &UserContext,
+            week_start: NaiveDate,
+        ) -> Result<Option<WeeklyReviewView>, AnalyzerError> {
+            *self.last_weekly_single.lock().unwrap() = Some(week_start);
+            Ok(self.weekly_single_response.lock().unwrap().clone())
         }
     }
 
@@ -265,9 +370,93 @@ mod tests {
     #[test]
     fn review_tools_have_distinct_names() {
         let stub = Arc::new(StubReviewService::default());
-        let daily = DailyReviewGetRangeTool::new(stub.clone());
-        let weekly = WeeklyReviewGetRangeTool::new(stub);
-        assert_ne!(daily.name(), weekly.name());
+        let names = [
+            DailyReviewGetRangeTool::new(stub.clone()).name(),
+            DailyReviewGetTool::new(stub.clone()).name(),
+            WeeklyReviewGetRangeTool::new(stub.clone()).name(),
+            WeeklyReviewGetTool::new(stub).name(),
+        ];
+        let unique: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(unique.len(), names.len());
+    }
+
+    #[tokio::test]
+    async fn daily_review_get_returns_review_when_present() {
+        let stub = Arc::new(StubReviewService::default());
+        *stub.daily_single_response.lock().unwrap() = Some(DailyReviewView {
+            review_date: ymd(2026, 4, 28),
+            review_text: "today".into(),
+            created_at: ts(),
+        });
+        let tool = DailyReviewGetTool::new(stub.clone());
+
+        let out = tool
+            .dispatch(&ctx(), json!({"date": "2026-04-28"}))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *stub.last_daily_single.lock().unwrap(),
+            Some(ymd(2026, 4, 28))
+        );
+        assert_eq!(out["review"]["review_date"], "2026-04-28");
+        assert_eq!(out["review"]["review_text"], "today");
+    }
+
+    #[tokio::test]
+    async fn daily_review_get_returns_null_when_missing() {
+        let tool = DailyReviewGetTool::new(Arc::new(StubReviewService::default()));
+
+        let out = tool
+            .dispatch(&ctx(), json!({"date": "2026-04-28"}))
+            .await
+            .unwrap();
+
+        assert!(out["review"].is_null());
+    }
+
+    #[tokio::test]
+    async fn daily_review_get_rejects_missing_date() {
+        let tool = DailyReviewGetTool::new(Arc::new(StubReviewService::default()));
+        let err = tool.dispatch(&ctx(), json!({})).await.unwrap_err();
+        assert!(matches!(err, ToolError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn weekly_review_get_returns_review_when_present() {
+        let stub = Arc::new(StubReviewService::default());
+        *stub.weekly_single_response.lock().unwrap() = Some(WeeklyReviewView {
+            week_start: ymd(2026, 4, 20),
+            week_end: ymd(2026, 4, 26),
+            review_text: "weekly".into(),
+            created_at: ts(),
+        });
+        let tool = WeeklyReviewGetTool::new(stub.clone());
+
+        let out = tool
+            .dispatch(&ctx(), json!({"week_start": "2026-04-20"}))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *stub.last_weekly_single.lock().unwrap(),
+            Some(ymd(2026, 4, 20))
+        );
+        assert_eq!(out["review"]["week_start"], "2026-04-20");
+        assert_eq!(out["review"]["week_end"], "2026-04-26");
+        assert_eq!(out["review"]["review_text"], "weekly");
+    }
+
+    #[tokio::test]
+    async fn weekly_review_get_returns_null_when_missing() {
+        let tool = WeeklyReviewGetTool::new(Arc::new(StubReviewService::default()));
+
+        let out = tool
+            .dispatch(&ctx(), json!({"week_start": "2026-04-20"}))
+            .await
+            .unwrap();
+
+        assert!(out["review"].is_null());
     }
 
     #[test]

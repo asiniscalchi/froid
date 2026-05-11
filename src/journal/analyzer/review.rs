@@ -1,10 +1,12 @@
 use async_trait::async_trait;
-use chrono::Duration;
+use chrono::{Duration, NaiveDate};
 
 use crate::journal::review::repository::{DailyReviewRepository, DailyReviewRepositoryError};
+use crate::journal::review::{DailyReview, DailyReviewStatus};
 use crate::journal::week_review::repository::{
     WeeklyReviewRepository, WeeklyReviewRepositoryError,
 };
+use crate::journal::week_review::{WeeklyReview, WeeklyReviewStatus};
 
 use super::types::{
     AnalyzerError, DailyReviewView, GetReviewsRequest, UserContext, WeeklyReviewView,
@@ -24,6 +26,22 @@ pub trait ReviewReadService: Send + Sync {
         ctx: &UserContext,
         request: GetReviewsRequest,
     ) -> Result<Vec<WeeklyReviewView>, AnalyzerError>;
+
+    /// Return the completed daily review for `review_date`, or `None` if no
+    /// completed review exists for that date.
+    async fn get_daily_review(
+        &self,
+        ctx: &UserContext,
+        review_date: NaiveDate,
+    ) -> Result<Option<DailyReviewView>, AnalyzerError>;
+
+    /// Return the completed weekly review whose week starts on `week_start`,
+    /// or `None` if no completed review exists for that week.
+    async fn get_weekly_review(
+        &self,
+        ctx: &UserContext,
+        week_start: NaiveDate,
+    ) -> Result<Option<WeeklyReviewView>, AnalyzerError>;
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +112,65 @@ impl ReviewReadService for DefaultReviewReadService {
             })
             .collect())
     }
+
+    async fn get_daily_review(
+        &self,
+        ctx: &UserContext,
+        review_date: NaiveDate,
+    ) -> Result<Option<DailyReviewView>, AnalyzerError> {
+        let row = self
+            .daily
+            .find_by_user_and_date(&ctx.user_id, review_date)
+            .await
+            .map_err(map_daily_error)?;
+
+        Ok(row.and_then(daily_view_if_completed))
+    }
+
+    async fn get_weekly_review(
+        &self,
+        ctx: &UserContext,
+        week_start: NaiveDate,
+    ) -> Result<Option<WeeklyReviewView>, AnalyzerError> {
+        let row = self
+            .weekly
+            .find_by_user_and_week(&ctx.user_id, week_start)
+            .await
+            .map_err(map_weekly_error)?;
+
+        Ok(row.and_then(weekly_view_if_completed))
+    }
+}
+
+fn daily_view_if_completed(review: DailyReview) -> Option<DailyReviewView> {
+    if review.status != DailyReviewStatus::Completed {
+        return None;
+    }
+    let text = review.review_text.unwrap_or_default();
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(DailyReviewView {
+        review_date: review.review_date,
+        review_text: text,
+        created_at: review.created_at,
+    })
+}
+
+fn weekly_view_if_completed(review: WeeklyReview) -> Option<WeeklyReviewView> {
+    if review.status != WeeklyReviewStatus::Completed {
+        return None;
+    }
+    let text = review.review_text.unwrap_or_default();
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(WeeklyReviewView {
+        week_start: review.week_start_date,
+        week_end: review.week_start_date + Duration::days(6),
+        review_text: text,
+        created_at: review.created_at,
+    })
 }
 
 #[cfg(test)]
@@ -295,6 +372,92 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].review_text, "theirs");
+    }
+
+    #[tokio::test]
+    async fn get_daily_review_returns_completed_review_for_date() {
+        let (service, daily, _) = setup().await;
+        daily
+            .upsert_completed("user-1", ymd(2026, 4, 28), "today", "m", "v1")
+            .await
+            .unwrap();
+
+        let result = service
+            .get_daily_review(&ctx(), ymd(2026, 4, 28))
+            .await
+            .unwrap()
+            .expect("completed review present");
+
+        assert_eq!(result.review_date, ymd(2026, 4, 28));
+        assert_eq!(result.review_text, "today");
+    }
+
+    #[tokio::test]
+    async fn get_daily_review_returns_none_when_missing() {
+        let (service, _, _) = setup().await;
+        let result = service
+            .get_daily_review(&ctx(), ymd(2026, 4, 28))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_daily_review_returns_none_when_failed() {
+        let (service, daily, _) = setup().await;
+        daily
+            .upsert_failed("user-1", ymd(2026, 4, 28), "m", "v1", "boom")
+            .await
+            .unwrap();
+
+        let result = service
+            .get_daily_review(&ctx(), ymd(2026, 4, 28))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_weekly_review_returns_completed_review_for_week() {
+        let (service, _, weekly) = setup().await;
+        let w = ymd(2026, 4, 20);
+        weekly
+            .upsert_completed("user-1", w, "weekly", "m", "v1", "{}")
+            .await
+            .unwrap();
+
+        let result = service
+            .get_weekly_review(&ctx(), w)
+            .await
+            .unwrap()
+            .expect("completed review present");
+
+        assert_eq!(result.week_start, w);
+        assert_eq!(result.week_end, ymd(2026, 4, 26));
+        assert_eq!(result.review_text, "weekly");
+    }
+
+    #[tokio::test]
+    async fn get_weekly_review_returns_none_when_missing() {
+        let (service, _, _) = setup().await;
+        let result = service
+            .get_weekly_review(&ctx(), ymd(2026, 4, 20))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_weekly_review_returns_none_when_failed() {
+        let (service, _, weekly) = setup().await;
+        let w = ymd(2026, 4, 20);
+        weekly
+            .upsert_failed("user-1", w, "m", "v1", "boom")
+            .await
+            .unwrap();
+
+        let result = service.get_weekly_review(&ctx(), w).await.unwrap();
+        assert!(result.is_none());
     }
 
     #[tokio::test]
