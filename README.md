@@ -39,7 +39,7 @@ docker run --env-file .env -v ./data:/app/data ghcr.io/asiniscalchi/froid:latest
 
 ## Exposing tools over MCP
 
-Set `FROID_MCP_ENABLED=true` to expose the analyzer's read-only tools over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. The MCP server runs alongside the Telegram bot in the same process. Froid is a single-user journal; MCP bind addresses must be loopback.
+Set `FROID_MCP_ENABLED=true` to expose the analyzer's read-only tools over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. The MCP server runs alongside the Telegram bot in the same process. Froid has no MCP authentication, so restrict access at the network level — use the default loopback bind for local use, or a Docker internal network when running in Compose.
 
 ```bash
 FROID_MCP_ENABLED=true cargo run -- serve
@@ -92,7 +92,7 @@ All workers are disabled by default and require `OPENAI_API_KEY`.
 | Variable | Default | Description |
 |---|---|---|
 | `FROID_MCP_ENABLED` | `false` | Enable the MCP Streamable HTTP server |
-| `FROID_MCP_BIND` | `127.0.0.1:8080` | Bind address; must be a loopback address |
+| `FROID_MCP_BIND` | `127.0.0.1:8080` | Bind address (e.g. `0.0.0.0:8080` for Docker Compose) |
 
 ### Models
 
