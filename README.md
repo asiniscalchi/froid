@@ -41,7 +41,7 @@ See the [project wiki](https://github.com/asiniscalchi/froid/wiki) for the full 
 
 ## Exposing tools over MCP
 
-Set `FROID_MCP_ENABLED=true` (and optionally `FROID_MCP_BIND`) when running `cargo run -- serve` to expose the analyzer's read-only tools (recent entries, text and semantic search, daily and weekly reviews, signals) over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. The MCP server runs alongside the Telegram bot in the same process. Froid is a single-user journal, so MCP requests use the local journal without a user-id argument. See [CONTRIBUTING.md](CONTRIBUTING.md#running-locally) for details.
+Set `FROID_MCP_ENABLED=true` (and optionally `FROID_MCP_BIND`) when running `cargo run -- serve` to expose the analyzer's read-only tools (recent entries, text and semantic search, daily and weekly reviews, signals) over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. The MCP server runs alongside the Telegram bot in the same process. Froid is a single-user journal, so MCP requests use the local journal without a user-id argument; MCP bind addresses must be loopback. See [CONTRIBUTING.md](CONTRIBUTING.md#running-locally) for details.
 
 ## Contributing
 
