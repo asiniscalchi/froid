@@ -7,7 +7,7 @@ use rig::{
     providers::openai::{self, Client as OpenAiClient},
 };
 
-use super::{Embedder, EmbedderError, Embedding, EmbeddingConfig};
+use super::{Embedder, EmbedderError, Embedding, EmbeddingConfig, SUPPORTED_EMBEDDING_DIMENSIONS};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RigOpenAiEmbedderError {
@@ -55,7 +55,7 @@ impl RigOpenAiProvider {
     fn new(config: &EmbeddingConfig, api_key: &str) -> Result<Self, RigOpenAiEmbedderError> {
         let client = OpenAiClient::new(api_key)
             .map_err(|error| RigOpenAiEmbedderError::Client(error.to_string()))?;
-        let embedding_model = client.embedding_model_with_ndims(&config.model, config.dimensions);
+        let embedding_model = client.embedding_model_with_ndims(&config.model, SUPPORTED_EMBEDDING_DIMENSIONS);
 
         Ok(Self { embedding_model })
     }
@@ -122,7 +122,7 @@ where
     }
 
     fn dimensions(&self) -> usize {
-        self.config.dimensions
+        SUPPORTED_EMBEDDING_DIMENSIONS
     }
 
     async fn embed(&self, text: &str) -> Result<Embedding, EmbedderError> {
@@ -132,7 +132,7 @@ where
             .await
             .map_err(|error| EmbedderError::Provider(error.to_string()))?;
 
-        Embedding::new(values, self.config.dimensions)
+        Embedding::new(values, SUPPORTED_EMBEDDING_DIMENSIONS)
     }
 }
 

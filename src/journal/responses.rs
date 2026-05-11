@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 
 use super::entry::{JournalEntry, JournalStats};
 use super::review::DailyReview;
+use super::embedding::SUPPORTED_EMBEDDING_DIMENSIONS;
 use super::status::{
     DailyReviewDeliveryStatus, DailyReviewGenerationStatus, DailyReviewStatus, EmbeddingStatus,
     SemanticSearchStatus, StatusReport,
@@ -128,7 +129,7 @@ fn format_embedding_status(status: &EmbeddingStatus) -> String {
     let dimensions = status
         .config
         .as_ref()
-        .map(|config| config.dimensions.to_string())
+        .map(|_| SUPPORTED_EMBEDDING_DIMENSIONS.to_string())
         .unwrap_or_else(|| "unavailable".to_string());
     let pending_embeddings = status
         .pending_embeddings

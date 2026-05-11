@@ -67,7 +67,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
 
     sqlx::migrate!().run(&pool).await?;
 
-    let embedding_config = EmbeddingConfig::from_env().ok();
+    let embedding_config = Some(EmbeddingConfig::from_env());
     let daily_review_config = DailyReviewRuntimeConfig::from_env();
     let weekly_review_config = WeeklyReviewRuntimeConfig::from_env();
     let entry_extraction_config = JournalEntryExtractionRuntimeConfig::from_env();
@@ -527,10 +527,7 @@ fn build_journal_service(
             crate::journal::review::embedding_repository::SqliteDailyReviewEmbeddingRepository::new(
                 pool.clone(),
             );
-        let status_config = EmbeddingStatusConfig {
-            model: cfg.model,
-            dimensions: cfg.dimensions,
-        };
+        let status_config = EmbeddingStatusConfig { model: cfg.model };
         let search = SemanticSearchService::new(
             embedding_repository.clone(),
             Arc::clone(&embedder),

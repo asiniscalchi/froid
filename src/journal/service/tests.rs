@@ -613,7 +613,6 @@ async fn status_reports_configured_embedding_status_and_single_user_pending_coun
     let service = service
         .with_embedding_status_config(EmbeddingStatusConfig {
             model: TEST_MODEL.to_string(),
-            dimensions: SUPPORTED_EMBEDDING_DIMENSIONS,
         })
         .with_pending_embedding_counter(index.clone());
     repo.store(&incoming("1", "embedded entry", at(10, 0)))
@@ -668,7 +667,6 @@ async fn status_reports_pending_embeddings_unavailable_when_counter_fails() {
     let service = service
         .with_embedding_status_config(EmbeddingStatusConfig {
             model: TEST_MODEL.to_string(),
-            dimensions: SUPPORTED_EMBEDDING_DIMENSIONS,
         })
         .with_pending_embedding_counter(FailingPendingEmbeddingCounter);
 
@@ -721,7 +719,6 @@ async fn status_does_not_expose_secrets_or_raw_internal_errors() {
     let service = service
         .with_embedding_status_config(EmbeddingStatusConfig {
             model: TEST_MODEL.to_string(),
-            dimensions: SUPPORTED_EMBEDDING_DIMENSIONS,
         })
         .with_pending_embedding_counter(FailingPendingEmbeddingCounter);
 
