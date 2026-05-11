@@ -255,16 +255,6 @@ impl Cli {
             bind: self.mcp_bind,
         };
 
-        if mcp_server.enabled && !mcp_server.bind.ip().is_loopback() {
-            return Err(clap::Error::raw(
-                clap::error::ErrorKind::ValueValidation,
-                format!(
-                    "FROID_MCP_BIND must be a loopback address when MCP is enabled; got {}",
-                    mcp_server.bind
-                ),
-            ));
-        }
-
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
             telegram_allowed_user_id: self.telegram_allowed_user_id,
@@ -663,31 +653,13 @@ mod tests {
             "--mcp-enabled",
             "true",
             "--mcp-bind",
-            "127.0.0.1:9000",
+            "0.0.0.0:9000",
         ]);
 
         let config = cli.serve_config().unwrap();
 
         assert!(config.mcp_server.enabled);
-        assert_eq!(config.mcp_server.bind.to_string(), "127.0.0.1:9000");
-    }
-
-    #[test]
-    fn serve_config_rejects_non_loopback_mcp_bind_when_enabled() {
-        let cli = Cli::parse_from([
-            "froid",
-            "--telegram-bot-token",
-            "token",
-            "--mcp-enabled",
-            "true",
-            "--mcp-bind",
-            "0.0.0.0:9000",
-        ]);
-
-        let error = cli.serve_config().unwrap_err();
-
-        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(error.to_string().contains("loopback"));
+        assert_eq!(config.mcp_server.bind.to_string(), "0.0.0.0:9000");
     }
 
     #[test]
