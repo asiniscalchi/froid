@@ -252,7 +252,11 @@ mod tests {
             .unwrap();
 
         assert!(response.text.contains("- Generation: configured"));
-        assert!(response.text.contains(&format!("- Prompt: {expected_version}")));
+        assert!(
+            response
+                .text
+                .contains(&format!("- Prompt: {expected_version}"))
+        );
 
         fs::remove_file(prompt_path).unwrap();
     }
