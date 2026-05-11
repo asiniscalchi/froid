@@ -55,7 +55,8 @@ impl RigOpenAiProvider {
     fn new(config: &EmbeddingConfig, api_key: &str) -> Result<Self, RigOpenAiEmbedderError> {
         let client = OpenAiClient::new(api_key)
             .map_err(|error| RigOpenAiEmbedderError::Client(error.to_string()))?;
-        let embedding_model = client.embedding_model_with_ndims(&config.model, SUPPORTED_EMBEDDING_DIMENSIONS);
+        let embedding_model =
+            client.embedding_model_with_ndims(&config.model, SUPPORTED_EMBEDDING_DIMENSIONS);
 
         Ok(Self { embedding_model })
     }

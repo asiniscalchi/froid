@@ -1,8 +1,8 @@
 use chrono::NaiveDate;
 
+use super::embedding::SUPPORTED_EMBEDDING_DIMENSIONS;
 use super::entry::{JournalEntry, JournalStats};
 use super::review::DailyReview;
-use super::embedding::SUPPORTED_EMBEDDING_DIMENSIONS;
 use super::status::{
     DailyReviewDeliveryStatus, DailyReviewGenerationStatus, DailyReviewStatus, EmbeddingStatus,
     SemanticSearchStatus, StatusReport,
