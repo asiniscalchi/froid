@@ -158,8 +158,12 @@ mod tests {
     struct StubReviewService {
         last_daily: Mutex<Option<GetReviewsRequest>>,
         last_weekly: Mutex<Option<GetReviewsRequest>>,
+        last_daily_single: Mutex<Option<NaiveDate>>,
+        last_weekly_single: Mutex<Option<NaiveDate>>,
         daily_response: Mutex<Vec<DailyReviewView>>,
         weekly_response: Mutex<Vec<WeeklyReviewView>>,
+        daily_single_response: Mutex<Option<DailyReviewView>>,
+        weekly_single_response: Mutex<Option<WeeklyReviewView>>,
     }
 
     #[async_trait]
@@ -179,6 +183,22 @@ mod tests {
         ) -> Result<Vec<WeeklyReviewView>, AnalyzerError> {
             *self.last_weekly.lock().unwrap() = Some(request);
             Ok(self.weekly_response.lock().unwrap().clone())
+        }
+        async fn get_daily_review(
+            &self,
+            _ctx: &UserContext,
+            review_date: NaiveDate,
+        ) -> Result<Option<DailyReviewView>, AnalyzerError> {
+            *self.last_daily_single.lock().unwrap() = Some(review_date);
+            Ok(self.daily_single_response.lock().unwrap().clone())
+        }
+        async fn get_weekly_review(
+            &self,
+            _ctx: &UserContext,
+            week_start: NaiveDate,
+        ) -> Result<Option<WeeklyReviewView>, AnalyzerError> {
+            *self.last_weekly_single.lock().unwrap() = Some(week_start);
+            Ok(self.weekly_single_response.lock().unwrap().clone())
         }
     }
 

@@ -30,6 +30,14 @@ pub trait JournalReadService: Send + Sync {
         ctx: &UserContext,
         request: SearchSemanticRequest,
     ) -> Result<Vec<SemanticHit>, AnalyzerError>;
+
+    /// Return the journal entry with the given id, or `None` if it does not
+    /// exist (or does not belong to this user).
+    async fn get_by_id(
+        &self,
+        ctx: &UserContext,
+        id: i64,
+    ) -> Result<Option<JournalEntryView>, AnalyzerError>;
 }
 
 #[derive(Clone)]
@@ -135,6 +143,22 @@ impl JournalReadService for DefaultJournalReadService {
             .await?;
 
         Ok(hits)
+    }
+
+    async fn get_by_id(
+        &self,
+        ctx: &UserContext,
+        id: i64,
+    ) -> Result<Option<JournalEntryView>, AnalyzerError> {
+        let mut rows = self
+            .repository
+            .fetch_by_ids(&ctx.user_id, &[id])
+            .await
+            .map_err(map_storage_error)?;
+
+        Ok(rows.pop().map(|(_, entry)| {
+            JournalEntryView::from(crate::journal::entry::StoredJournalEntry { id, entry })
+        }))
     }
 }
 
@@ -378,6 +402,32 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].text, "theirs");
         assert_eq!(result[1].text, "mine");
+    }
+
+    #[tokio::test]
+    async fn get_by_id_returns_entry_when_present() {
+        let (service, repo) = setup().await;
+        let id = repo
+            .store(&message("1", "hello", at(2026, 4, 28, 10, 0)))
+            .await
+            .unwrap()
+            .expect("entry stored");
+
+        let result = service
+            .get_by_id(&ctx(), id)
+            .await
+            .unwrap()
+            .expect("entry present");
+
+        assert_eq!(result.id, id);
+        assert_eq!(result.text, "hello");
+    }
+
+    #[tokio::test]
+    async fn get_by_id_returns_none_when_missing() {
+        let (service, _) = setup().await;
+        let result = service.get_by_id(&ctx(), 9_999).await.unwrap();
+        assert!(result.is_none());
     }
 
     #[tokio::test]

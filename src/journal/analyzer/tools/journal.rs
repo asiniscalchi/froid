@@ -266,6 +266,13 @@ mod tests {
             *self.last_semantic.lock().unwrap() = Some(request);
             Ok(self.semantic_response.lock().unwrap().clone())
         }
+        async fn get_by_id(
+            &self,
+            _ctx: &UserContext,
+            _id: i64,
+        ) -> Result<Option<JournalEntryView>, AnalyzerError> {
+            Ok(None)
+        }
     }
 
     fn ctx() -> UserContext {
@@ -358,6 +365,13 @@ mod tests {
                 _: &UserContext,
                 _: SearchSemanticRequest,
             ) -> Result<Vec<SemanticHit>, AnalyzerError> {
+                unreachable!()
+            }
+            async fn get_by_id(
+                &self,
+                _: &UserContext,
+                _: i64,
+            ) -> Result<Option<JournalEntryView>, AnalyzerError> {
                 unreachable!()
             }
         }
