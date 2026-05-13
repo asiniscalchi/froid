@@ -7,7 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rmcp::{
     ServiceExt,
-    model::CallToolRequestParams,
+    model::{CallToolRequestParams, GetPromptRequestParams, ReadResourceRequestParams},
     transport::{
         StreamableHttpClientTransport, StreamableHttpServerConfig,
         streamable_http_server::{
@@ -23,7 +23,7 @@ use froid::{
     adapters::mcp::AnalyzerMcpServer,
     database,
     journal::analyzer::{
-        SemanticJournalSearcher, UserContext, build_analyzer_tool_registry,
+        SemanticJournalSearcher, UserContext, build_analyzer_mcp_components,
         types::{AnalyzerError, SemanticHit},
     },
 };
@@ -54,8 +54,8 @@ async fn fresh_pool() -> SqlitePool {
 #[tokio::test]
 async fn lists_and_calls_analyzer_tools_over_streamable_http() {
     let pool = fresh_pool().await;
-    let registry = build_analyzer_tool_registry(pool, Arc::new(StubSemanticSearcher));
-    let server = AnalyzerMcpServer::new(registry, UserContext::new("test-user"));
+    let components = build_analyzer_mcp_components(pool, Arc::new(StubSemanticSearcher));
+    let server = AnalyzerMcpServer::new(components, UserContext::new("test-user"));
 
     let cancel = CancellationToken::new();
     let service = StreamableHttpService::new(
@@ -93,12 +93,9 @@ async fn lists_and_calls_analyzer_tools_over_streamable_http() {
     names.sort();
     let mut expected = [
         "journal_get_recent",
-        "journal_get",
         "journal_search_text",
         "journal_search_semantic",
-        "daily_review_get",
         "daily_review_get_range",
-        "weekly_review_get",
         "weekly_review_get_range",
         "signals_search",
     ];
@@ -116,6 +113,40 @@ async fn lists_and_calls_analyzer_tools_over_streamable_http() {
         .structured_content
         .expect("journal_get_recent returns structured content");
     assert!(structured["entries"].is_array());
+
+    let templates = client
+        .list_all_resource_templates()
+        .await
+        .expect("list resource templates ok");
+    let mut template_names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
+    template_names.sort();
+    assert_eq!(
+        template_names,
+        ["daily_review", "journal_entry", "weekly_review"]
+    );
+
+    let read_err = client
+        .read_resource(ReadResourceRequestParams::new("journal://entry/999"))
+        .await
+        .expect_err("missing entry should fail");
+    let read_err_string = read_err.to_string();
+    assert!(
+        read_err_string.contains("no journal entry with id 999"),
+        "unexpected error message: {read_err_string}"
+    );
+
+    let prompts = client.list_all_prompts().await.expect("list prompts ok");
+    let mut prompt_names: Vec<&str> = prompts.iter().map(|p| p.name.as_str()).collect();
+    prompt_names.sort();
+    assert_eq!(prompt_names, ["signals_recap", "summarize_week"]);
+
+    let mut prompt_args = serde_json::Map::new();
+    prompt_args.insert("week_start".to_string(), json!("2026-04-20"));
+    let prompt_result = client
+        .get_prompt(GetPromptRequestParams::new("summarize_week").with_arguments(prompt_args))
+        .await
+        .expect("get_prompt ok");
+    assert_eq!(prompt_result.messages.len(), 1);
 
     client.cancel().await.expect("client cancel");
     cancel.cancel();

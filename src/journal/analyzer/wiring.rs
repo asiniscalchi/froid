@@ -13,23 +13,31 @@ use super::semantic::SemanticJournalSearcher;
 use super::signal::{DefaultSignalReadService, SignalReadService};
 use super::tools::{
     ToolRegistry,
-    journal::{
-        JournalGetRecentTool, JournalGetTool, JournalSearchSemanticTool, JournalSearchTextTool,
-    },
-    review::{
-        DailyReviewGetRangeTool, DailyReviewGetTool, WeeklyReviewGetRangeTool, WeeklyReviewGetTool,
-    },
+    journal::{JournalGetRecentTool, JournalSearchSemanticTool, JournalSearchTextTool},
+    review::{DailyReviewGetRangeTool, WeeklyReviewGetRangeTool},
     signal::SignalsSearchTool,
 };
 
-/// Build a [`ToolRegistry`] populated with every analyzer tool, using fresh
-/// service instances backed by `pool`. The semantic journal searcher is
-/// injected so the caller controls how the embedder is constructed (and so
-/// tests can supply a stub without needing an OpenAI API key).
-pub fn build_analyzer_tool_registry(
+/// Bundle of read services and tool registry used to drive the MCP adapter.
+///
+/// The MCP adapter needs the tool registry to serve `tools/*` requests and the
+/// journal / review services to serve `resources/*` requests, so they are
+/// constructed together and exposed as a single value.
+#[derive(Clone)]
+pub struct AnalyzerMcpComponents {
+    pub registry: Arc<ToolRegistry>,
+    pub journal_service: Arc<dyn JournalReadService>,
+    pub review_service: Arc<dyn ReviewReadService>,
+}
+
+/// Build the analyzer tool registry and the underlying read services backed
+/// by `pool`. The semantic journal searcher is injected so the caller controls
+/// how the embedder is constructed (and so tests can supply a stub without
+/// needing an OpenAI API key).
+pub fn build_analyzer_mcp_components(
     pool: SqlitePool,
     semantic: Arc<dyn SemanticJournalSearcher>,
-) -> Arc<ToolRegistry> {
+) -> AnalyzerMcpComponents {
     let journal_repo = JournalRepository::new(pool.clone());
     let daily_repo = DailyReviewRepository::new(pool.clone());
     let weekly_repo = WeeklyReviewRepository::new(pool.clone());
@@ -44,20 +52,25 @@ pub fn build_analyzer_tool_registry(
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(JournalGetRecentTool::new(journal_service.clone())));
-    registry.register(Arc::new(JournalGetTool::new(journal_service.clone())));
     registry.register(Arc::new(JournalSearchTextTool::new(
         journal_service.clone(),
     )));
-    registry.register(Arc::new(JournalSearchSemanticTool::new(journal_service)));
-    registry.register(Arc::new(DailyReviewGetTool::new(review_service.clone())));
+    registry.register(Arc::new(JournalSearchSemanticTool::new(
+        journal_service.clone(),
+    )));
     registry.register(Arc::new(DailyReviewGetRangeTool::new(
         review_service.clone(),
     )));
-    registry.register(Arc::new(WeeklyReviewGetTool::new(review_service.clone())));
-    registry.register(Arc::new(WeeklyReviewGetRangeTool::new(review_service)));
+    registry.register(Arc::new(WeeklyReviewGetRangeTool::new(
+        review_service.clone(),
+    )));
     registry.register(Arc::new(SignalsSearchTool::new(signal_service)));
 
-    Arc::new(registry)
+    AnalyzerMcpComponents {
+        registry: Arc::new(registry),
+        journal_service,
+        review_service,
+    }
 }
 
 #[cfg(test)]
@@ -95,19 +108,17 @@ mod tests {
     #[tokio::test]
     async fn registers_every_analyzer_tool() {
         let pool = pool().await;
-        let registry = build_analyzer_tool_registry(pool, Arc::new(StubSemanticSearcher));
+        let components = build_analyzer_mcp_components(pool, Arc::new(StubSemanticSearcher));
+        let registry = components.registry;
 
         let names: Vec<&str> = registry.tools().iter().map(|t| t.name()).collect();
 
-        assert_eq!(names.len(), 9);
+        assert_eq!(names.len(), 6);
         for expected in [
             "journal_get_recent",
-            "journal_get",
             "journal_search_text",
             "journal_search_semantic",
-            "daily_review_get",
             "daily_review_get_range",
-            "weekly_review_get",
             "weekly_review_get_range",
             "signals_search",
         ] {
@@ -121,10 +132,11 @@ mod tests {
     #[tokio::test]
     async fn registered_tools_are_dispatchable_by_name() {
         let pool = pool().await;
-        let registry = build_analyzer_tool_registry(pool, Arc::new(StubSemanticSearcher));
+        let components = build_analyzer_mcp_components(pool, Arc::new(StubSemanticSearcher));
         let ctx = UserContext::new("u");
 
-        let result = registry
+        let result = components
+            .registry
             .dispatch("journal_get_recent", &ctx, serde_json::json!({"limit": 5}))
             .await
             .unwrap();

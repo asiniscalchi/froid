@@ -16,7 +16,7 @@ use crate::{
     cli::ServeConfig,
     database,
     journal::{
-        analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_tool_registry},
+        analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_mcp_components},
         embedding::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
         },
@@ -168,9 +168,9 @@ async fn spawn_mcp_server(
         JournalRepository::new(pool.clone()),
     ));
 
-    let registry = build_analyzer_tool_registry(pool.clone(), semantic);
+    let components = build_analyzer_mcp_components(pool.clone(), semantic);
     let user = UserContext::new(crate::messages::SINGLE_USER_ID);
-    let server = AnalyzerMcpServer::new(registry, user);
+    let server = AnalyzerMcpServer::new(components, user);
 
     let service = StreamableHttpService::new(
         {

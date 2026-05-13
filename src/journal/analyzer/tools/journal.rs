@@ -88,47 +88,6 @@ impl Tool for JournalGetRecentTool {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct GetByIdInput {
-    /// Numeric id of the journal entry to retrieve.
-    id: i64,
-}
-
-#[derive(Debug, Serialize)]
-struct JournalEntryOutput {
-    entry: Option<JournalEntryItem>,
-}
-
-pub struct JournalGetTool {
-    service: Arc<dyn JournalReadService>,
-}
-
-impl JournalGetTool {
-    pub fn new(service: Arc<dyn JournalReadService>) -> Self {
-        Self { service }
-    }
-}
-
-#[async_trait]
-impl Tool for JournalGetTool {
-    fn name(&self) -> &'static str {
-        "journal_get"
-    }
-    fn description(&self) -> &'static str {
-        "Retrieve a single journal entry by its numeric id. Returns entry: null when no such entry exists."
-    }
-    fn input_schema(&self) -> Value {
-        schema_value::<GetByIdInput>()
-    }
-    async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
-        let input: GetByIdInput = deserialize_input(args)?;
-        let entry = self.service.get_by_id(ctx, input.id).await?;
-        serialize_output(JournalEntryOutput {
-            entry: entry.map(JournalEntryItem::from),
-        })
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 struct SearchTextInput {
     /// Free-text query to match (case-insensitive substring on raw entry text).
     query: String,
@@ -430,68 +389,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn journal_get_returns_entry_field_when_service_returns_some() {
-        struct OneEntry;
-        #[async_trait]
-        impl JournalReadService for OneEntry {
-            async fn get_recent(
-                &self,
-                _: &UserContext,
-                _: GetRecentRequest,
-            ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
-                unreachable!()
-            }
-            async fn search_text(
-                &self,
-                _: &UserContext,
-                _: SearchTextRequest,
-            ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
-                unreachable!()
-            }
-            async fn search_semantic(
-                &self,
-                _: &UserContext,
-                _: SearchSemanticRequest,
-            ) -> Result<Vec<SemanticHit>, AnalyzerError> {
-                unreachable!()
-            }
-            async fn get_by_id(
-                &self,
-                _: &UserContext,
-                id: i64,
-            ) -> Result<Option<JournalEntryView>, AnalyzerError> {
-                Ok(Some(JournalEntryView {
-                    id,
-                    received_at: at(10),
-                    text: "found".into(),
-                }))
-            }
-        }
-        let tool = JournalGetTool::new(Arc::new(OneEntry));
-
-        let out = tool.dispatch(&ctx(), json!({"id": 7})).await.unwrap();
-
-        assert_eq!(out["entry"]["id"], 7);
-        assert_eq!(out["entry"]["text"], "found");
-    }
-
-    #[tokio::test]
-    async fn journal_get_returns_null_entry_when_service_returns_none() {
-        let tool = JournalGetTool::new(Arc::new(StubJournalService::default()));
-
-        let out = tool.dispatch(&ctx(), json!({"id": 999})).await.unwrap();
-
-        assert!(out["entry"].is_null());
-    }
-
-    #[tokio::test]
-    async fn journal_get_rejects_missing_id() {
-        let tool = JournalGetTool::new(Arc::new(StubJournalService::default()));
-        let err = tool.dispatch(&ctx(), json!({})).await.unwrap_err();
-        assert!(matches!(err, ToolError::InvalidInput(_)));
-    }
-
-    #[tokio::test]
     async fn journal_search_text_dispatches_request() {
         let stub = Arc::new(StubJournalService::default());
         *stub.text_response.lock().unwrap() = vec![JournalEntryView {
@@ -541,7 +438,6 @@ mod tests {
         let stub = Arc::new(StubJournalService::default());
         for schema in [
             JournalGetRecentTool::new(stub.clone()).input_schema(),
-            JournalGetTool::new(stub.clone()).input_schema(),
             JournalSearchTextTool::new(stub.clone()).input_schema(),
             JournalSearchSemanticTool::new(stub).input_schema(),
         ] {
@@ -555,13 +451,12 @@ mod tests {
         let stub = Arc::new(StubJournalService::default());
         let names: Vec<_> = [
             JournalGetRecentTool::new(stub.clone()).name(),
-            JournalGetTool::new(stub.clone()).name(),
             JournalSearchTextTool::new(stub.clone()).name(),
             JournalSearchSemanticTool::new(stub).name(),
         ]
         .into_iter()
         .collect();
-        assert_eq!(names.len(), 4);
+        assert_eq!(names.len(), 3);
         assert!(names.iter().all(|n| !n.is_empty()));
         let unique: std::collections::HashSet<_> = names.iter().collect();
         assert_eq!(unique.len(), names.len());
