@@ -16,4 +16,4 @@ pub mod wiring;
 
 pub use semantic::{DefaultSemanticJournalSearcher, SemanticJournalSearcher};
 pub use types::UserContext;
-pub use wiring::build_analyzer_tool_registry;
+pub use wiring::{AnalyzerMcpComponents, build_analyzer_mcp_components};

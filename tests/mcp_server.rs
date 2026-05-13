@@ -7,7 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rmcp::{
     ServiceExt,
-    model::CallToolRequestParams,
+    model::{CallToolRequestParams, ReadResourceRequestParams},
     transport::{
         StreamableHttpClientTransport, StreamableHttpServerConfig,
         streamable_http_server::{
@@ -23,7 +23,7 @@ use froid::{
     adapters::mcp::AnalyzerMcpServer,
     database,
     journal::analyzer::{
-        SemanticJournalSearcher, UserContext, build_analyzer_tool_registry,
+        SemanticJournalSearcher, UserContext, build_analyzer_mcp_components,
         types::{AnalyzerError, SemanticHit},
     },
 };
@@ -54,8 +54,8 @@ async fn fresh_pool() -> SqlitePool {
 #[tokio::test]
 async fn lists_and_calls_analyzer_tools_over_streamable_http() {
     let pool = fresh_pool().await;
-    let registry = build_analyzer_tool_registry(pool, Arc::new(StubSemanticSearcher));
-    let server = AnalyzerMcpServer::new(registry, UserContext::new("test-user"));
+    let components = build_analyzer_mcp_components(pool, Arc::new(StubSemanticSearcher));
+    let server = AnalyzerMcpServer::new(components, UserContext::new("test-user"));
 
     let cancel = CancellationToken::new();
     let service = StreamableHttpService::new(
@@ -116,6 +116,27 @@ async fn lists_and_calls_analyzer_tools_over_streamable_http() {
         .structured_content
         .expect("journal_get_recent returns structured content");
     assert!(structured["entries"].is_array());
+
+    let templates = client
+        .list_all_resource_templates()
+        .await
+        .expect("list resource templates ok");
+    let mut template_names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
+    template_names.sort();
+    assert_eq!(
+        template_names,
+        ["daily_review", "journal_entry", "weekly_review"]
+    );
+
+    let read_err = client
+        .read_resource(ReadResourceRequestParams::new("journal://entry/999"))
+        .await
+        .expect_err("missing entry should fail");
+    let read_err_string = read_err.to_string();
+    assert!(
+        read_err_string.contains("no journal entry with id 999"),
+        "unexpected error message: {read_err_string}"
+    );
 
     client.cancel().await.expect("client cancel");
     cancel.cancel();
