@@ -15,10 +15,11 @@ use chrono::NaiveDate;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        Annotated, CallToolRequestParams, CallToolResult, ErrorCode, Implementation,
-        ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
-        RawResourceTemplate, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
-        ServerCapabilities, ServerInfo, Tool,
+        Annotated, CallToolRequestParams, CallToolResult, ErrorCode, GetPromptRequestParams,
+        GetPromptResult, Implementation, ListPromptsResult, ListResourceTemplatesResult,
+        ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt, PromptArgument,
+        PromptMessage, PromptMessageRole, RawResourceTemplate, ReadResourceRequestParams,
+        ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
 };
@@ -46,6 +47,7 @@ pub struct AnalyzerMcpServer {
     server_info: ServerInfo,
     tools: Arc<[Tool]>,
     resource_templates: Arc<[rmcp::model::ResourceTemplate]>,
+    prompts: Arc<[Prompt]>,
 }
 
 impl AnalyzerMcpServer {
@@ -79,11 +81,13 @@ impl AnalyzerMcpServer {
             .into();
 
         let resource_templates: Arc<[rmcp::model::ResourceTemplate]> = build_resource_templates();
+        let prompts: Arc<[Prompt]> = build_prompts();
 
         let server_info = ServerInfo::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
+                .enable_prompts()
                 .build(),
         )
         .with_server_info(Implementation::new(
@@ -99,6 +103,7 @@ impl AnalyzerMcpServer {
             server_info,
             tools,
             resource_templates,
+            prompts,
         }
     }
 }
@@ -162,6 +167,24 @@ impl ServerHandler for AnalyzerMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         self.read_resource_by_uri(&request.uri).await
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, McpError> {
+        Ok(ListPromptsResult::with_all_items(
+            self.prompts.iter().cloned().collect(),
+        ))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResult, McpError> {
+        render_prompt(&request)
     }
 }
 
@@ -240,6 +263,117 @@ impl AnalyzerMcpServer {
             ResourceContents::text(payload, uri.to_string()).with_mime_type(RESOURCE_MIME_TYPE),
         ]))
     }
+}
+
+const PROMPT_SUMMARIZE_WEEK: &str = "summarize_week";
+const PROMPT_SIGNALS_RECAP: &str = "signals_recap";
+
+fn build_prompts() -> Arc<[Prompt]> {
+    let prompts = vec![
+        Prompt::new(
+            PROMPT_SUMMARIZE_WEEK,
+            Some(
+                "Summarize the user's week, anchored on the completed weekly review for the \
+                 given week_start date. The model is expected to read the review resource and \
+                 produce a concise narrative recap.",
+            ),
+            Some(vec![
+                PromptArgument::new("week_start")
+                    .with_description("First day of the review week (Monday) in YYYY-MM-DD form.")
+                    .with_required(true),
+            ]),
+        ),
+        Prompt::new(
+            PROMPT_SIGNALS_RECAP,
+            Some(
+                "Recap the signals (needs, behaviors, themes) detected in the user's daily \
+                 reviews over a date range. The model is expected to call the signals_search \
+                 tool with the given dates and synthesize the findings.",
+            ),
+            Some(vec![
+                PromptArgument::new("from_date")
+                    .with_description("Inclusive lower bound in YYYY-MM-DD form.")
+                    .with_required(true),
+                PromptArgument::new("to_date_exclusive")
+                    .with_description(
+                        "Exclusive upper bound in YYYY-MM-DD form (strictly greater than \
+                         from_date).",
+                    )
+                    .with_required(true),
+            ]),
+        ),
+    ];
+    Arc::from(prompts)
+}
+
+fn render_prompt(request: &GetPromptRequestParams) -> Result<GetPromptResult, McpError> {
+    let empty = serde_json::Map::new();
+    let args = request.arguments.as_ref().unwrap_or(&empty);
+    match request.name.as_str() {
+        PROMPT_SUMMARIZE_WEEK => {
+            let week_start = required_date_arg(args, "week_start")?;
+            let text = format!(
+                "Summarize the user's week starting on {week_start}.\n\
+                 \n\
+                 1. Read the completed weekly review at `review://weekly/{week_start}` and use \
+                 it as the primary source.\n\
+                 2. If helpful, read the seven daily reviews `review://daily/<date>` for the \
+                 days in that week.\n\
+                 3. Produce a 4-6 sentence narrative recap highlighting themes, wins, and \
+                 anything worth carrying into the next week."
+            );
+            Ok(
+                GetPromptResult::new(vec![PromptMessage::new_text(PromptMessageRole::User, text)])
+                    .with_description(format!("Weekly recap for {week_start}")),
+            )
+        }
+        PROMPT_SIGNALS_RECAP => {
+            let from_date = required_date_arg(args, "from_date")?;
+            let to_date_exclusive = required_date_arg(args, "to_date_exclusive")?;
+            if to_date_exclusive <= from_date {
+                return Err(McpError::invalid_params(
+                    "to_date_exclusive must be strictly greater than from_date".to_string(),
+                    None,
+                ));
+            }
+            let text = format!(
+                "Recap the signals detected between {from_date} (inclusive) and \
+                 {to_date_exclusive} (exclusive).\n\
+                 \n\
+                 1. Call `signals_search` with these dates and a sensible limit (start with \
+                 50).\n\
+                 2. Group the results by signal_type (need, behavior, theme) and call out the \
+                 strongest items in each group.\n\
+                 3. Note any signals whose status or valence shifted across the range."
+            );
+            Ok(
+                GetPromptResult::new(vec![PromptMessage::new_text(PromptMessageRole::User, text)])
+                    .with_description(format!(
+                        "Signals recap for {from_date}..{to_date_exclusive}"
+                    )),
+            )
+        }
+        other => Err(McpError::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            format!("unknown prompt: {other}"),
+            None,
+        )),
+    }
+}
+
+fn required_date_arg(
+    args: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Result<NaiveDate, McpError> {
+    let raw = args.get(name).and_then(|v| v.as_str()).ok_or_else(|| {
+        McpError::invalid_params(format!("missing required argument: {name}"), None)
+    })?;
+    NaiveDate::parse_from_str(raw, "%Y-%m-%d").map_err(|_| {
+        McpError::invalid_params(
+            format!("argument {name} must be a YYYY-MM-DD date (got {raw:?})"),
+            None,
+        )
+    })
 }
 
 fn build_resource_templates() -> Arc<[rmcp::model::ResourceTemplate]> {
@@ -527,13 +661,120 @@ mod tests {
     }
 
     #[test]
-    fn server_info_advertises_tools_and_resources_capabilities() {
+    fn server_info_advertises_tools_resources_and_prompts_capabilities() {
         let server = server();
         let info = server.get_info();
         assert!(info.capabilities.tools.is_some());
         assert!(info.capabilities.resources.is_some());
+        assert!(info.capabilities.prompts.is_some());
         assert_eq!(info.server_info.name, env!("CARGO_PKG_NAME"));
         assert_eq!(info.server_info.version, crate::version::VERSION);
+    }
+
+    #[test]
+    fn lists_expected_prompts_with_required_arguments() {
+        let server = server();
+        let names: Vec<&str> = server.prompts.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["summarize_week", "signals_recap"]);
+
+        let summarize = server
+            .prompts
+            .iter()
+            .find(|p| p.name == "summarize_week")
+            .unwrap();
+        let args = summarize.arguments.as_ref().expect("has args");
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0].name, "week_start");
+        assert_eq!(args[0].required, Some(true));
+
+        let signals = server
+            .prompts
+            .iter()
+            .find(|p| p.name == "signals_recap")
+            .unwrap();
+        let args = signals.arguments.as_ref().expect("has args");
+        let names: Vec<&str> = args.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["from_date", "to_date_exclusive"]);
+        assert!(args.iter().all(|a| a.required == Some(true)));
+    }
+
+    fn prompt_args(pairs: &[(&str, &str)]) -> serde_json::Map<String, Value> {
+        let mut map = serde_json::Map::new();
+        for (k, v) in pairs {
+            map.insert((*k).to_string(), Value::String((*v).to_string()));
+        }
+        map
+    }
+
+    #[test]
+    fn render_summarize_week_references_weekly_review_resource() {
+        let request = GetPromptRequestParams::new("summarize_week")
+            .with_arguments(prompt_args(&[("week_start", "2026-04-20")]));
+        let result = render_prompt(&request).expect("render ok");
+        assert_eq!(result.messages.len(), 1);
+        let PromptMessage {
+            role,
+            content: rmcp::model::PromptMessageContent::Text { text },
+            ..
+        } = &result.messages[0]
+        else {
+            panic!("expected text content");
+        };
+        assert!(matches!(role, PromptMessageRole::User));
+        assert!(text.contains("review://weekly/2026-04-20"));
+    }
+
+    #[test]
+    fn render_summarize_week_rejects_missing_week_start() {
+        let request = GetPromptRequestParams::new("summarize_week");
+        let err = render_prompt(&request).unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("week_start"));
+    }
+
+    #[test]
+    fn render_summarize_week_rejects_malformed_date() {
+        let request = GetPromptRequestParams::new("summarize_week")
+            .with_arguments(prompt_args(&[("week_start", "not-a-date")]));
+        let err = render_prompt(&request).unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn render_signals_recap_includes_both_dates_and_tool_name() {
+        let request = GetPromptRequestParams::new("signals_recap").with_arguments(prompt_args(&[
+            ("from_date", "2026-04-20"),
+            ("to_date_exclusive", "2026-04-27"),
+        ]));
+        let result = render_prompt(&request).expect("render ok");
+        let PromptMessage {
+            content: rmcp::model::PromptMessageContent::Text { text },
+            ..
+        } = &result.messages[0]
+        else {
+            panic!("expected text content");
+        };
+        assert!(text.contains("2026-04-20"));
+        assert!(text.contains("2026-04-27"));
+        assert!(text.contains("signals_search"));
+    }
+
+    #[test]
+    fn render_signals_recap_rejects_inverted_range() {
+        let request = GetPromptRequestParams::new("signals_recap").with_arguments(prompt_args(&[
+            ("from_date", "2026-04-27"),
+            ("to_date_exclusive", "2026-04-20"),
+        ]));
+        let err = render_prompt(&request).unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("strictly greater"));
+    }
+
+    #[test]
+    fn render_prompt_rejects_unknown_name() {
+        let request = GetPromptRequestParams::new("not_a_prompt");
+        let err = render_prompt(&request).unwrap_err();
+        assert_eq!(err.code, ErrorCode::METHOD_NOT_FOUND);
     }
 
     #[test]
