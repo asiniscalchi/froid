@@ -13,12 +13,8 @@ use super::semantic::SemanticJournalSearcher;
 use super::signal::{DefaultSignalReadService, SignalReadService};
 use super::tools::{
     ToolRegistry,
-    journal::{
-        JournalGetRecentTool, JournalGetTool, JournalSearchSemanticTool, JournalSearchTextTool,
-    },
-    review::{
-        DailyReviewGetRangeTool, DailyReviewGetTool, WeeklyReviewGetRangeTool, WeeklyReviewGetTool,
-    },
+    journal::{JournalGetRecentTool, JournalSearchSemanticTool, JournalSearchTextTool},
+    review::{DailyReviewGetRangeTool, WeeklyReviewGetRangeTool},
     signal::SignalsSearchTool,
 };
 
@@ -56,18 +52,15 @@ pub fn build_analyzer_mcp_components(
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(JournalGetRecentTool::new(journal_service.clone())));
-    registry.register(Arc::new(JournalGetTool::new(journal_service.clone())));
     registry.register(Arc::new(JournalSearchTextTool::new(
         journal_service.clone(),
     )));
     registry.register(Arc::new(JournalSearchSemanticTool::new(
         journal_service.clone(),
     )));
-    registry.register(Arc::new(DailyReviewGetTool::new(review_service.clone())));
     registry.register(Arc::new(DailyReviewGetRangeTool::new(
         review_service.clone(),
     )));
-    registry.register(Arc::new(WeeklyReviewGetTool::new(review_service.clone())));
     registry.register(Arc::new(WeeklyReviewGetRangeTool::new(
         review_service.clone(),
     )));
@@ -120,15 +113,12 @@ mod tests {
 
         let names: Vec<&str> = registry.tools().iter().map(|t| t.name()).collect();
 
-        assert_eq!(names.len(), 9);
+        assert_eq!(names.len(), 6);
         for expected in [
             "journal_get_recent",
-            "journal_get",
             "journal_search_text",
             "journal_search_semantic",
-            "daily_review_get",
             "daily_review_get_range",
-            "weekly_review_get",
             "weekly_review_get_range",
             "signals_search",
         ] {

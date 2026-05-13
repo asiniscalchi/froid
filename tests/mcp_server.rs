@@ -93,12 +93,9 @@ async fn lists_and_calls_analyzer_tools_over_streamable_http() {
     names.sort();
     let mut expected = [
         "journal_get_recent",
-        "journal_get",
         "journal_search_text",
         "journal_search_semantic",
-        "daily_review_get",
         "daily_review_get_range",
-        "weekly_review_get",
         "weekly_review_get_range",
         "signals_search",
     ];
