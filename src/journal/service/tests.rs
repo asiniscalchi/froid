@@ -8,7 +8,11 @@ use super::*;
 use crate::{
     database,
     journal::{
-        command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
+        command::{
+            DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT,
+            ReviewToggleAction, ReviewsSubcommand,
+        },
+        delivery_switch::{DeliverySwitchboard, ReviewKind},
         embedding::{
             EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
         },
@@ -1521,4 +1525,97 @@ async fn week_review_returns_not_available_on_fetch_error() {
         outgoing.text,
         "No weekly review available for the week of 2026-04-20 yet."
     );
+}
+
+#[tokio::test]
+async fn reviews_status_reports_initial_switchboard_state() {
+    let switchboard = DeliverySwitchboard::new(true, false);
+    let service = setup().await.with_delivery_switchboard(switchboard);
+
+    let outgoing = service
+        .command(&command(JournalCommand::Reviews {
+            subcommand: ReviewsSubcommand::Status,
+        }))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outgoing.text,
+        "Review delivery:\n- daily: on\n- weekly: off"
+    );
+}
+
+#[tokio::test]
+async fn reviews_toggle_off_flips_switchboard_and_acknowledges() {
+    let switchboard = DeliverySwitchboard::new(true, true);
+    let service = setup()
+        .await
+        .with_delivery_switchboard(switchboard.clone());
+
+    let outgoing = service
+        .command(&command(JournalCommand::Reviews {
+            subcommand: ReviewsSubcommand::Toggle {
+                kind: ReviewKind::Daily,
+                action: ReviewToggleAction::Off,
+            },
+        }))
+        .await
+        .unwrap();
+
+    assert_eq!(outgoing.text, "Daily review delivery is now off.");
+    assert!(!switchboard.is_enabled(ReviewKind::Daily));
+    assert!(switchboard.is_enabled(ReviewKind::Weekly));
+}
+
+#[tokio::test]
+async fn reviews_toggle_on_re_enables_weekly() {
+    let switchboard = DeliverySwitchboard::new(false, false);
+    let service = setup()
+        .await
+        .with_delivery_switchboard(switchboard.clone());
+
+    let outgoing = service
+        .command(&command(JournalCommand::Reviews {
+            subcommand: ReviewsSubcommand::Toggle {
+                kind: ReviewKind::Weekly,
+                action: ReviewToggleAction::On,
+            },
+        }))
+        .await
+        .unwrap();
+
+    assert_eq!(outgoing.text, "Weekly review delivery is now on.");
+    assert!(switchboard.is_enabled(ReviewKind::Weekly));
+}
+
+#[tokio::test]
+async fn reviews_command_reports_unavailable_when_switchboard_missing() {
+    let service = setup().await;
+
+    let outgoing = service
+        .command(&command(JournalCommand::Reviews {
+            subcommand: ReviewsSubcommand::Status,
+        }))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outgoing.text,
+        "Review delivery is not configured on this server."
+    );
+}
+
+#[tokio::test]
+async fn reviews_usage_returns_help_text() {
+    let switchboard = DeliverySwitchboard::new(true, true);
+    let service = setup().await.with_delivery_switchboard(switchboard);
+
+    let outgoing = service
+        .command(&command(JournalCommand::Reviews {
+            subcommand: ReviewsSubcommand::Usage,
+        }))
+        .await
+        .unwrap();
+
+    assert!(outgoing.text.starts_with("Usage: /reviews status"));
 }

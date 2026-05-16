@@ -9,6 +9,7 @@ use crate::{
     handler::MessageHandler,
     journal::{
         command::JournalCommandRequest,
+        delivery_switch::DeliverySwitchboard,
         embedding::{
             Embedder, EmbedderError, Embedding, EmbeddingIndex, EmbeddingRepositoryError,
             PendingEmbeddingCounter,
@@ -45,6 +46,7 @@ pub struct JournalService {
     pending_embedding_counter: Option<Arc<dyn PendingEmbeddingCounter>>,
     daily_review_prompt_version: Option<String>,
     daily_review_delivery_configured: bool,
+    delivery_switchboard: Option<DeliverySwitchboard>,
 }
 
 impl JournalService {
@@ -63,7 +65,13 @@ impl JournalService {
             pending_embedding_counter: None,
             daily_review_prompt_version: None,
             daily_review_delivery_configured: false,
+            delivery_switchboard: None,
         }
+    }
+
+    pub fn with_delivery_switchboard(mut self, switchboard: DeliverySwitchboard) -> Self {
+        self.delivery_switchboard = Some(switchboard);
+        self
     }
 
     pub fn with_search<I, E>(mut self, search: SemanticSearchService<I, E>) -> Self

@@ -3,15 +3,20 @@ use tracing::{error, warn};
 
 use crate::{
     journal::{
-        command::{JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
+        command::{
+            JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT, ReviewToggleAction,
+            ReviewsSubcommand,
+        },
+        delivery_switch::{DeliverySwitchboard, ReviewKind},
         responses::{
             daily_review_not_available_for_date_response, daily_review_unavailable_response,
             deleted_last_entry_response, format_daily_review_for_date, format_entries,
             format_last_entry, format_weekly_review_for_week, help_response, no_entries_response,
             no_entries_today_response, no_entry_to_delete_response, no_last_entry_response,
-            recent_usage_response, search_usage_response, start_response, stats_response,
-            status_response, unknown_command_response, weekly_review_not_available_response,
-            weekly_review_unavailable_response,
+            recent_usage_response, review_toggled_response, reviews_status_response,
+            reviews_unavailable_response, reviews_usage_response, search_usage_response,
+            start_response, stats_response, status_response, unknown_command_response,
+            weekly_review_not_available_response, weekly_review_unavailable_response,
         },
         review::DailyReview,
         search::{
@@ -35,6 +40,20 @@ fn previous_iso_week_monday(today: NaiveDate) -> NaiveDate {
 use chrono::Datelike;
 
 use super::JournalService;
+
+fn apply_review_toggle(
+    switchboard: &DeliverySwitchboard,
+    kind: ReviewKind,
+    action: ReviewToggleAction,
+) -> String {
+    let enabled = matches!(action, ReviewToggleAction::On);
+    switchboard.set(kind, enabled);
+    let label = match kind {
+        ReviewKind::Daily => "Daily",
+        ReviewKind::Weekly => "Weekly",
+    };
+    review_toggled_response(label, enabled)
+}
 
 impl JournalService {
     pub async fn command(
@@ -79,6 +98,9 @@ impl JournalService {
             }
             JournalCommand::SearchUsage => Ok(OutgoingMessage {
                 text: search_usage_response(),
+            }),
+            JournalCommand::Reviews { subcommand } => Ok(OutgoingMessage {
+                text: self.reviews_command(subcommand),
             }),
             JournalCommand::Unknown { command } => Ok(OutgoingMessage {
                 text: unknown_command_response(command),
@@ -147,6 +169,23 @@ impl JournalService {
                 OutgoingMessage {
                     text: weekly_review_not_available_response(week_start),
                 }
+            }
+        }
+    }
+
+    fn reviews_command(&self, subcommand: &ReviewsSubcommand) -> String {
+        let Some(switchboard) = self.delivery_switchboard.as_ref() else {
+            return reviews_unavailable_response();
+        };
+
+        match subcommand {
+            ReviewsSubcommand::Usage => reviews_usage_response(),
+            ReviewsSubcommand::Status => reviews_status_response(
+                switchboard.is_enabled(ReviewKind::Daily),
+                switchboard.is_enabled(ReviewKind::Weekly),
+            ),
+            ReviewsSubcommand::Toggle { kind, action } => {
+                apply_review_toggle(switchboard, *kind, *action)
             }
         }
     }

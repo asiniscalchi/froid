@@ -18,7 +18,31 @@ pub(super) fn start_response() -> String {
 }
 
 pub(super) fn help_response() -> String {
-    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/day_review - show daily review\n/week_review - show last week's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
+    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/day_review - show daily review\n/week_review - show last week's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/reviews status|daily on|off|weekly on|off - manage review delivery\n/help - show commands".to_string()
+}
+
+pub(super) fn reviews_usage_response() -> String {
+    "Usage: /reviews status | /reviews daily on|off | /reviews weekly on|off".to_string()
+}
+
+pub(super) fn reviews_unavailable_response() -> String {
+    "Review delivery is not configured on this server.".to_string()
+}
+
+pub(super) fn reviews_status_response(daily_enabled: bool, weekly_enabled: bool) -> String {
+    fn state(enabled: bool) -> &'static str {
+        if enabled { "on" } else { "off" }
+    }
+    format!(
+        "Review delivery:\n- daily: {}\n- weekly: {}",
+        state(daily_enabled),
+        state(weekly_enabled),
+    )
+}
+
+pub(super) fn review_toggled_response(label: &str, enabled: bool) -> String {
+    let state = if enabled { "on" } else { "off" };
+    format!("{label} review delivery is now {state}.")
 }
 
 pub(super) fn unknown_command_response(command: &str) -> String {

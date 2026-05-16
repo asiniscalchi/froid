@@ -10,7 +10,13 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     handler::MessageHandler,
-    journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
+    journal::{
+        command::{
+            DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest, ReviewToggleAction,
+            ReviewsSubcommand,
+        },
+        delivery_switch::ReviewKind,
+    },
     messages::{IncomingMessage, MessageSource, SINGLE_USER_ID},
 };
 
@@ -180,6 +186,9 @@ fn parse_command(text: &str, _received_at: DateTime<Utc>) -> Option<JournalComma
         "/day_review" => Some(JournalCommand::DayReviewLast),
         "/week_review" => Some(JournalCommand::WeekReviewLast),
         "/search" => Some(parse_search_argument(argument)),
+        "/reviews" => Some(JournalCommand::Reviews {
+            subcommand: parse_reviews_argument(argument),
+        }),
         _ if command.starts_with('/') => Some(JournalCommand::Unknown {
             command: command.to_string(),
         }),
@@ -193,6 +202,44 @@ fn parse_search_argument(argument: Option<&str>) -> JournalCommand {
             query: query.to_string(),
         },
         None => JournalCommand::SearchUsage,
+    }
+}
+
+fn parse_reviews_argument(argument: Option<&str>) -> ReviewsSubcommand {
+    let Some(argument) = argument else {
+        return ReviewsSubcommand::Usage;
+    };
+
+    let mut parts = argument.split_whitespace();
+    let first = parts.next().unwrap_or("");
+    let second = parts.next();
+    if parts.next().is_some() {
+        return ReviewsSubcommand::Usage;
+    }
+
+    match (first.to_ascii_lowercase().as_str(), second) {
+        ("status", None) => ReviewsSubcommand::Status,
+        ("daily", Some(action)) => parse_toggle_action(action)
+            .map(|action| ReviewsSubcommand::Toggle {
+                kind: ReviewKind::Daily,
+                action,
+            })
+            .unwrap_or(ReviewsSubcommand::Usage),
+        ("weekly", Some(action)) => parse_toggle_action(action)
+            .map(|action| ReviewsSubcommand::Toggle {
+                kind: ReviewKind::Weekly,
+                action,
+            })
+            .unwrap_or(ReviewsSubcommand::Usage),
+        _ => ReviewsSubcommand::Usage,
+    }
+}
+
+fn parse_toggle_action(text: &str) -> Option<ReviewToggleAction> {
+    match text.to_ascii_lowercase().as_str() {
+        "on" => Some(ReviewToggleAction::On),
+        "off" => Some(ReviewToggleAction::Off),
+        _ => None,
     }
 }
 
@@ -467,6 +514,70 @@ mod tests {
         assert_eq!(
             cmd("/week_review@mybot"),
             Some(JournalCommand::WeekReviewLast)
+        );
+    }
+
+    fn reviews(subcommand: ReviewsSubcommand) -> Option<JournalCommand> {
+        Some(JournalCommand::Reviews { subcommand })
+    }
+
+    #[test]
+    fn parse_reviews_status_command() {
+        assert_eq!(cmd("/reviews status"), reviews(ReviewsSubcommand::Status));
+    }
+
+    #[test]
+    fn parse_reviews_without_arguments_returns_usage() {
+        assert_eq!(cmd("/reviews"), reviews(ReviewsSubcommand::Usage));
+        assert_eq!(cmd("/reviews "), reviews(ReviewsSubcommand::Usage));
+    }
+
+    #[test]
+    fn parse_reviews_daily_toggle() {
+        assert_eq!(
+            cmd("/reviews daily on"),
+            reviews(ReviewsSubcommand::Toggle {
+                kind: ReviewKind::Daily,
+                action: ReviewToggleAction::On,
+            })
+        );
+        assert_eq!(
+            cmd("/reviews daily OFF"),
+            reviews(ReviewsSubcommand::Toggle {
+                kind: ReviewKind::Daily,
+                action: ReviewToggleAction::Off,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_reviews_weekly_toggle() {
+        assert_eq!(
+            cmd("/reviews weekly on"),
+            reviews(ReviewsSubcommand::Toggle {
+                kind: ReviewKind::Weekly,
+                action: ReviewToggleAction::On,
+            })
+        );
+        assert_eq!(
+            cmd("/reviews weekly off"),
+            reviews(ReviewsSubcommand::Toggle {
+                kind: ReviewKind::Weekly,
+                action: ReviewToggleAction::Off,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_reviews_unknown_argument_returns_usage() {
+        assert_eq!(
+            cmd("/reviews daily maybe"),
+            reviews(ReviewsSubcommand::Usage)
+        );
+        assert_eq!(cmd("/reviews monthly on"), reviews(ReviewsSubcommand::Usage));
+        assert_eq!(
+            cmd("/reviews daily on extra"),
+            reviews(ReviewsSubcommand::Usage)
         );
     }
 

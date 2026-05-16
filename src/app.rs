@@ -140,6 +140,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         daily_review_config,
         weekly_review_config,
         delivery_configured,
+        delivery_switchboard.clone(),
     )?;
 
     let adapter = TelegramAdapter::new(
@@ -509,8 +510,10 @@ fn build_journal_service(
     daily_review_config: DailyReviewRuntimeConfig,
     weekly_review_config: WeeklyReviewRuntimeConfig,
     delivery_configured: bool,
+    delivery_switchboard: DeliverySwitchboard,
 ) -> Result<JournalService, Box<dyn Error>> {
-    let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
+    let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()))
+        .with_delivery_switchboard(delivery_switchboard);
 
     journal_service =
         configure_journal_entry_extraction(journal_service, pool.clone(), entry_extraction_config)?;
