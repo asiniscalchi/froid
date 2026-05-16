@@ -574,7 +574,10 @@ mod tests {
             cmd("/reviews daily maybe"),
             reviews(ReviewsSubcommand::Usage)
         );
-        assert_eq!(cmd("/reviews monthly on"), reviews(ReviewsSubcommand::Usage));
+        assert_eq!(
+            cmd("/reviews monthly on"),
+            reviews(ReviewsSubcommand::Usage)
+        );
         assert_eq!(
             cmd("/reviews daily on extra"),
             reviews(ReviewsSubcommand::Usage)

@@ -1548,9 +1548,7 @@ async fn reviews_status_reports_initial_switchboard_state() {
 #[tokio::test]
 async fn reviews_toggle_off_flips_switchboard_and_acknowledges() {
     let switchboard = DeliverySwitchboard::new(true, true);
-    let service = setup()
-        .await
-        .with_delivery_switchboard(switchboard.clone());
+    let service = setup().await.with_delivery_switchboard(switchboard.clone());
 
     let outgoing = service
         .command(&command(JournalCommand::Reviews {
@@ -1570,9 +1568,7 @@ async fn reviews_toggle_off_flips_switchboard_and_acknowledges() {
 #[tokio::test]
 async fn reviews_toggle_on_re_enables_weekly() {
     let switchboard = DeliverySwitchboard::new(false, false);
-    let service = setup()
-        .await
-        .with_delivery_switchboard(switchboard.clone());
+    let service = setup().await.with_delivery_switchboard(switchboard.clone());
 
     let outgoing = service
         .command(&command(JournalCommand::Reviews {
