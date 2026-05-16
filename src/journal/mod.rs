@@ -1,5 +1,6 @@
 pub mod analyzer;
 pub mod command;
+pub mod delivery_switch;
 pub mod embedding;
 pub mod entry;
 pub mod extraction;
