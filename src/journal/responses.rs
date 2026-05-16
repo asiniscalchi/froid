@@ -18,7 +18,7 @@ pub(super) fn start_response() -> String {
 }
 
 pub(super) fn help_response() -> String {
-    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/day_review - show daily review\n/week_review - show last week's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/reviews status|daily on|off|weekly on|off - manage review delivery\n/help - show commands".to_string()
+    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/day_review - show daily review\n/week_review - show last week's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/reviews status - show review delivery state\n/reviews daily on|off - toggle daily review delivery\n/reviews weekly on|off - toggle weekly review delivery\n/help - show commands".to_string()
 }
 
 pub(super) fn reviews_usage_response() -> String {
