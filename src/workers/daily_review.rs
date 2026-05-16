@@ -6,6 +6,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     journal::{
+        delivery_switch::{DeliverySwitchboard, ReviewKind},
         repository::JournalRepository,
         responses::format_daily_review_for_date,
         review::{
@@ -253,7 +254,7 @@ where
         Ok(())
     }
 
-    pub async fn run_forever(self, shutdown: CancellationToken) {
+    pub async fn run_forever(self, shutdown: CancellationToken, switchboard: DeliverySwitchboard) {
         info!(
             enabled = self.config.enabled,
             interval_seconds = self.config.interval.as_secs(),
@@ -263,6 +264,13 @@ where
         loop {
             if shutdown.is_cancelled() {
                 return;
+            }
+
+            if !switchboard.is_enabled(ReviewKind::Daily) {
+                tokio::select! {
+                    _ = tokio::time::sleep(self.config.interval) => continue,
+                    _ = shutdown.cancelled() => return,
+                }
             }
 
             match self.run_once(Utc::now()).await {
@@ -804,12 +812,44 @@ mod tests {
         let handle = tokio::spawn({
             let shutdown = shutdown.clone();
             async move {
-                worker.run_forever(shutdown).await;
+                worker
+                    .run_forever(shutdown, DeliverySwitchboard::new(true, true))
+                    .await;
             }
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         shutdown.cancel();
         handle.await.expect("worker task ran to completion");
+    }
+
+    #[tokio::test]
+    async fn run_forever_skips_cycle_when_switchboard_disabled() {
+        let sender = FakeSender::succeeding();
+        let (worker, _, journal_entries, sender) =
+            setup(FakeReviewGenerator::succeeding("review"), sender).await;
+        journal_entries
+            .store(&at_date("1", "an entry"))
+            .await
+            .unwrap();
+
+        let switchboard = DeliverySwitchboard::new(false, false);
+        let shutdown = CancellationToken::new();
+        let handle = tokio::spawn({
+            let shutdown = shutdown.clone();
+            let switchboard = switchboard.clone();
+            async move {
+                worker.run_forever(shutdown, switchboard).await;
+            }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        shutdown.cancel();
+        handle.await.expect("worker task ran to completion");
+
+        assert!(
+            sender.sent().is_empty(),
+            "no deliveries should occur while switchboard is disabled"
+        );
     }
 }

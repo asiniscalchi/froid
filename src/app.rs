@@ -17,6 +17,7 @@ use crate::{
     database,
     journal::{
         analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_mcp_components},
+        delivery_switch::DeliverySwitchboard,
         embedding::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
         },
@@ -75,6 +76,10 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
 
     let shutdown = CancellationToken::new();
     let mut workers: JoinSet<&'static str> = JoinSet::new();
+    let delivery_switchboard = DeliverySwitchboard::new(
+        config.daily_review_delivery.enabled,
+        config.weekly_review_delivery.enabled,
+    );
 
     spawn_embedding_worker(
         &mut workers,
@@ -103,6 +108,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &pool,
         &config,
         daily_review_config.clone(),
+        delivery_switchboard.clone(),
     )?;
     spawn_weekly_review_delivery_worker(
         &mut workers,
@@ -110,6 +116,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &pool,
         &config,
         weekly_review_config.clone(),
+        delivery_switchboard.clone(),
     )?;
     spawn_signal_worker(
         &mut workers,
@@ -395,6 +402,7 @@ fn spawn_daily_review_delivery_worker(
     pool: &SqlitePool,
     config: &ServeConfig,
     daily_review_config: DailyReviewRuntimeConfig,
+    switchboard: DeliverySwitchboard,
 ) -> Result<bool, Box<dyn Error>> {
     if !config.daily_review_delivery.enabled {
         return Ok(false);
@@ -417,7 +425,7 @@ fn spawn_daily_review_delivery_worker(
     );
     let token = shutdown.clone();
     workers.spawn(async move {
-        worker.run_forever(token).await;
+        worker.run_forever(token, switchboard).await;
         "daily_review_delivery"
     });
 
@@ -430,6 +438,7 @@ fn spawn_weekly_review_delivery_worker(
     pool: &SqlitePool,
     config: &ServeConfig,
     weekly_review_config: WeeklyReviewRuntimeConfig,
+    switchboard: DeliverySwitchboard,
 ) -> Result<(), Box<dyn Error>> {
     if !config.weekly_review_delivery.enabled {
         return Ok(());
@@ -453,7 +462,7 @@ fn spawn_weekly_review_delivery_worker(
     );
     let token = shutdown.clone();
     workers.spawn(async move {
-        worker.run_forever(token).await;
+        worker.run_forever(token, switchboard).await;
         "weekly_review_delivery"
     });
 

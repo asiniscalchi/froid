@@ -6,6 +6,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     journal::{
+        delivery_switch::{DeliverySwitchboard, ReviewKind},
         repository::JournalRepository,
         responses::format_weekly_review_for_week,
         week_review::{
@@ -265,7 +266,7 @@ where
         Ok(())
     }
 
-    pub async fn run_forever(self, shutdown: CancellationToken) {
+    pub async fn run_forever(self, shutdown: CancellationToken, switchboard: DeliverySwitchboard) {
         info!(
             enabled = self.config.enabled,
             interval_seconds = self.config.interval.as_secs(),
@@ -276,6 +277,13 @@ where
         loop {
             if shutdown.is_cancelled() {
                 return;
+            }
+
+            if !switchboard.is_enabled(ReviewKind::Weekly) {
+                tokio::select! {
+                    _ = tokio::time::sleep(self.config.interval) => continue,
+                    _ = shutdown.cancelled() => return,
+                }
             }
 
             match self.run_once(Utc::now()).await {
