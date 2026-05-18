@@ -180,6 +180,7 @@ async fn spawn_mcp_server(
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default()
             .disable_allowed_hosts()
+            .with_stateful_mode(false)
             .with_cancellation_token(shutdown.child_token()),
     );
 
