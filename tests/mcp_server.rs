@@ -66,6 +66,7 @@ async fn lists_and_calls_analyzer_tools_over_streamable_http() {
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default()
             .with_sse_keep_alive(None)
+            .with_stateful_mode(false)
             .with_cancellation_token(cancel.child_token()),
     );
 
