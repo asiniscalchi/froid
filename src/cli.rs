@@ -158,12 +158,20 @@ pub struct Cli {
         default_value = "127.0.0.1:8080"
     )]
     mcp_bind: SocketAddr,
+
+    #[arg(long, env = "FROID_DASHBOARD_ENABLED", global = true)]
+    dashboard_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpServerConfig {
     pub enabled: bool,
     pub bind: SocketAddr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardConfig {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +187,7 @@ pub struct ServeConfig {
     pub weekly_review_delivery: WeeklyReviewDeliveryWorkerConfig,
     pub signal_worker: ReconciliationWorkerConfig,
     pub mcp_server: McpServerConfig,
+    pub dashboard: DashboardConfig,
 }
 
 impl Cli {
@@ -255,6 +264,10 @@ impl Cli {
             bind: self.mcp_bind,
         };
 
+        let dashboard = DashboardConfig {
+            enabled: self.dashboard_enabled.unwrap_or(false),
+        };
+
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
             telegram_allowed_user_id: self.telegram_allowed_user_id,
@@ -267,6 +280,7 @@ impl Cli {
             weekly_review_delivery,
             signal_worker,
             mcp_server,
+            dashboard,
         })
     }
 }
@@ -303,6 +317,7 @@ mod tests {
             signal_worker_interval_seconds: None,
             mcp_enabled: None,
             mcp_bind: "127.0.0.1:8080".parse().unwrap(),
+            dashboard_enabled: None,
         }
     }
 
@@ -642,6 +657,28 @@ mod tests {
 
         assert!(!config.mcp_server.enabled);
         assert_eq!(config.mcp_server.bind.to_string(), "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn serve_config_dashboard_disabled_by_default() {
+        let config = cli_with_token("token").serve_config().unwrap();
+
+        assert!(!config.dashboard.enabled);
+    }
+
+    #[test]
+    fn serve_config_dashboard_enabled_when_flag_set() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--dashboard-enabled",
+            "true",
+        ]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert!(config.dashboard.enabled);
     }
 
     #[test]
