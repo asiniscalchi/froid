@@ -14,7 +14,7 @@ use rmcp::transport::streamable_http_server::{
 use crate::{
     adapters::{mcp::AnalyzerMcpServer, telegram::TelegramAdapter},
     cli::ServeConfig,
-    database,
+    dashboard, database,
     journal::{
         analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_mcp_components},
         embedding::{
@@ -60,6 +60,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         database_path = %config.database_path,
         mcp_enabled = config.mcp_server.enabled,
         mcp_bind = %config.mcp_server.bind,
+        dashboard_enabled = config.dashboard.enabled,
         "starting service"
     );
 
@@ -118,7 +119,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &config,
         signal_runtime_config,
     )?;
-    spawn_mcp_server(
+    spawn_http_server(
         &mut workers,
         &shutdown,
         &pool,
@@ -143,51 +144,65 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
 }
 
-async fn spawn_mcp_server(
+async fn spawn_http_server(
     workers: &mut JoinSet<&'static str>,
     shutdown: &CancellationToken,
     pool: &SqlitePool,
     config: &ServeConfig,
     embedding_config: Option<&EmbeddingConfig>,
 ) -> Result<(), Box<dyn Error>> {
-    if !config.mcp_server.enabled {
+    if !config.mcp_server.enabled && !config.dashboard.enabled {
         return Ok(());
     }
 
-    let Some(cfg) = embedding_config else {
-        warn!(
-            "MCP server is enabled but embedding configuration is missing; skipping (semantic search requires it)"
+    let mut router = axum::Router::new();
+
+    if config.mcp_server.enabled {
+        let Some(cfg) = embedding_config else {
+            warn!(
+                "MCP server is enabled but embedding configuration is missing; skipping (semantic search requires it)"
+            );
+            return Ok(());
+        };
+
+        let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
+        let semantic = Arc::new(DefaultSemanticJournalSearcher::new(
+            SqliteEmbeddingRepository::new(pool.clone()),
+            embedder,
+            JournalRepository::new(pool.clone()),
+        ));
+
+        let components = build_analyzer_mcp_components(pool.clone(), semantic);
+        let user = UserContext::new(crate::messages::SINGLE_USER_ID);
+        let server = AnalyzerMcpServer::new(components, user);
+
+        let service = StreamableHttpService::new(
+            {
+                let server = server.clone();
+                move || Ok(server.clone())
+            },
+            Arc::new(LocalSessionManager::default()),
+            StreamableHttpServerConfig::default()
+                .disable_allowed_hosts()
+                .with_stateful_mode(false)
+                .with_cancellation_token(shutdown.child_token()),
         );
-        return Ok(());
-    };
 
-    let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
-    let semantic = Arc::new(DefaultSemanticJournalSearcher::new(
-        SqliteEmbeddingRepository::new(pool.clone()),
-        embedder,
-        JournalRepository::new(pool.clone()),
-    ));
+        router = router.nest_service("/mcp", service);
+    }
 
-    let components = build_analyzer_mcp_components(pool.clone(), semantic);
-    let user = UserContext::new(crate::messages::SINGLE_USER_ID);
-    let server = AnalyzerMcpServer::new(components, user);
+    if config.dashboard.enabled {
+        router = router.merge(dashboard::router());
+    }
 
-    let service = StreamableHttpService::new(
-        {
-            let server = server.clone();
-            move || Ok(server.clone())
-        },
-        Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default()
-            .disable_allowed_hosts()
-            .with_stateful_mode(false)
-            .with_cancellation_token(shutdown.child_token()),
-    );
-
-    let router = axum::Router::new().nest_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind(config.mcp_server.bind).await?;
     let local_addr = listener.local_addr()?;
-    info!(addr = %local_addr, "MCP server listening");
+    info!(
+        addr = %local_addr,
+        mcp = config.mcp_server.enabled,
+        dashboard = config.dashboard.enabled,
+        "HTTP server listening"
+    );
 
     let token = shutdown.clone();
     workers.spawn(async move {
@@ -195,9 +210,9 @@ async fn spawn_mcp_server(
             token.cancelled().await;
         });
         if let Err(err) = serve.await {
-            error!(error = %err, "MCP server exited with error");
+            error!(error = %err, "HTTP server exited with error");
         }
-        "mcp"
+        "http"
     });
 
     Ok(())

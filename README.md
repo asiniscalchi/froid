@@ -47,6 +47,14 @@ FROID_MCP_ENABLED=true cargo run -- serve
 
 Available tools: `journal_get`, `journal_get_recent`, `journal_search_text`, `journal_search_semantic`, `daily_review_get`, `daily_review_get_range`, `weekly_review_get`, `weekly_review_get_range`, `signals_search`.
 
+## Dashboard webapp
+
+Set `FROID_DASHBOARD_ENABLED=true` to serve a small React webapp at `http://127.0.0.1:8080/`. The dashboard shares the HTTP listener with the MCP endpoint (`FROID_MCP_BIND`, default `127.0.0.1:8080`) and can be enabled independently of MCP. Assets are embedded into the release binary, so the Docker image carries everything it needs. Like MCP, the dashboard has no built-in authentication — restrict access at the network level.
+
+```bash
+FROID_DASHBOARD_ENABLED=true cargo run -- serve
+```
+
 ## Configuration
 
 All options can be set via environment variables or the equivalent `--flag` CLI argument. Copy `.env.example` as a starting point.
