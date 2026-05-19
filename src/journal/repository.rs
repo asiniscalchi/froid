@@ -200,6 +200,26 @@ impl JournalRepository {
             .collect())
     }
 
+    pub async fn fetch_all(&self) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, raw_text, received_at
+            FROM journal_entries
+            ORDER BY received_at DESC, id DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| StoredJournalEntry {
+                id: row.get("id"),
+                entry: map_entry(row),
+            })
+            .collect())
+    }
+
     pub async fn fetch_in_range(
         &self,
         _user_id: &str,
@@ -517,6 +537,37 @@ mod tests {
         assert_eq!(entries[0].entry.text, "third");
         assert_eq!(entries[1].entry.text, "second");
         assert_eq!(entries[2].entry.text, "first");
+    }
+
+    #[tokio::test]
+    async fn fetch_all_returns_every_entry_newest_first() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second", at(11, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "third", at(12, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo.fetch_all().await.unwrap();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].entry.text, "third");
+        assert_eq!(entries[1].entry.text, "second");
+        assert_eq!(entries[2].entry.text, "first");
+    }
+
+    #[tokio::test]
+    async fn fetch_all_returns_empty_when_no_entries() {
+        let repo = setup().await;
+
+        let entries = repo.fetch_all().await.unwrap();
+
+        assert!(entries.is_empty());
     }
 
     #[tokio::test]
