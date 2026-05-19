@@ -9,7 +9,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::journal::repository::{JournalEntryRecord, JournalRepository};
+use crate::journal::repository::{BulkImportError, JournalEntryRecord, JournalRepository};
+
+pub const EXPORT_FORMAT_VERSION: u32 = 1;
 
 pub fn router(repo: JournalRepository) -> Router {
     Router::new()
@@ -20,12 +22,18 @@ pub fn router(repo: JournalRepository) -> Router {
 
 #[derive(Serialize)]
 struct ExportedMessage {
-    id: i64,
     source: String,
     source_conversation_id: String,
     source_message_id: String,
     text: String,
     received_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct ExportEnvelope {
+    version: u32,
+    exported_at: DateTime<Utc>,
+    messages: Vec<ExportedMessage>,
 }
 
 async fn export_messages(State(repo): State<JournalRepository>) -> Response {
@@ -37,21 +45,22 @@ async fn export_messages(State(repo): State<JournalRepository>) -> Response {
         }
     };
 
-    let exported: Vec<ExportedMessage> = records
-        .into_iter()
-        .filter_map(|r| {
-            r.id.map(|id| ExportedMessage {
-                id,
+    let envelope = ExportEnvelope {
+        version: EXPORT_FORMAT_VERSION,
+        exported_at: Utc::now(),
+        messages: records
+            .into_iter()
+            .map(|r| ExportedMessage {
                 source: r.source,
                 source_conversation_id: r.source_conversation_id,
                 source_message_id: r.source_message_id,
                 text: r.text,
                 received_at: r.received_at,
             })
-        })
-        .collect();
+            .collect(),
+    };
 
-    let body = match serde_json::to_vec(&exported) {
+    let body = match serde_json::to_vec(&envelope) {
         Ok(body) => body,
         Err(err) => {
             error!(error = %err, "failed to serialize journal entries for export");
@@ -63,7 +72,10 @@ async fn export_messages(State(repo): State<JournalRepository>) -> Response {
         }
     };
 
-    let filename = format!("froid-messages-{}.json", Utc::now().format("%Y-%m-%d"));
+    let filename = format!(
+        "froid-messages-{}.json",
+        envelope.exported_at.format("%Y-%m-%d")
+    );
 
     (
         StatusCode::OK,
@@ -88,28 +100,60 @@ struct ImportedMessage {
     received_at: DateTime<Utc>,
 }
 
+#[derive(Deserialize)]
+struct ImportEnvelope {
+    version: u32,
+    #[serde(default)]
+    #[allow(dead_code)]
+    exported_at: Option<DateTime<Utc>>,
+    messages: Vec<ImportedMessage>,
+}
+
 #[derive(Serialize)]
 struct ImportResult {
     imported: usize,
 }
 
 #[derive(Serialize)]
+struct ConflictDetails {
+    source: String,
+    source_conversation_id: String,
+    source_message_id: String,
+}
+
+#[derive(Serialize)]
 struct ImportError {
     error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conflict: Option<ConflictDetails>,
 }
 
 async fn import_messages(
     State(repo): State<JournalRepository>,
-    Json(payload): Json<Vec<ImportedMessage>>,
+    Json(envelope): Json<ImportEnvelope>,
 ) -> Response {
-    if payload.is_empty() {
+    if envelope.version != EXPORT_FORMAT_VERSION {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ImportError {
+                error: format!(
+                    "unsupported export version {} (expected {})",
+                    envelope.version, EXPORT_FORMAT_VERSION
+                ),
+                conflict: None,
+            }),
+        )
+            .into_response();
+    }
+
+    if envelope.messages.is_empty() {
         return (StatusCode::OK, Json(ImportResult { imported: 0 })).into_response();
     }
 
-    let records: Vec<JournalEntryRecord> = payload
+    let records: Vec<JournalEntryRecord> = envelope
+        .messages
         .into_iter()
         .map(|m| JournalEntryRecord {
-            id: None,
             source: m.source,
             source_conversation_id: m.source_conversation_id,
             source_message_id: m.source_message_id,
@@ -120,33 +164,36 @@ async fn import_messages(
 
     match repo.bulk_import(&records).await {
         Ok(imported) => (StatusCode::OK, Json(ImportResult { imported })).into_response(),
-        Err(sqlx::Error::Database(db_err)) if is_unique_violation(db_err.as_ref()) => {
-            error!(error = %db_err, "import aborted by unique constraint");
-            (
-                StatusCode::CONFLICT,
-                Json(ImportError {
-                    error: "import aborted: one or more entries collide with existing messages"
-                        .to_string(),
+        Err(BulkImportError::Conflict {
+            source,
+            source_conversation_id,
+            source_message_id,
+        }) => (
+            StatusCode::CONFLICT,
+            Json(ImportError {
+                error: format!(
+                    "import aborted: entry ({source}, {source_conversation_id}, {source_message_id}) collides with an existing message"
+                ),
+                conflict: Some(ConflictDetails {
+                    source,
+                    source_conversation_id,
+                    source_message_id,
                 }),
-            )
-                .into_response()
-        }
-        Err(err) => {
+            }),
+        )
+            .into_response(),
+        Err(BulkImportError::Database(err)) => {
             error!(error = %err, "failed to import journal entries");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ImportError {
                     error: "failed to import messages".to_string(),
+                    conflict: None,
                 }),
             )
                 .into_response()
         }
     }
-}
-
-fn is_unique_violation(err: &dyn sqlx::error::DatabaseError) -> bool {
-    err.code().as_deref() == Some("2067") // SQLITE_CONSTRAINT_UNIQUE
-        || err.message().to_lowercase().contains("unique constraint")
 }
 
 #[cfg(test)]
@@ -181,7 +228,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_returns_empty_array_when_no_entries() {
+    async fn export_returns_envelope_with_empty_messages() {
         let (router, _) = setup().await;
 
         let response = router
@@ -216,11 +263,13 @@ mod tests {
 
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
         let parsed: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(parsed, serde_json::json!([]));
+        assert_eq!(parsed["version"], EXPORT_FORMAT_VERSION);
+        assert!(parsed["exported_at"].is_string());
+        assert_eq!(parsed["messages"], serde_json::json!([]));
     }
 
     #[tokio::test]
-    async fn export_returns_all_fields_newest_first() {
+    async fn export_envelope_contains_all_fields_newest_first() {
         let (router, repo) = setup().await;
 
         let earlier = Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap();
@@ -240,23 +289,28 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
-        let parsed: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
 
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0]["text"], "newer");
-        assert_eq!(parsed[0]["source"], "telegram");
-        assert_eq!(parsed[0]["source_conversation_id"], "42");
-        assert_eq!(parsed[0]["source_message_id"], "2");
-        assert!(parsed[0]["id"].is_i64());
-        assert_eq!(parsed[0]["received_at"], "2026-04-28T12:00:00Z");
-        assert_eq!(parsed[1]["text"], "older");
+        let messages = parsed["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["text"], "newer");
+        assert_eq!(messages[0]["source"], "telegram");
+        assert_eq!(messages[0]["source_conversation_id"], "42");
+        assert_eq!(messages[0]["source_message_id"], "2");
+        assert!(messages[0].get("id").is_none(), "id must not be exported");
+        assert_eq!(messages[0]["received_at"], "2026-04-28T12:00:00Z");
+        assert_eq!(messages[1]["text"], "older");
+    }
+
+    fn envelope(messages: Value) -> Value {
+        json!({ "version": EXPORT_FORMAT_VERSION, "messages": messages })
     }
 
     #[tokio::test]
     async fn import_inserts_messages_and_returns_count() {
         let (router, repo) = setup().await;
 
-        let payload = json!([
+        let payload = envelope(json!([
             {
                 "source": "telegram",
                 "source_conversation_id": "42",
@@ -271,7 +325,7 @@ mod tests {
                 "text": "world",
                 "received_at": "2026-04-28T11:00:00Z"
             }
-        ]);
+        ]));
 
         let response = router
             .oneshot(
@@ -295,7 +349,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn import_fails_atomically_on_collision() {
+    async fn import_fails_atomically_on_collision_and_names_the_row() {
         let (router, repo) = setup().await;
         repo.store(&incoming(
             "dup",
@@ -305,7 +359,7 @@ mod tests {
         .await
         .unwrap();
 
-        let payload = json!([
+        let payload = envelope(json!([
             {
                 "source": "telegram",
                 "source_conversation_id": "42",
@@ -320,7 +374,7 @@ mod tests {
                 "text": "collides",
                 "received_at": "2026-04-28T11:00:00Z"
             }
-        ]);
+        ]));
 
         let response = router
             .oneshot(
@@ -337,11 +391,38 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
         let parsed: Value = serde_json::from_slice(&body).unwrap();
-        assert!(parsed["error"].as_str().unwrap().contains("collide"));
+        assert!(parsed["error"].as_str().unwrap().contains("dup"));
+        assert_eq!(parsed["conflict"]["source"], "telegram");
+        assert_eq!(parsed["conflict"]["source_conversation_id"], "42");
+        assert_eq!(parsed["conflict"]["source_message_id"], "dup");
 
         let entries = repo.fetch_recent("7", 10).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].entry.text, "existing");
+    }
+
+    #[tokio::test]
+    async fn import_rejects_unknown_version() {
+        let (router, _) = setup().await;
+
+        let payload = json!({ "version": 999, "messages": [] });
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/messages/import")
+                    .method("POST")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed["error"].as_str().unwrap().contains("999"));
     }
 
     #[tokio::test]

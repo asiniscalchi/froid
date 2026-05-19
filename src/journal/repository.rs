@@ -13,12 +13,44 @@ pub struct JournalConversation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryRecord {
-    pub id: Option<i64>,
     pub source: String,
     pub source_conversation_id: String,
     pub source_message_id: String,
     pub text: String,
     pub received_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug)]
+pub enum BulkImportError {
+    Conflict {
+        source: String,
+        source_conversation_id: String,
+        source_message_id: String,
+    },
+    Database(sqlx::Error),
+}
+
+impl std::fmt::Display for BulkImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BulkImportError::Conflict {
+                source,
+                source_conversation_id,
+                source_message_id,
+            } => write!(
+                f,
+                "conflict on ({source}, {source_conversation_id}, {source_message_id})"
+            ),
+            BulkImportError::Database(err) => write!(f, "database error: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for BulkImportError {}
+
+fn is_unique_violation(err: &dyn sqlx::error::DatabaseError) -> bool {
+    err.code().as_deref() == Some("2067")
+        || err.message().to_lowercase().contains("unique constraint")
 }
 
 fn map_entry(row: SqliteRow) -> JournalEntry {
@@ -233,7 +265,7 @@ impl JournalRepository {
     pub async fn fetch_all_for_export(&self) -> Result<Vec<JournalEntryRecord>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, source, source_conversation_id, source_message_id, raw_text, received_at
+            SELECT source, source_conversation_id, source_message_id, raw_text, received_at
             FROM journal_entries
             ORDER BY received_at DESC, id DESC
             "#,
@@ -244,7 +276,6 @@ impl JournalRepository {
         Ok(rows
             .into_iter()
             .map(|row| JournalEntryRecord {
-                id: Some(row.get("id")),
                 source: row.get("source"),
                 source_conversation_id: row.get("source_conversation_id"),
                 source_message_id: row.get("source_message_id"),
@@ -254,10 +285,13 @@ impl JournalRepository {
             .collect())
     }
 
-    pub async fn bulk_import(&self, records: &[JournalEntryRecord]) -> Result<usize, sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
+    pub async fn bulk_import(
+        &self,
+        records: &[JournalEntryRecord],
+    ) -> Result<usize, BulkImportError> {
+        let mut tx = self.pool.begin().await.map_err(BulkImportError::Database)?;
         for record in records {
-            sqlx::query(
+            let result = sqlx::query(
                 r#"
                 INSERT INTO journal_entries
                     (source, source_conversation_id, source_message_id, raw_text, received_at)
@@ -270,9 +304,22 @@ impl JournalRepository {
             .bind(&record.text)
             .bind(record.received_at)
             .execute(&mut *tx)
-            .await?;
+            .await;
+
+            if let Err(err) = result {
+                return Err(match err {
+                    sqlx::Error::Database(db_err) if is_unique_violation(db_err.as_ref()) => {
+                        BulkImportError::Conflict {
+                            source: record.source.clone(),
+                            source_conversation_id: record.source_conversation_id.clone(),
+                            source_message_id: record.source_message_id.clone(),
+                        }
+                    }
+                    other => BulkImportError::Database(other),
+                });
+            }
         }
-        tx.commit().await?;
+        tx.commit().await.map_err(BulkImportError::Database)?;
         Ok(records.len())
     }
 
@@ -629,7 +676,6 @@ mod tests {
         assert_eq!(rows[0].source_conversation_id, "42");
         assert_eq!(rows[0].source_message_id, "1");
         assert_eq!(rows[0].text, "hi");
-        assert!(rows[0].id.is_some());
     }
 
     #[tokio::test]
@@ -638,7 +684,6 @@ mod tests {
 
         let records = vec![
             JournalEntryRecord {
-                id: None,
                 source: "telegram".to_string(),
                 source_conversation_id: "42".to_string(),
                 source_message_id: "imp-1".to_string(),
@@ -646,7 +691,6 @@ mod tests {
                 received_at: at(10, 0),
             },
             JournalEntryRecord {
-                id: None,
                 source: "telegram".to_string(),
                 source_conversation_id: "42".to_string(),
                 source_message_id: "imp-2".to_string(),
@@ -671,7 +715,6 @@ mod tests {
 
         let records = vec![
             JournalEntryRecord {
-                id: None,
                 source: "telegram".to_string(),
                 source_conversation_id: "42".to_string(),
                 source_message_id: "fresh".to_string(),
@@ -679,7 +722,6 @@ mod tests {
                 received_at: at(11, 0),
             },
             JournalEntryRecord {
-                id: None,
                 source: "telegram".to_string(),
                 source_conversation_id: "42".to_string(),
                 source_message_id: "dup".to_string(),
@@ -689,7 +731,18 @@ mod tests {
         ];
 
         let err = repo.bulk_import(&records).await.unwrap_err();
-        assert!(matches!(err, sqlx::Error::Database(_)));
+        match err {
+            BulkImportError::Conflict {
+                source,
+                source_conversation_id,
+                source_message_id,
+            } => {
+                assert_eq!(source, "telegram");
+                assert_eq!(source_conversation_id, "42");
+                assert_eq!(source_message_id, "dup");
+            }
+            other => panic!("expected Conflict, got {other:?}"),
+        }
 
         let entries = repo.fetch_recent("7", 10).await.unwrap();
         assert_eq!(entries.len(), 1);
