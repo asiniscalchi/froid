@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod app;
 pub mod cli;
+pub mod dashboard;
 pub mod database;
 pub mod handler;
 pub mod journal;
