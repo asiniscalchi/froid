@@ -6,15 +6,21 @@ use axum::{
 };
 use rust_embed::RustEmbed;
 
+use crate::journal::repository::JournalRepository;
+
+mod api;
+
 #[derive(RustEmbed)]
 #[folder = "web/dist/"]
 struct Assets;
 
-pub fn router() -> Router {
-    Router::new().fallback(handler)
+pub fn router(repo: JournalRepository) -> Router {
+    Router::new()
+        .nest("/api", api::router(repo))
+        .fallback(spa_handler)
 }
 
-async fn handler(uri: Uri) -> Response {
+async fn spa_handler(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 
@@ -39,13 +45,23 @@ fn respond_with(path: &str, bytes: Vec<u8>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database;
     use axum::body::to_bytes;
     use axum::http::Request;
+    use sqlx::SqlitePool;
     use tower::ServiceExt;
+
+    async fn test_router() -> Router {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        router(JournalRepository::new(pool))
+    }
 
     #[tokio::test]
     async fn root_serves_index_html() {
-        let response = router()
+        let response = test_router()
+            .await
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -66,7 +82,8 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_path_falls_back_to_index_html() {
-        let response = router()
+        let response = test_router()
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/some/spa/route")
