@@ -118,7 +118,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &config,
         signal_runtime_config,
     )?;
-    spawn_mcp_server(
+    spawn_http_server(
         &mut workers,
         &shutdown,
         &pool,
@@ -143,7 +143,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
 }
 
-async fn spawn_mcp_server(
+async fn spawn_http_server(
     workers: &mut JoinSet<&'static str>,
     shutdown: &CancellationToken,
     pool: &SqlitePool,
@@ -187,7 +187,7 @@ async fn spawn_mcp_server(
     let router = axum::Router::new().nest_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind(config.mcp_server.bind).await?;
     let local_addr = listener.local_addr()?;
-    info!(addr = %local_addr, "MCP server listening");
+    info!(addr = %local_addr, mcp = true, "HTTP server listening");
 
     let token = shutdown.clone();
     workers.spawn(async move {
@@ -195,9 +195,9 @@ async fn spawn_mcp_server(
             token.cancelled().await;
         });
         if let Err(err) = serve.await {
-            error!(error = %err, "MCP server exited with error");
+            error!(error = %err, "HTTP server exited with error");
         }
-        "mcp"
+        "http"
     });
 
     Ok(())
