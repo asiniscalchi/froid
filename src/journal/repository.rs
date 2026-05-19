@@ -11,6 +11,48 @@ pub struct JournalConversation {
     pub source_conversation_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalEntryRecord {
+    pub source: String,
+    pub source_conversation_id: String,
+    pub source_message_id: String,
+    pub text: String,
+    pub received_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug)]
+pub enum BulkImportError {
+    Conflict {
+        source: String,
+        source_conversation_id: String,
+        source_message_id: String,
+    },
+    Database(sqlx::Error),
+}
+
+impl std::fmt::Display for BulkImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BulkImportError::Conflict {
+                source,
+                source_conversation_id,
+                source_message_id,
+            } => write!(
+                f,
+                "conflict on ({source}, {source_conversation_id}, {source_message_id})"
+            ),
+            BulkImportError::Database(err) => write!(f, "database error: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for BulkImportError {}
+
+fn is_unique_violation(err: &dyn sqlx::error::DatabaseError) -> bool {
+    err.code().as_deref() == Some("2067")
+        || err.message().to_lowercase().contains("unique constraint")
+}
+
 fn map_entry(row: SqliteRow) -> JournalEntry {
     JournalEntry {
         text: row.get("raw_text"),
@@ -198,6 +240,87 @@ impl JournalRepository {
                 entry: map_entry(row),
             })
             .collect())
+    }
+
+    pub async fn fetch_all(&self) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, raw_text, received_at
+            FROM journal_entries
+            ORDER BY received_at DESC, id DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| StoredJournalEntry {
+                id: row.get("id"),
+                entry: map_entry(row),
+            })
+            .collect())
+    }
+
+    pub async fn fetch_all_for_export(&self) -> Result<Vec<JournalEntryRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT source, source_conversation_id, source_message_id, raw_text, received_at
+            FROM journal_entries
+            ORDER BY received_at DESC, id DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| JournalEntryRecord {
+                source: row.get("source"),
+                source_conversation_id: row.get("source_conversation_id"),
+                source_message_id: row.get("source_message_id"),
+                text: row.get("raw_text"),
+                received_at: row.get("received_at"),
+            })
+            .collect())
+    }
+
+    pub async fn bulk_import(
+        &self,
+        records: &[JournalEntryRecord],
+    ) -> Result<usize, BulkImportError> {
+        let mut tx = self.pool.begin().await.map_err(BulkImportError::Database)?;
+        for record in records {
+            let result = sqlx::query(
+                r#"
+                INSERT INTO journal_entries
+                    (source, source_conversation_id, source_message_id, raw_text, received_at)
+                VALUES (?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&record.source)
+            .bind(&record.source_conversation_id)
+            .bind(&record.source_message_id)
+            .bind(&record.text)
+            .bind(record.received_at)
+            .execute(&mut *tx)
+            .await;
+
+            if let Err(err) = result {
+                return Err(match err {
+                    sqlx::Error::Database(db_err) if is_unique_violation(db_err.as_ref()) => {
+                        BulkImportError::Conflict {
+                            source: record.source.clone(),
+                            source_conversation_id: record.source_conversation_id.clone(),
+                            source_message_id: record.source_message_id.clone(),
+                        }
+                    }
+                    other => BulkImportError::Database(other),
+                });
+            }
+        }
+        tx.commit().await.map_err(BulkImportError::Database)?;
+        Ok(records.len())
     }
 
     pub async fn fetch_in_range(
@@ -517,6 +640,122 @@ mod tests {
         assert_eq!(entries[0].entry.text, "third");
         assert_eq!(entries[1].entry.text, "second");
         assert_eq!(entries[2].entry.text, "first");
+    }
+
+    #[tokio::test]
+    async fn fetch_all_returns_every_entry_newest_first() {
+        let repo = setup().await;
+
+        repo.store(&incoming("1", "first", at(10, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("2", "second", at(11, 0)))
+            .await
+            .unwrap();
+        repo.store(&incoming("3", "third", at(12, 0)))
+            .await
+            .unwrap();
+
+        let entries = repo.fetch_all().await.unwrap();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].entry.text, "third");
+        assert_eq!(entries[1].entry.text, "second");
+        assert_eq!(entries[2].entry.text, "first");
+    }
+
+    #[tokio::test]
+    async fn fetch_all_for_export_returns_full_records() {
+        let repo = setup().await;
+        repo.store(&incoming("1", "hi", at(10, 0))).await.unwrap();
+
+        let rows = repo.fetch_all_for_export().await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, "telegram");
+        assert_eq!(rows[0].source_conversation_id, "42");
+        assert_eq!(rows[0].source_message_id, "1");
+        assert_eq!(rows[0].text, "hi");
+    }
+
+    #[tokio::test]
+    async fn bulk_import_inserts_all_records() {
+        let repo = setup().await;
+
+        let records = vec![
+            JournalEntryRecord {
+                source: "telegram".to_string(),
+                source_conversation_id: "42".to_string(),
+                source_message_id: "imp-1".to_string(),
+                text: "imported one".to_string(),
+                received_at: at(10, 0),
+            },
+            JournalEntryRecord {
+                source: "telegram".to_string(),
+                source_conversation_id: "42".to_string(),
+                source_message_id: "imp-2".to_string(),
+                text: "imported two".to_string(),
+                received_at: at(11, 0),
+            },
+        ];
+
+        let inserted = repo.bulk_import(&records).await.unwrap();
+        assert_eq!(inserted, 2);
+
+        let entries = repo.fetch_recent("7", 10).await.unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bulk_import_rolls_back_on_unique_violation() {
+        let repo = setup().await;
+        repo.store(&incoming("dup", "existing", at(10, 0)))
+            .await
+            .unwrap();
+
+        let records = vec![
+            JournalEntryRecord {
+                source: "telegram".to_string(),
+                source_conversation_id: "42".to_string(),
+                source_message_id: "fresh".to_string(),
+                text: "fresh entry".to_string(),
+                received_at: at(11, 0),
+            },
+            JournalEntryRecord {
+                source: "telegram".to_string(),
+                source_conversation_id: "42".to_string(),
+                source_message_id: "dup".to_string(),
+                text: "collides".to_string(),
+                received_at: at(12, 0),
+            },
+        ];
+
+        let err = repo.bulk_import(&records).await.unwrap_err();
+        match err {
+            BulkImportError::Conflict {
+                source,
+                source_conversation_id,
+                source_message_id,
+            } => {
+                assert_eq!(source, "telegram");
+                assert_eq!(source_conversation_id, "42");
+                assert_eq!(source_message_id, "dup");
+            }
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+
+        let entries = repo.fetch_recent("7", 10).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.text, "existing");
+    }
+
+    #[tokio::test]
+    async fn fetch_all_returns_empty_when_no_entries() {
+        let repo = setup().await;
+
+        let entries = repo.fetch_all().await.unwrap();
+
+        assert!(entries.is_empty());
     }
 
     #[tokio::test]
