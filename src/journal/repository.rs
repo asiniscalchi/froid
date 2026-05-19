@@ -11,6 +11,16 @@ pub struct JournalConversation {
     pub source_conversation_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalEntryRecord {
+    pub id: Option<i64>,
+    pub source: String,
+    pub source_conversation_id: String,
+    pub source_message_id: String,
+    pub text: String,
+    pub received_at: chrono::DateTime<Utc>,
+}
+
 fn map_entry(row: SqliteRow) -> JournalEntry {
     JournalEntry {
         text: row.get("raw_text"),
@@ -218,6 +228,52 @@ impl JournalRepository {
                 entry: map_entry(row),
             })
             .collect())
+    }
+
+    pub async fn fetch_all_for_export(&self) -> Result<Vec<JournalEntryRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, source, source_conversation_id, source_message_id, raw_text, received_at
+            FROM journal_entries
+            ORDER BY received_at DESC, id DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| JournalEntryRecord {
+                id: Some(row.get("id")),
+                source: row.get("source"),
+                source_conversation_id: row.get("source_conversation_id"),
+                source_message_id: row.get("source_message_id"),
+                text: row.get("raw_text"),
+                received_at: row.get("received_at"),
+            })
+            .collect())
+    }
+
+    pub async fn bulk_import(&self, records: &[JournalEntryRecord]) -> Result<usize, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        for record in records {
+            sqlx::query(
+                r#"
+                INSERT INTO journal_entries
+                    (source, source_conversation_id, source_message_id, raw_text, received_at)
+                VALUES (?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&record.source)
+            .bind(&record.source_conversation_id)
+            .bind(&record.source_message_id)
+            .bind(&record.text)
+            .bind(record.received_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(records.len())
     }
 
     pub async fn fetch_in_range(
@@ -559,6 +615,85 @@ mod tests {
         assert_eq!(entries[0].entry.text, "third");
         assert_eq!(entries[1].entry.text, "second");
         assert_eq!(entries[2].entry.text, "first");
+    }
+
+    #[tokio::test]
+    async fn fetch_all_for_export_returns_full_records() {
+        let repo = setup().await;
+        repo.store(&incoming("1", "hi", at(10, 0))).await.unwrap();
+
+        let rows = repo.fetch_all_for_export().await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, "telegram");
+        assert_eq!(rows[0].source_conversation_id, "42");
+        assert_eq!(rows[0].source_message_id, "1");
+        assert_eq!(rows[0].text, "hi");
+        assert!(rows[0].id.is_some());
+    }
+
+    #[tokio::test]
+    async fn bulk_import_inserts_all_records() {
+        let repo = setup().await;
+
+        let records = vec![
+            JournalEntryRecord {
+                id: None,
+                source: "telegram".to_string(),
+                source_conversation_id: "42".to_string(),
+                source_message_id: "imp-1".to_string(),
+                text: "imported one".to_string(),
+                received_at: at(10, 0),
+            },
+            JournalEntryRecord {
+                id: None,
+                source: "telegram".to_string(),
+                source_conversation_id: "42".to_string(),
+                source_message_id: "imp-2".to_string(),
+                text: "imported two".to_string(),
+                received_at: at(11, 0),
+            },
+        ];
+
+        let inserted = repo.bulk_import(&records).await.unwrap();
+        assert_eq!(inserted, 2);
+
+        let entries = repo.fetch_recent("7", 10).await.unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bulk_import_rolls_back_on_unique_violation() {
+        let repo = setup().await;
+        repo.store(&incoming("dup", "existing", at(10, 0)))
+            .await
+            .unwrap();
+
+        let records = vec![
+            JournalEntryRecord {
+                id: None,
+                source: "telegram".to_string(),
+                source_conversation_id: "42".to_string(),
+                source_message_id: "fresh".to_string(),
+                text: "fresh entry".to_string(),
+                received_at: at(11, 0),
+            },
+            JournalEntryRecord {
+                id: None,
+                source: "telegram".to_string(),
+                source_conversation_id: "42".to_string(),
+                source_message_id: "dup".to_string(),
+                text: "collides".to_string(),
+                received_at: at(12, 0),
+            },
+        ];
+
+        let err = repo.bulk_import(&records).await.unwrap_err();
+        assert!(matches!(err, sqlx::Error::Database(_)));
+
+        let entries = repo.fetch_recent("7", 10).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.text, "existing");
     }
 
     #[tokio::test]
