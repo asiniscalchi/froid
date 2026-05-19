@@ -50,7 +50,15 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-All four must pass with no errors or warnings before a branch is ready for review.
+For changes under `web/`, also run from that directory:
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
+All checks must pass with no errors or warnings before a branch is ready for review.
 
 ## Branch Naming
 
