@@ -20,7 +20,7 @@ pub use wiring::{JournalEntryExtractionRuntimeConfig, configure_journal_entry_ex
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryExtractionCandidate {
-    pub journal_entry_id: i64,
+    pub journal_entry_id: String,
     pub raw_text: String,
 }
 
@@ -34,7 +34,7 @@ pub enum JournalEntryExtractionStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryExtraction {
     pub id: i64,
-    pub journal_entry_id: i64,
+    pub journal_entry_id: String,
     pub extraction_json: Option<String>,
     pub model: String,
     pub prompt_version: String,

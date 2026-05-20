@@ -11,7 +11,8 @@ use tracing::error;
 
 use crate::journal::repository::{BulkImportError, JournalEntryRecord, JournalRepository};
 
-pub const EXPORT_FORMAT_VERSION: u32 = 1;
+pub const EXPORT_FORMAT_VERSION: u32 = 2;
+pub const MIN_SUPPORTED_IMPORT_VERSION: u32 = 1;
 
 pub fn router(repo: JournalRepository) -> Router {
     Router::new()
@@ -22,6 +23,7 @@ pub fn router(repo: JournalRepository) -> Router {
 
 #[derive(Serialize)]
 struct ExportedMessage {
+    id: String,
     source: String,
     source_conversation_id: String,
     source_message_id: String,
@@ -51,6 +53,7 @@ async fn export_messages(State(repo): State<JournalRepository>) -> Response {
         messages: records
             .into_iter()
             .map(|r| ExportedMessage {
+                id: r.id,
                 source: r.source,
                 source_conversation_id: r.source_conversation_id,
                 source_message_id: r.source_message_id,
@@ -93,6 +96,8 @@ async fn export_messages(State(repo): State<JournalRepository>) -> Response {
 
 #[derive(Deserialize)]
 struct ImportedMessage {
+    #[serde(default)]
+    id: Option<String>,
     source: String,
     source_conversation_id: String,
     source_message_id: String,
@@ -132,13 +137,13 @@ async fn import_messages(
     State(repo): State<JournalRepository>,
     Json(envelope): Json<ImportEnvelope>,
 ) -> Response {
-    if envelope.version != EXPORT_FORMAT_VERSION {
+    if envelope.version < MIN_SUPPORTED_IMPORT_VERSION || envelope.version > EXPORT_FORMAT_VERSION {
         return (
             StatusCode::BAD_REQUEST,
             Json(ImportError {
                 error: format!(
-                    "unsupported export version {} (expected {})",
-                    envelope.version, EXPORT_FORMAT_VERSION
+                    "unsupported export version {} (supported {}..={})",
+                    envelope.version, MIN_SUPPORTED_IMPORT_VERSION, EXPORT_FORMAT_VERSION
                 ),
                 conflict: None,
             }),
@@ -154,6 +159,7 @@ async fn import_messages(
         .messages
         .into_iter()
         .map(|m| JournalEntryRecord {
+            id: m.id.unwrap_or_default(),
             source: m.source,
             source_conversation_id: m.source_conversation_id,
             source_message_id: m.source_message_id,
@@ -297,7 +303,13 @@ mod tests {
         assert_eq!(messages[0]["source"], "telegram");
         assert_eq!(messages[0]["source_conversation_id"], "42");
         assert_eq!(messages[0]["source_message_id"], "2");
-        assert!(messages[0].get("id").is_none(), "id must not be exported");
+        assert!(
+            messages[0]
+                .get("id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty()),
+            "id must be exported as a non-empty string"
+        );
         assert_eq!(messages[0]["received_at"], "2026-04-28T12:00:00Z");
         assert_eq!(messages[1]["text"], "older");
     }

@@ -27,7 +27,7 @@ struct GetRecentInput {
 
 #[derive(Debug, Serialize)]
 struct JournalEntryItem {
-    id: i64,
+    id: String,
     received_at: DateTime<Utc>,
     text: String,
 }
@@ -159,7 +159,7 @@ struct SearchSemanticInput {
 
 #[derive(Debug, Serialize)]
 struct SemanticHitItem {
-    id: i64,
+    id: String,
     received_at: DateTime<Utc>,
     text: String,
     distance: f32,
@@ -269,7 +269,7 @@ mod tests {
         async fn get_by_id(
             &self,
             _ctx: &UserContext,
-            _id: i64,
+            _id: &str,
         ) -> Result<Option<JournalEntryView>, AnalyzerError> {
             Ok(None)
         }
@@ -288,7 +288,7 @@ mod tests {
     async fn journal_get_recent_dispatches_request_and_serializes_response() {
         let stub = Arc::new(StubJournalService::default());
         *stub.recent_response.lock().unwrap() = vec![JournalEntryView {
-            id: 7,
+            id: "7".to_string(),
             received_at: at(10),
             text: "hello".into(),
         }];
@@ -313,7 +313,7 @@ mod tests {
             captured.to_date_exclusive,
             NaiveDate::from_ymd_opt(2026, 4, 29)
         );
-        assert_eq!(out["entries"][0]["id"], 7);
+        assert_eq!(out["entries"][0]["id"], "7");
         assert_eq!(out["entries"][0]["text"], "hello");
     }
 
@@ -370,7 +370,7 @@ mod tests {
             async fn get_by_id(
                 &self,
                 _: &UserContext,
-                _: i64,
+                _: &str,
             ) -> Result<Option<JournalEntryView>, AnalyzerError> {
                 unreachable!()
             }
@@ -392,7 +392,7 @@ mod tests {
     async fn journal_search_text_dispatches_request() {
         let stub = Arc::new(StubJournalService::default());
         *stub.text_response.lock().unwrap() = vec![JournalEntryView {
-            id: 1,
+            id: "1".to_string(),
             received_at: at(10),
             text: "match".into(),
         }];
@@ -413,7 +413,7 @@ mod tests {
     async fn journal_search_semantic_dispatches_request_and_returns_distance() {
         let stub = Arc::new(StubJournalService::default());
         *stub.semantic_response.lock().unwrap() = vec![SemanticHit {
-            id: 9,
+            id: "9".to_string(),
             received_at: at(10),
             text: "deep cut".into(),
             distance: 0.123,
@@ -430,7 +430,7 @@ mod tests {
         assert_eq!(captured.limit, 3);
         let distance = out["hits"][0]["distance"].as_f64().unwrap();
         assert!((distance - 0.123).abs() < 1e-6);
-        assert_eq!(out["hits"][0]["id"], 9);
+        assert_eq!(out["hits"][0]["id"], "9");
     }
 
     #[test]

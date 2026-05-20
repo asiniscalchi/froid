@@ -48,7 +48,7 @@ impl JournalEntryExtractionRepository {
 
     pub async fn find_by_journal_entry_id(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
     ) -> Result<Option<JournalEntryExtraction>, JournalEntryExtractionRepositoryError> {
         let row = sqlx::query(
             r#"
@@ -67,8 +67,8 @@ impl JournalEntryExtractionRepository {
 
     pub async fn find_completed_by_journal_entry_ids(
         &self,
-        journal_entry_ids: &[i64],
-    ) -> Result<HashMap<i64, JournalEntryExtractionResult>, JournalEntryExtractionRepositoryError>
+        journal_entry_ids: &[String],
+    ) -> Result<HashMap<String, JournalEntryExtractionResult>, JournalEntryExtractionRepositoryError>
     {
         if journal_entry_ids.is_empty() {
             return Ok(HashMap::new());
@@ -96,7 +96,7 @@ impl JournalEntryExtractionRepository {
 
         let mut results = HashMap::new();
         for row in rows {
-            let id: i64 = row.get("journal_entry_id");
+            let id: String = row.get("journal_entry_id");
             let json: String = row.get("extraction_json");
             if let Ok(result) = serde_json::from_str(&json) {
                 results.insert(id, result);
@@ -108,7 +108,7 @@ impl JournalEntryExtractionRepository {
 
     pub async fn insert_pending_if_absent(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
         model: &str,
         prompt_version: &str,
     ) -> Result<bool, JournalEntryExtractionRepositoryError> {
@@ -130,7 +130,7 @@ impl JournalEntryExtractionRepository {
 
     pub async fn mark_completed(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
         extraction_json: &str,
         model: &str,
         prompt_version: &str,
@@ -159,7 +159,7 @@ impl JournalEntryExtractionRepository {
 
     pub async fn mark_failed(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
         model: &str,
         prompt_version: &str,
         error_message: &str,
@@ -232,7 +232,7 @@ impl JournalEntryExtractionRepository {
 
     pub async fn delete_failed_if_present(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
     ) -> Result<bool, JournalEntryExtractionRepositoryError> {
         let result = sqlx::query(
             r#"
@@ -291,7 +291,7 @@ mod tests {
         (JournalEntryExtractionRepository::new(pool.clone()), pool)
     }
 
-    async fn insert_entry(pool: &SqlitePool) -> i64 {
+    async fn insert_entry(pool: &SqlitePool) -> String {
         let message = IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
@@ -314,11 +314,11 @@ mod tests {
         let entry_id = insert_entry(&pool).await;
 
         let first = repo
-            .insert_pending_if_absent(entry_id, "model-a", "entry_extraction_v1")
+            .insert_pending_if_absent(&entry_id, "model-a", "entry_extraction_v1")
             .await
             .unwrap();
         let second = repo
-            .insert_pending_if_absent(entry_id, "model-a", "entry_extraction_v1")
+            .insert_pending_if_absent(&entry_id, "model-a", "entry_extraction_v1")
             .await
             .unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_extractions")
@@ -335,12 +335,12 @@ mod tests {
     async fn mark_completed_stores_valid_json_metadata_and_status() {
         let (repo, pool) = setup().await;
         let entry_id = insert_entry(&pool).await;
-        repo.insert_pending_if_absent(entry_id, "model-a", "entry_extraction_v1")
+        repo.insert_pending_if_absent(&entry_id, "model-a", "entry_extraction_v1")
             .await
             .unwrap();
 
         repo.mark_completed(
-            entry_id,
+            &entry_id,
             r#"{"summary":"Saved","domains":[],"emotions":[],"behaviors":[],"needs":[],"possible_patterns":[]}"#,
             "model-b",
             "entry_extraction_v2",
@@ -349,7 +349,7 @@ mod tests {
         .unwrap();
 
         let extraction = repo
-            .find_by_journal_entry_id(entry_id)
+            .find_by_journal_entry_id(&entry_id)
             .await
             .unwrap()
             .unwrap();
@@ -365,16 +365,16 @@ mod tests {
     async fn mark_failed_records_error_without_json() {
         let (repo, pool) = setup().await;
         let entry_id = insert_entry(&pool).await;
-        repo.insert_pending_if_absent(entry_id, "model-a", "entry_extraction_v1")
+        repo.insert_pending_if_absent(&entry_id, "model-a", "entry_extraction_v1")
             .await
             .unwrap();
 
-        repo.mark_failed(entry_id, "model-a", "entry_extraction_v1", "provider down")
+        repo.mark_failed(&entry_id, "model-a", "entry_extraction_v1", "provider down")
             .await
             .unwrap();
 
         let extraction = repo
-            .find_by_journal_entry_id(entry_id)
+            .find_by_journal_entry_id(&entry_id)
             .await
             .unwrap()
             .unwrap();
@@ -388,17 +388,17 @@ mod tests {
     async fn deleting_journal_entry_cascades_to_extraction() {
         let (repo, pool) = setup().await;
         let entry_id = insert_entry(&pool).await;
-        repo.insert_pending_if_absent(entry_id, "model-a", "entry_extraction_v1")
+        repo.insert_pending_if_absent(&entry_id, "model-a", "entry_extraction_v1")
             .await
             .unwrap();
 
         sqlx::query("DELETE FROM journal_entries WHERE id = ?")
-            .bind(entry_id)
+            .bind(&entry_id)
             .execute(&pool)
             .await
             .unwrap();
 
-        let extraction = repo.find_by_journal_entry_id(entry_id).await.unwrap();
+        let extraction = repo.find_by_journal_entry_id(&entry_id).await.unwrap();
         assert!(extraction.is_none());
     }
 
@@ -407,7 +407,7 @@ mod tests {
         source_message_id: &str,
         text: &str,
         h: u32,
-    ) -> i64 {
+    ) -> String {
         let received_at = chrono::Utc.with_ymd_and_hms(2026, 1, 1, h, 0, 0).unwrap();
         let message = IncomingMessage {
             source: MessageSource::Telegram,
@@ -431,7 +431,7 @@ mod tests {
         let second = insert_entry_at(&pool, "2", "second", 11).await;
         let third = insert_entry_at(&pool, "3", "third", 12).await;
 
-        repo.insert_pending_if_absent(second, "model-a", "v1")
+        repo.insert_pending_if_absent(&second, "model-a", "v1")
             .await
             .unwrap();
 
@@ -440,7 +440,10 @@ mod tests {
             .await
             .unwrap();
 
-        let ids: Vec<i64> = candidates.iter().map(|c| c.journal_entry_id).collect();
+        let ids: Vec<String> = candidates
+            .iter()
+            .map(|c| c.journal_entry_id.clone())
+            .collect();
         assert_eq!(ids, vec![first, third]);
     }
 
@@ -448,10 +451,10 @@ mod tests {
     async fn find_candidates_includes_failed_entries() {
         let (repo, pool) = setup().await;
         let entry_id = insert_entry_at(&pool, "1", "first", 10).await;
-        repo.insert_pending_if_absent(entry_id, "model-a", "v1")
+        repo.insert_pending_if_absent(&entry_id, "model-a", "v1")
             .await
             .unwrap();
-        repo.mark_failed(entry_id, "model-a", "v1", "provider down")
+        repo.mark_failed(&entry_id, "model-a", "v1", "provider down")
             .await
             .unwrap();
 
@@ -470,14 +473,14 @@ mod tests {
         let (repo, pool) = setup().await;
         let pending_id = insert_entry_at(&pool, "1", "pending", 10).await;
         let completed_id = insert_entry_at(&pool, "2", "completed", 11).await;
-        repo.insert_pending_if_absent(pending_id, "model-a", "v1")
+        repo.insert_pending_if_absent(&pending_id, "model-a", "v1")
             .await
             .unwrap();
-        repo.insert_pending_if_absent(completed_id, "model-a", "v1")
+        repo.insert_pending_if_absent(&completed_id, "model-a", "v1")
             .await
             .unwrap();
         repo.mark_completed(
-            completed_id,
+            &completed_id,
             r#"{"summary":"ok","domains":[],"emotions":[],"behaviors":[],"needs":[],"possible_patterns":[]}"#,
             "model-a",
             "v1",
@@ -512,16 +515,16 @@ mod tests {
     async fn delete_failed_removes_failed_row_and_returns_true() {
         let (repo, pool) = setup().await;
         let entry_id = insert_entry(&pool).await;
-        repo.insert_pending_if_absent(entry_id, "model-a", "v1")
+        repo.insert_pending_if_absent(&entry_id, "model-a", "v1")
             .await
             .unwrap();
-        repo.mark_failed(entry_id, "model-a", "v1", "oops")
+        repo.mark_failed(&entry_id, "model-a", "v1", "oops")
             .await
             .unwrap();
 
-        let deleted = repo.delete_failed_if_present(entry_id).await.unwrap();
+        let deleted = repo.delete_failed_if_present(&entry_id).await.unwrap();
 
-        let extraction = repo.find_by_journal_entry_id(entry_id).await.unwrap();
+        let extraction = repo.find_by_journal_entry_id(&entry_id).await.unwrap();
         assert!(deleted);
         assert!(extraction.is_none());
     }
@@ -531,7 +534,7 @@ mod tests {
         let (repo, pool) = setup().await;
         let entry_id = insert_entry(&pool).await;
 
-        let deleted = repo.delete_failed_if_present(entry_id).await.unwrap();
+        let deleted = repo.delete_failed_if_present(&entry_id).await.unwrap();
 
         assert!(!deleted);
     }
@@ -541,14 +544,14 @@ mod tests {
         let (repo, pool) = setup().await;
         let pending_id = insert_entry_at(&pool, "1", "pending", 10).await;
         let completed_id = insert_entry_at(&pool, "2", "completed", 11).await;
-        repo.insert_pending_if_absent(pending_id, "model-a", "v1")
+        repo.insert_pending_if_absent(&pending_id, "model-a", "v1")
             .await
             .unwrap();
-        repo.insert_pending_if_absent(completed_id, "model-a", "v1")
+        repo.insert_pending_if_absent(&completed_id, "model-a", "v1")
             .await
             .unwrap();
         repo.mark_completed(
-            completed_id,
+            &completed_id,
             r#"{"summary":"ok","domains":[],"emotions":[],"behaviors":[],"needs":[],"possible_patterns":[]}"#,
             "model-a",
             "v1",
@@ -556,13 +559,13 @@ mod tests {
         .await
         .unwrap();
 
-        let pending_deleted = repo.delete_failed_if_present(pending_id).await.unwrap();
-        let completed_deleted = repo.delete_failed_if_present(completed_id).await.unwrap();
+        let pending_deleted = repo.delete_failed_if_present(&pending_id).await.unwrap();
+        let completed_deleted = repo.delete_failed_if_present(&completed_id).await.unwrap();
 
         assert!(!pending_deleted);
         assert!(!completed_deleted);
         assert!(
-            repo.find_by_journal_entry_id(completed_id)
+            repo.find_by_journal_entry_id(&completed_id)
                 .await
                 .unwrap()
                 .is_some()
@@ -594,11 +597,11 @@ mod tests {
         };
 
         // ID 1: Completed
-        repo.insert_pending_if_absent(id1, "model", "v1")
+        repo.insert_pending_if_absent(&id1, "model", "v1")
             .await
             .unwrap();
         repo.mark_completed(
-            id1,
+            &id1,
             &serde_json::to_string(&result1).unwrap(),
             "model",
             "v1",
@@ -607,17 +610,19 @@ mod tests {
         .unwrap();
 
         // ID 2: Failed (should be skipped)
-        repo.insert_pending_if_absent(id2, "model", "v1")
+        repo.insert_pending_if_absent(&id2, "model", "v1")
             .await
             .unwrap();
-        repo.mark_failed(id2, "model", "v1", "error").await.unwrap();
+        repo.mark_failed(&id2, "model", "v1", "error")
+            .await
+            .unwrap();
 
         // ID 3: Completed
-        repo.insert_pending_if_absent(id3, "model", "v1")
+        repo.insert_pending_if_absent(&id3, "model", "v1")
             .await
             .unwrap();
         repo.mark_completed(
-            id3,
+            &id3,
             &serde_json::to_string(&result2).unwrap(),
             "model",
             "v1",
@@ -626,7 +631,7 @@ mod tests {
         .unwrap();
 
         let extractions = repo
-            .find_completed_by_journal_entry_ids(&[id1, id2, id3])
+            .find_completed_by_journal_entry_ids(&[id1.clone(), id2.clone(), id3.clone()])
             .await
             .unwrap();
 

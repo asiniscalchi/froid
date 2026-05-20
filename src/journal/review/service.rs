@@ -183,7 +183,7 @@ impl DailyReviewService {
             return Ok(vec![]);
         }
 
-        let entry_ids: Vec<i64> = entries.iter().map(|s| s.id).collect();
+        let entry_ids: Vec<String> = entries.iter().map(|s| s.id.clone()).collect();
         let mut completed_extractions = self
             .extractions
             .find_completed_by_journal_entry_ids(&entry_ids)
@@ -715,12 +715,12 @@ mod tests {
             possible_patterns: vec![],
         };
         extractions
-            .insert_pending_if_absent(entry_id, "model", "v1")
+            .insert_pending_if_absent(&entry_id, "model", "v1")
             .await
             .unwrap();
         extractions
             .mark_completed(
-                entry_id,
+                &entry_id,
                 &serde_json::to_string(&extraction_result).unwrap(),
                 "model",
                 "v1",

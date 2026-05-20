@@ -37,7 +37,7 @@ pub trait JournalEntryExtractionRunner: Send + Sync {
 
     async fn extract_entry(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
         text: &str,
     ) -> Result<(), JournalEntryExtractionServiceError>;
 }
@@ -72,7 +72,7 @@ where
 
     async fn extract_entry(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
         text: &str,
     ) -> Result<(), JournalEntryExtractionServiceError> {
         let inserted = self
@@ -149,7 +149,7 @@ where
 {
     async fn record_failure(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
         error: impl std::fmt::Display,
     ) -> Result<(), JournalEntryExtractionServiceError> {
         self.repository
@@ -249,7 +249,7 @@ mod tests {
         (service, repo, pool)
     }
 
-    async fn insert_entry(pool: &SqlitePool, text: &str) -> i64 {
+    async fn insert_entry(pool: &SqlitePool, text: &str) -> String {
         let message = IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
@@ -299,12 +299,12 @@ mod tests {
         let entry_id = insert_entry(&pool, "Work felt stressful today").await;
 
         service
-            .extract_entry(entry_id, "Work felt stressful today")
+            .extract_entry(&entry_id, "Work felt stressful today")
             .await
             .unwrap();
 
         let extraction = repo
-            .find_by_journal_entry_id(entry_id)
+            .find_by_journal_entry_id(&entry_id)
             .await
             .unwrap()
             .unwrap();
@@ -323,12 +323,12 @@ mod tests {
         let entry_id = insert_entry(&pool, "Work felt stressful today").await;
 
         service
-            .extract_entry(entry_id, "Work felt stressful today")
+            .extract_entry(&entry_id, "Work felt stressful today")
             .await
             .unwrap();
 
         let extraction = repo
-            .find_by_journal_entry_id(entry_id)
+            .find_by_journal_entry_id(&entry_id)
             .await
             .unwrap()
             .unwrap();
@@ -344,9 +344,12 @@ mod tests {
         let (service, repo, pool) = setup(generator.clone()).await;
         let entry_id = insert_entry(&pool, "Work felt stressful today").await;
 
-        service.extract_entry(entry_id, "first call").await.unwrap();
         service
-            .extract_entry(entry_id, "second call")
+            .extract_entry(&entry_id, "first call")
+            .await
+            .unwrap();
+        service
+            .extract_entry(&entry_id, "second call")
             .await
             .unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entry_extractions")
@@ -357,7 +360,7 @@ mod tests {
         assert_eq!(generator.calls(), 1);
         assert_eq!(count, 1);
         assert!(
-            repo.find_by_journal_entry_id(entry_id)
+            repo.find_by_journal_entry_id(&entry_id)
                 .await
                 .unwrap()
                 .is_some()

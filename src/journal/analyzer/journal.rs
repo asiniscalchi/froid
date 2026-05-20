@@ -36,7 +36,7 @@ pub trait JournalReadService: Send + Sync {
     async fn get_by_id(
         &self,
         ctx: &UserContext,
-        id: i64,
+        id: &str,
     ) -> Result<Option<JournalEntryView>, AnalyzerError>;
 }
 
@@ -148,16 +148,19 @@ impl JournalReadService for DefaultJournalReadService {
     async fn get_by_id(
         &self,
         ctx: &UserContext,
-        id: i64,
+        id: &str,
     ) -> Result<Option<JournalEntryView>, AnalyzerError> {
         let mut rows = self
             .repository
-            .fetch_by_ids(&ctx.user_id, &[id])
+            .fetch_by_ids(&ctx.user_id, &[id.to_string()])
             .await
             .map_err(map_storage_error)?;
 
         Ok(rows.pop().map(|(_, entry)| {
-            JournalEntryView::from(crate::journal::entry::StoredJournalEntry { id, entry })
+            JournalEntryView::from(crate::journal::entry::StoredJournalEntry {
+                id: id.to_string(),
+                entry,
+            })
         }))
     }
 }
@@ -243,7 +246,7 @@ mod tests {
         }
     }
 
-    fn hit(id: i64, received_at: DateTime<Utc>, text: &str, distance: f32) -> SemanticHit {
+    fn hit(id: String, received_at: DateTime<Utc>, text: &str, distance: f32) -> SemanticHit {
         SemanticHit {
             id,
             received_at,
@@ -303,7 +306,7 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].text, "second");
         assert_eq!(result[1].text, "first");
-        assert!(result[0].id > 0);
+        assert!(!result[0].id.is_empty());
     }
 
     #[tokio::test]
@@ -414,7 +417,7 @@ mod tests {
             .expect("entry stored");
 
         let result = service
-            .get_by_id(&ctx(), id)
+            .get_by_id(&ctx(), &id)
             .await
             .unwrap()
             .expect("entry present");
@@ -426,7 +429,7 @@ mod tests {
     #[tokio::test]
     async fn get_by_id_returns_none_when_missing() {
         let (service, _) = setup().await;
-        let result = service.get_by_id(&ctx(), 9_999).await.unwrap();
+        let result = service.get_by_id(&ctx(), "missing").await.unwrap();
         assert!(result.is_none());
     }
 
@@ -525,7 +528,7 @@ mod tests {
     #[tokio::test]
     async fn search_semantic_returns_hits_from_underlying_searcher() {
         let stub = StubSemanticSearcher::with_hits(vec![hit(
-            1,
+            "1".to_string(),
             at(2026, 4, 28, 10, 0),
             "anxious entry",
             0.1,
@@ -588,10 +591,10 @@ mod tests {
     #[tokio::test]
     async fn search_semantic_passes_date_filter_and_limit_to_searcher() {
         let stub = StubSemanticSearcher::with_hits(vec![
-            hit(1, at(2026, 4, 27, 10, 0), "before", 0.1),
-            hit(2, at(2026, 4, 28, 10, 0), "in-1", 0.2),
-            hit(3, at(2026, 4, 28, 12, 0), "in-2", 0.3),
-            hit(4, at(2026, 4, 29, 0, 0), "boundary", 0.4),
+            hit("1".to_string(), at(2026, 4, 27, 10, 0), "before", 0.1),
+            hit("2".to_string(), at(2026, 4, 28, 10, 0), "in-1", 0.2),
+            hit("3".to_string(), at(2026, 4, 28, 12, 0), "in-2", 0.3),
+            hit("4".to_string(), at(2026, 4, 29, 0, 0), "boundary", 0.4),
         ]);
         let (service, _) = setup_with_semantic(Arc::new(stub.clone())).await;
 

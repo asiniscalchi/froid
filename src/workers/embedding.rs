@@ -24,7 +24,7 @@ impl<ID, I, E> ReconciliationCycle for EmbeddingCycle<ID, I, E>
 where
     I: EmbeddingIndex<ID> + Send + Sync + 'static,
     E: Embedder + Send + Sync + 'static,
-    ID: Send + Sync + Copy + 'static,
+    ID: Send + Sync + Clone + 'static,
 {
     type Outcome = BackfillResult;
     type Error = EmbeddingBackfillError;
@@ -120,13 +120,13 @@ mod tests {
         source_message_id: &str,
         text: &str,
         received_at: chrono::DateTime<Utc>,
-    ) -> i64 {
+    ) -> String {
         journal_repository
             .store(&incoming(source_message_id, text, received_at))
             .await
             .unwrap();
 
-        sqlx::query_scalar(
+        sqlx::query_scalar::<_, String>(
             "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = ?",
         )
         .bind(source_message_id)
@@ -165,7 +165,7 @@ mod tests {
     fn worker_with_batch_size(
         embedding_repository: SqliteEmbeddingRepository,
         batch_size: u32,
-    ) -> EmbeddingReconciliationWorker<i64, SqliteEmbeddingRepository, FakeEmbedder> {
+    ) -> EmbeddingReconciliationWorker<String, SqliteEmbeddingRepository, FakeEmbedder> {
         let backfill_service = EmbeddingBackfillService::new(embedding_repository, FakeEmbedder);
         ReconciliationWorker::new(
             EmbeddingCycle::new(backfill_service),

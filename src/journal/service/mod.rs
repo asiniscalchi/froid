@@ -68,7 +68,7 @@ impl JournalService {
 
     pub fn with_search<I, E>(mut self, search: SemanticSearchService<I, E>) -> Self
     where
-        I: EmbeddingIndex<i64> + Send + Sync + 'static,
+        I: EmbeddingIndex<String> + Send + Sync + 'static,
         E: Embedder + Send + Sync + 'static,
     {
         self.search = Some(Arc::new(search));
@@ -102,7 +102,7 @@ impl JournalService {
 
     pub fn with_capture_embedding<I, E>(mut self, index: I, embedder: E) -> Self
     where
-        I: EmbeddingIndex<i64> + Send + Sync + 'static,
+        I: EmbeddingIndex<String> + Send + Sync + 'static,
         E: Embedder + Send + Sync + 'static,
     {
         self.capture_embedding = Some(Arc::new(ImmediateCaptureEmbeddingService::new(
@@ -155,14 +155,12 @@ impl JournalService {
         })
     }
 
-    fn spawn_background_tasks(&self, journal_entry_id: i64, text: String) {
+    fn spawn_background_tasks(&self, journal_entry_id: String, text: String) {
         let capture_embedding = self.capture_embedding.clone();
         let entry_extraction = self.entry_extraction.clone();
 
         tokio::spawn(async move {
-            // Wrap with catch_unwind so a panic inside the embedder or
-            // extractor surfaces as an error log instead of being lost
-            // to a fire-and-forget JoinHandle.
+            let id_for_log = journal_entry_id.clone();
             let outcome = AssertUnwindSafe(run_capture_followups(
                 journal_entry_id,
                 text,
@@ -174,7 +172,7 @@ impl JournalService {
 
             if outcome.is_err() {
                 error!(
-                    journal_entry_id,
+                    journal_entry_id = %id_for_log,
                     "background capture task panicked; payload swallowed by catch_unwind"
                 );
             }
@@ -183,16 +181,18 @@ impl JournalService {
 }
 
 async fn run_capture_followups(
-    journal_entry_id: i64,
+    journal_entry_id: String,
     text: String,
     capture_embedding: Option<Arc<dyn CaptureEmbeddingService>>,
     entry_extraction: Option<Arc<dyn JournalEntryExtractionRunner>>,
 ) {
     if let Some(capture_embedding) = capture_embedding
-        && let Err(error) = capture_embedding.embed_entry(journal_entry_id, &text).await
+        && let Err(error) = capture_embedding
+            .embed_entry(&journal_entry_id, &text)
+            .await
     {
         warn!(
-            journal_entry_id,
+            journal_entry_id = %journal_entry_id,
             error = %error,
             "failed to create journal entry embedding after capture"
         );
@@ -200,11 +200,11 @@ async fn run_capture_followups(
 
     if let Some(entry_extraction) = entry_extraction
         && let Err(error) = entry_extraction
-            .extract_entry(journal_entry_id, &text)
+            .extract_entry(&journal_entry_id, &text)
             .await
     {
         warn!(
-            journal_entry_id,
+            journal_entry_id = %journal_entry_id,
             error = %error,
             "failed to process journal entry extraction after capture"
         );
@@ -232,7 +232,7 @@ impl std::error::Error for CaptureEmbeddingError {}
 trait CaptureEmbeddingService: Send + Sync {
     async fn embed_entry(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
         text: &str,
     ) -> Result<(), CaptureEmbeddingError>;
 }
@@ -252,12 +252,12 @@ impl<I, E> ImmediateCaptureEmbeddingService<I, E> {
 #[async_trait]
 impl<I, E> CaptureEmbeddingService for ImmediateCaptureEmbeddingService<I, E>
 where
-    I: EmbeddingIndex<i64> + Send + Sync,
+    I: EmbeddingIndex<String> + Send + Sync,
     E: Embedder + Send + Sync,
 {
     async fn embed_entry(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
         text: &str,
     ) -> Result<(), CaptureEmbeddingError> {
         let embedding: Embedding = self
@@ -268,7 +268,7 @@ where
 
         self.index
             .store_embedding(
-                journal_entry_id,
+                journal_entry_id.to_string(),
                 self.embedder.model(),
                 self.embedder.dimensions(),
                 &embedding,

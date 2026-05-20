@@ -199,7 +199,7 @@ impl AnalyzerMcpServer {
             ResourceRef::JournalEntry(id) => {
                 let entry = self
                     .journal_service
-                    .get_by_id(&self.user, id)
+                    .get_by_id(&self.user, &id)
                     .await
                     .map_err(analyzer_to_mcp)?
                     .ok_or_else(|| {
@@ -412,14 +412,14 @@ fn build_resource_templates() -> Arc<[rmcp::model::ResourceTemplate]> {
 /// Parsed reference to one of the analyzer-backed resources.
 #[derive(Debug, PartialEq, Eq)]
 enum ResourceRef {
-    JournalEntry(i64),
+    JournalEntry(String),
     DailyReview(NaiveDate),
     WeeklyReview(NaiveDate),
 }
 
 fn parse_resource_uri(uri: &str) -> Option<ResourceRef> {
     if let Some(rest) = uri.strip_prefix("journal://entry/") {
-        return rest.parse::<i64>().ok().map(ResourceRef::JournalEntry);
+        return Some(ResourceRef::JournalEntry(rest.to_string()));
     }
     if let Some(rest) = uri.strip_prefix("review://daily/") {
         return NaiveDate::parse_from_str(rest, "%Y-%m-%d")
@@ -521,7 +521,7 @@ mod tests {
 
     #[derive(Default)]
     struct StubJournalService {
-        last_id: Mutex<Option<i64>>,
+        last_id: Mutex<Option<String>>,
         get_by_id_response: Mutex<Option<JournalEntryView>>,
     }
 
@@ -551,9 +551,9 @@ mod tests {
         async fn get_by_id(
             &self,
             _ctx: &UserContext,
-            id: i64,
+            id: &str,
         ) -> Result<Option<JournalEntryView>, AnalyzerError> {
-            *self.last_id.lock().unwrap() = Some(id);
+            *self.last_id.lock().unwrap() = Some(id.to_string());
             Ok(self.get_by_id_response.lock().unwrap().clone())
         }
     }
@@ -806,7 +806,7 @@ mod tests {
     fn parse_resource_uri_recognises_supported_schemes() {
         assert_eq!(
             parse_resource_uri("journal://entry/42"),
-            Some(ResourceRef::JournalEntry(42))
+            Some(ResourceRef::JournalEntry("42".to_string()))
         );
         assert_eq!(
             parse_resource_uri("review://daily/2026-04-28"),
@@ -820,7 +820,6 @@ mod tests {
 
     #[test]
     fn parse_resource_uri_rejects_malformed_uris() {
-        assert!(parse_resource_uri("journal://entry/not-a-number").is_none());
         assert!(parse_resource_uri("review://daily/not-a-date").is_none());
         assert!(parse_resource_uri("review://weekly/2026/04/20").is_none());
         assert!(parse_resource_uri("unknown://thing/1").is_none());
@@ -837,7 +836,7 @@ mod tests {
     async fn read_resource_returns_journal_entry_as_json() {
         let journal = Arc::new(StubJournalService::default());
         *journal.get_by_id_response.lock().unwrap() = Some(JournalEntryView {
-            id: 42,
+            id: "42".to_string(),
             received_at: at(10),
             text: "hello".into(),
         });
@@ -848,7 +847,7 @@ mod tests {
             .await
             .expect("read_resource ok");
 
-        assert_eq!(*journal.last_id.lock().unwrap(), Some(42));
+        assert_eq!(*journal.last_id.lock().unwrap(), Some("42".to_string()));
         assert_eq!(result.contents.len(), 1);
         let ResourceContents::TextResourceContents {
             uri,
@@ -862,7 +861,7 @@ mod tests {
         assert_eq!(uri, "journal://entry/42");
         assert_eq!(mime_type.as_deref(), Some(RESOURCE_MIME_TYPE));
         let parsed: Value = serde_json::from_str(text).expect("payload is JSON");
-        assert_eq!(parsed["id"], 42);
+        assert_eq!(parsed["id"], "42");
         assert_eq!(parsed["text"], "hello");
     }
 

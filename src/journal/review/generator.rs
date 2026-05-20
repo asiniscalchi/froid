@@ -462,7 +462,7 @@ mod tests {
         assert_eq!(
             generator
                 .generate_daily_review(&[JournalEntryWithExtraction {
-                    id: 1,
+                    id: "1".to_string(),
                     entry: entry(28, "wrote a test"),
                     extraction: None,
                 }])
@@ -488,7 +488,7 @@ mod tests {
 
         generator
             .generate_daily_review(&[JournalEntryWithExtraction {
-                id: 1,
+                id: "1".to_string(),
                 entry: entry(28, "requested date entry"),
                 extraction: None,
             }])
@@ -512,7 +512,7 @@ mod tests {
 
         let error = generator
             .generate_daily_review(&[JournalEntryWithExtraction {
-                id: 1,
+                id: "1".to_string(),
                 entry: entry(28, "wrote a test"),
                 extraction: None,
             }])
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn generated_prompt_requests_review_format() {
         let prompt_text = build_daily_review_prompt(&[JournalEntryWithExtraction {
-            id: 1,
+            id: "1".to_string(),
             entry: entry(28, "finished the feature"),
             extraction: None,
         }]);
@@ -547,7 +547,7 @@ mod tests {
             possible_patterns: vec![],
         };
         let prompt_text = build_daily_review_prompt(&[JournalEntryWithExtraction {
-            id: 1,
+            id: "1".to_string(),
             entry: entry(28, "entry with extraction"),
             extraction: Some(extraction),
         }]);

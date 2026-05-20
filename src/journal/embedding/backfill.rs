@@ -38,7 +38,7 @@ impl<ID, I, E> EmbeddingBackfillService<ID, I, E>
 where
     I: EmbeddingIndex<ID>,
     E: Embedder,
-    ID: Send + Sync + Copy,
+    ID: Send + Sync + Clone,
 {
     pub fn new(index: I, embedder: E) -> Self {
         Self {
@@ -79,12 +79,11 @@ where
         for candidate in candidates {
             if let Err(error) = self
                 .index
-                .delete_failed_embedding(candidate.id, embedding_model)
+                .delete_failed_embedding(candidate.id.clone(), embedding_model)
                 .await
             {
                 result.failed += 1;
                 warn!(
-                    // journal_entry_id = candidate.id, // ID might not be printable directly without traits, but i64/etc usually are.
                     error = %error,
                     "failed to delete previous failed embedding record"
                 );
@@ -96,13 +95,12 @@ where
                 Err(error) => {
                     result.failed += 1;
                     warn!(
-                        // journal_entry_id = candidate.id,
                         embedding_model,
                         embedding_dim,
                         error = %error,
                         "failed to generate journal entry embedding"
                     );
-                    self.record_failure(candidate.id, embedding_model, &error.to_string())
+                    self.record_failure(candidate.id.clone(), embedding_model, &error.to_string())
                         .await;
                     continue;
                 }
@@ -110,7 +108,12 @@ where
 
             match self
                 .index
-                .store_embedding(candidate.id, embedding_model, embedding_dim, &embedding)
+                .store_embedding(
+                    candidate.id.clone(),
+                    embedding_model,
+                    embedding_dim,
+                    &embedding,
+                )
                 .await
             {
                 Ok(true) => result.created += 1,
@@ -118,13 +121,12 @@ where
                 Err(error) => {
                     result.failed += 1;
                     warn!(
-                        // journal_entry_id = candidate.id,
                         embedding_model,
                         embedding_dim,
                         error = %error,
                         "failed to store journal entry embedding"
                     );
-                    self.record_failure(candidate.id, embedding_model, &error.to_string())
+                    self.record_failure(candidate.id.clone(), embedding_model, &error.to_string())
                         .await;
                 }
             }

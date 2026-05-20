@@ -14,7 +14,7 @@ impl AsRef<JournalEntry> for JournalEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredJournalEntry {
-    pub id: i64,
+    pub id: String,
     pub entry: JournalEntry,
 }
 

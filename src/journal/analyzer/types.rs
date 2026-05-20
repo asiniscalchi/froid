@@ -52,7 +52,7 @@ impl Error for AnalyzerError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryView {
-    pub id: i64,
+    pub id: String,
     pub received_at: DateTime<Utc>,
     pub text: String,
 }
@@ -122,7 +122,7 @@ pub struct GetRecentRequest {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticHit {
-    pub id: i64,
+    pub id: String,
     pub received_at: DateTime<Utc>,
     pub text: String,
     pub distance: f32,
@@ -172,14 +172,14 @@ mod tests {
     #[test]
     fn journal_entry_view_is_built_from_stored_entry() {
         let stored = StoredJournalEntry {
-            id: 42,
+            id: "42".to_string(),
             entry: crate::journal::entry::JournalEntry {
                 text: "hello".to_string(),
                 received_at: Utc::now(),
             },
         };
         let view: JournalEntryView = stored.clone().into();
-        assert_eq!(view.id, 42);
+        assert_eq!(view.id, "42");
         assert_eq!(view.text, "hello");
         assert_eq!(view.received_at, stored.entry.received_at);
     }

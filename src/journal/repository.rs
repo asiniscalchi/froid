@@ -13,6 +13,7 @@ pub struct JournalConversation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryRecord {
+    pub id: String,
     pub source: String,
     pub source_conversation_id: String,
     pub source_message_id: String,
@@ -79,14 +80,16 @@ impl JournalRepository {
         &self.pool
     }
 
-    pub async fn store(&self, message: &IncomingMessage) -> Result<Option<i64>, sqlx::Error> {
+    pub async fn store(&self, message: &IncomingMessage) -> Result<Option<String>, sqlx::Error> {
+        let id = ulid::Ulid::new().to_string();
         let result = sqlx::query(
             r#"
             INSERT OR IGNORE INTO journal_entries
-                (source, source_conversation_id, source_message_id, raw_text, received_at)
-            VALUES (?, ?, ?, ?, ?)
+                (id, source, source_conversation_id, source_message_id, raw_text, received_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             "#,
         )
+        .bind(&id)
         .bind(message.source.to_string())
         .bind(&message.source_conversation_id)
         .bind(&message.source_message_id)
@@ -95,7 +98,7 @@ impl JournalRepository {
         .execute(&self.pool)
         .await?;
 
-        Ok((result.rows_affected() != 0).then(|| result.last_insert_rowid()))
+        Ok((result.rows_affected() != 0).then_some(id))
     }
 
     pub async fn fetch_recent(
@@ -190,7 +193,7 @@ impl JournalRepository {
             WHERE id = ?
             "#,
         )
-        .bind(entry.id)
+        .bind(&entry.id)
         .execute(&mut *tx)
         .await?;
 
@@ -265,7 +268,7 @@ impl JournalRepository {
     pub async fn fetch_all_for_export(&self) -> Result<Vec<JournalEntryRecord>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT source, source_conversation_id, source_message_id, raw_text, received_at
+            SELECT id, source, source_conversation_id, source_message_id, raw_text, received_at
             FROM journal_entries
             ORDER BY received_at DESC, id DESC
             "#,
@@ -276,6 +279,7 @@ impl JournalRepository {
         Ok(rows
             .into_iter()
             .map(|row| JournalEntryRecord {
+                id: row.get("id"),
                 source: row.get("source"),
                 source_conversation_id: row.get("source_conversation_id"),
                 source_message_id: row.get("source_message_id"),
@@ -291,13 +295,19 @@ impl JournalRepository {
     ) -> Result<usize, BulkImportError> {
         let mut tx = self.pool.begin().await.map_err(BulkImportError::Database)?;
         for record in records {
+            let id = if record.id.is_empty() {
+                ulid::Ulid::new().to_string()
+            } else {
+                record.id.clone()
+            };
             let result = sqlx::query(
                 r#"
                 INSERT INTO journal_entries
-                    (source, source_conversation_id, source_message_id, raw_text, received_at)
-                VALUES (?, ?, ?, ?, ?)
+                    (id, source, source_conversation_id, source_message_id, raw_text, received_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 "#,
             )
+            .bind(&id)
             .bind(&record.source)
             .bind(&record.source_conversation_id)
             .bind(&record.source_message_id)
@@ -459,8 +469,8 @@ impl JournalRepository {
     pub async fn fetch_by_ids(
         &self,
         _user_id: &str,
-        ids: &[i64],
-    ) -> Result<Vec<(i64, JournalEntry)>, sqlx::Error> {
+        ids: &[String],
+    ) -> Result<Vec<(String, JournalEntry)>, sqlx::Error> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -684,6 +694,7 @@ mod tests {
 
         let records = vec![
             JournalEntryRecord {
+                id: String::new(),
                 source: "telegram".to_string(),
                 source_conversation_id: "42".to_string(),
                 source_message_id: "imp-1".to_string(),
@@ -691,6 +702,7 @@ mod tests {
                 received_at: at(10, 0),
             },
             JournalEntryRecord {
+                id: String::new(),
                 source: "telegram".to_string(),
                 source_conversation_id: "42".to_string(),
                 source_message_id: "imp-2".to_string(),
@@ -715,6 +727,7 @@ mod tests {
 
         let records = vec![
             JournalEntryRecord {
+                id: String::new(),
                 source: "telegram".to_string(),
                 source_conversation_id: "42".to_string(),
                 source_message_id: "fresh".to_string(),
@@ -722,6 +735,7 @@ mod tests {
                 received_at: at(11, 0),
             },
             JournalEntryRecord {
+                id: String::new(),
                 source: "telegram".to_string(),
                 source_conversation_id: "42".to_string(),
                 source_message_id: "dup".to_string(),
@@ -1284,7 +1298,7 @@ mod tests {
         );
     }
 
-    async fn stored_id(repo: &JournalRepository, source_message_id: &str) -> i64 {
+    async fn stored_id(repo: &JournalRepository, source_message_id: &str) -> String {
         sqlx::query_scalar(
             "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = ?",
         )
@@ -1311,9 +1325,12 @@ mod tests {
         let first_id = stored_id(&repo, "1").await;
         let third_id = stored_id(&repo, "3").await;
 
-        let rows = repo.fetch_by_ids("7", &[first_id, third_id]).await.unwrap();
+        let rows = repo
+            .fetch_by_ids("7", &[first_id.clone(), third_id.clone()])
+            .await
+            .unwrap();
 
-        let ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
+        let ids: Vec<String> = rows.iter().map(|(id, _)| id.clone()).collect();
         assert_eq!(rows.len(), 2);
         assert!(ids.contains(&first_id));
         assert!(ids.contains(&third_id));
@@ -1337,9 +1354,12 @@ mod tests {
         repo.store(&other).await.unwrap();
         let other_id = stored_id(&repo, "2").await;
 
-        let rows = repo.fetch_by_ids("7", &[my_id, other_id]).await.unwrap();
+        let rows = repo
+            .fetch_by_ids("7", &[my_id.clone(), other_id.clone()])
+            .await
+            .unwrap();
 
-        let ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
+        let ids: Vec<String> = rows.iter().map(|(id, _)| id.clone()).collect();
         assert_eq!(rows.len(), 2);
         assert!(ids.contains(&my_id));
         assert!(ids.contains(&other_id));
@@ -1358,7 +1378,10 @@ mod tests {
     async fn fetch_by_ids_returns_empty_when_no_ids_match() {
         let repo = setup().await;
 
-        let rows = repo.fetch_by_ids("7", &[999]).await.unwrap();
+        let rows = repo
+            .fetch_by_ids("7", &["nonexistent".to_string()])
+            .await
+            .unwrap();
 
         assert!(rows.is_empty());
     }

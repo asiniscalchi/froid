@@ -243,7 +243,7 @@ impl Embedder for FakeEmbedder {
 
 #[derive(Clone)]
 struct FakeJournalEntryExtractionRunner {
-    calls: Arc<Mutex<Vec<(i64, String)>>>,
+    calls: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl FakeJournalEntryExtractionRunner {
@@ -253,7 +253,7 @@ impl FakeJournalEntryExtractionRunner {
         }
     }
 
-    fn calls(&self) -> Vec<(i64, String)> {
+    fn calls(&self) -> Vec<(String, String)> {
         self.calls.lock().unwrap().clone()
     }
 }
@@ -270,13 +270,13 @@ impl JournalEntryExtractionRunner for FakeJournalEntryExtractionRunner {
 
     async fn extract_entry(
         &self,
-        journal_entry_id: i64,
+        journal_entry_id: &str,
         text: &str,
     ) -> Result<(), JournalEntryExtractionServiceError> {
         self.calls
             .lock()
             .unwrap()
-            .push((journal_entry_id, text.to_string()));
+            .push((journal_entry_id.to_string(), text.to_string()));
         Ok(())
     }
 }
@@ -388,7 +388,7 @@ async fn process_embeds_new_entry_when_capture_embedding_is_configured() {
     let message = incoming("100", "hello froid", at(10, 0));
 
     let outgoing = service.process(&message).await.unwrap();
-    let entry_id: i64 =
+    let entry_id: String =
         sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '100'")
             .fetch_one(repo.pool())
             .await
@@ -398,7 +398,7 @@ async fn process_embeds_new_entry_when_capture_embedding_is_configured() {
     assert!(
         wait_until(|| async {
             if index
-                .has_embedding(entry_id, TEST_MODEL)
+                .has_embedding(&entry_id, TEST_MODEL)
                 .await
                 .unwrap_or(false)
             {
@@ -418,7 +418,7 @@ async fn process_still_saves_message_when_capture_embedding_fails() {
     let message = incoming("100", "hello froid", at(10, 0));
 
     let outgoing = service.process(&message).await.unwrap();
-    let entry_id: i64 =
+    let entry_id: String =
         sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '100'")
             .fetch_one(repo.pool())
             .await
@@ -426,7 +426,7 @@ async fn process_still_saves_message_when_capture_embedding_fails() {
 
     assert_eq!(outgoing.text, "Message saved.");
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    assert!(!index.has_embedding(entry_id, TEST_MODEL).await.unwrap());
+    assert!(!index.has_embedding(&entry_id, TEST_MODEL).await.unwrap());
 }
 
 #[tokio::test]
@@ -436,7 +436,7 @@ async fn process_runs_entry_extraction_without_exposing_content_to_user() {
     let message = incoming("100", "private structured meaning source", at(10, 0));
 
     let outgoing = service.process(&message).await.unwrap();
-    let entry_id: i64 =
+    let entry_id: String =
         sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '100'")
             .fetch_one(repo.pool())
             .await
@@ -621,14 +621,14 @@ async fn status_reports_configured_embedding_status_and_single_user_pending_coun
     repo.store(&incoming("2", "pending entry", at(11, 0)))
         .await
         .unwrap();
-    let embedded_entry_id: i64 =
+    let embedded_entry_id: String =
         sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '1'")
             .fetch_one(repo.pool())
             .await
             .unwrap();
     index
         .store_embedding(
-            embedded_entry_id,
+            &embedded_entry_id,
             TEST_MODEL,
             SUPPORTED_EMBEDDING_DIMENSIONS,
             &Embedding::new(
@@ -1285,14 +1285,14 @@ async fn command_search_returns_results_when_embeddings_exist() {
     repo.store(&incoming("1", "journal entry text", at(10, 0)))
         .await
         .unwrap();
-    let entry_id: i64 =
+    let entry_id: String =
         sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '1'")
             .fetch_one(repo.pool())
             .await
             .unwrap();
     index
         .store_embedding(
-            entry_id,
+            &entry_id,
             TEST_MODEL,
             SUPPORTED_EMBEDDING_DIMENSIONS,
             &Embedding::new(
@@ -1344,7 +1344,7 @@ impl JournalEntryExtractionRunner for PanickingExtractionRunner {
 
     async fn extract_entry(
         &self,
-        _journal_entry_id: i64,
+        _journal_entry_id: &str,
         _text: &str,
     ) -> Result<(), JournalEntryExtractionServiceError> {
         panic!("intentional capture-time panic");
