@@ -100,7 +100,7 @@ mod tests {
         source_message_id: &str,
         text: &str,
         h: u32,
-    ) -> i64 {
+    ) -> String {
         let received_at = chrono::Utc.with_ymd_and_hms(2026, 1, 1, h, 0, 0).unwrap();
         let message = IncomingMessage {
             source: MessageSource::Telegram,
@@ -128,7 +128,7 @@ mod tests {
 
         async fn extract_entry(
             &self,
-            _journal_entry_id: i64,
+            _journal_entry_id: &str,
             _text: &str,
         ) -> Result<(), JournalEntryExtractionServiceError> {
             Ok(())
@@ -186,11 +186,11 @@ mod tests {
         let (journal_repo, extraction_repo) = setup().await;
         let entry_id = store_entry(&journal_repo, "1", "first", 10).await;
         extraction_repo
-            .insert_pending_if_absent(entry_id, "model-a", "v1")
+            .insert_pending_if_absent(&entry_id, "model-a", "v1")
             .await
             .unwrap();
         extraction_repo
-            .mark_failed(entry_id, "model-a", "v1", "provider down")
+            .mark_failed(&entry_id, "model-a", "v1", "provider down")
             .await
             .unwrap();
         let worker = worker(extraction_repo, 20);
@@ -206,12 +206,12 @@ mod tests {
         let (journal_repo, extraction_repo) = setup().await;
         let entry_id = store_entry(&journal_repo, "1", "first", 10).await;
         extraction_repo
-            .insert_pending_if_absent(entry_id, "model-a", "v1")
+            .insert_pending_if_absent(&entry_id, "model-a", "v1")
             .await
             .unwrap();
         extraction_repo
             .mark_completed(
-                entry_id,
+                &entry_id,
                 r#"{"summary":"ok","domains":[],"emotions":[],"behaviors":[],"needs":[],"possible_patterns":[]}"#,
                 "model-a",
                 "v1",

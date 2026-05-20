@@ -20,7 +20,7 @@ pub use wiring::{DailyReviewRuntimeConfig, build_daily_review_service, configure
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct JournalEntryWithExtraction {
-    pub id: i64,
+    pub id: String,
     pub entry: JournalEntry,
     pub extraction: Option<JournalEntryExtractionResult>,
 }

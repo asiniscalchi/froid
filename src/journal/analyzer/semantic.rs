@@ -32,7 +32,7 @@ pub struct DefaultSemanticJournalSearcher<I, E> {
 
 impl<I, E> DefaultSemanticJournalSearcher<I, E>
 where
-    I: EmbeddingIndex<i64>,
+    I: EmbeddingIndex<String>,
     E: Embedder,
 {
     pub fn new(index: I, embedder: E, repository: JournalRepository) -> Self {
@@ -47,7 +47,7 @@ where
 #[async_trait]
 impl<I, E> SemanticJournalSearcher for DefaultSemanticJournalSearcher<I, E>
 where
-    I: EmbeddingIndex<i64> + Send + Sync,
+    I: EmbeddingIndex<String> + Send + Sync,
     E: Embedder + Send + Sync,
 {
     async fn search(
@@ -83,20 +83,20 @@ where
             return Ok(Vec::new());
         }
 
-        let ids: Vec<i64> = index_results.iter().map(|r| r.id).collect();
+        let ids: Vec<String> = index_results.iter().map(|r| r.id.clone()).collect();
         let loaded = self
             .repository
             .fetch_by_ids(user_id, &ids)
             .await
             .map_err(|e| AnalyzerError::Internal(Box::new(e)))?;
 
-        let entry_map: HashMap<i64, JournalEntry> = loaded.into_iter().collect();
+        let entry_map: HashMap<String, JournalEntry> = loaded.into_iter().collect();
 
         Ok(index_results
             .into_iter()
             .filter_map(|r| {
                 entry_map.get(&r.id).map(|entry| SemanticHit {
-                    id: r.id,
+                    id: r.id.clone(),
                     received_at: entry.received_at,
                     text: entry.text.clone(),
                     distance: r.distance,
@@ -149,7 +149,7 @@ mod tests {
         text: &str,
         received_at: DateTime<Utc>,
         dim: usize,
-    ) -> i64 {
+    ) -> String {
         let msg = IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
@@ -159,7 +159,7 @@ mod tests {
             received_at,
         };
         repo.store(&msg).await.unwrap();
-        let id: i64 = sqlx::query_scalar(
+        let id: String = sqlx::query_scalar(
             "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = ?",
         )
         .bind(msg_id)
@@ -168,7 +168,7 @@ mod tests {
         .unwrap();
         index
             .store_embedding(
-                id,
+                &id,
                 TEST_MODEL,
                 SUPPORTED_EMBEDDING_DIMENSIONS,
                 &directional_embedding(dim),
@@ -217,14 +217,14 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeIndex {
-        results: Vec<EmbeddingSearchResult<i64>>,
+        results: Vec<EmbeddingSearchResult<String>>,
     }
 
     #[async_trait]
-    impl EmbeddingIndex<i64> for FakeIndex {
+    impl EmbeddingIndex<String> for FakeIndex {
         async fn store_embedding(
             &self,
-            _id: i64,
+            _id: String,
             _embedding_model: &str,
             _embedding_dim: usize,
             _embedding: &Embedding,
@@ -233,7 +233,7 @@ mod tests {
         }
         async fn record_embedding_failure(
             &self,
-            _id: i64,
+            _id: String,
             _embedding_model: &str,
             _error_message: &str,
         ) -> Result<(), EmbeddingRepositoryError> {
@@ -241,7 +241,7 @@ mod tests {
         }
         async fn delete_failed_embedding(
             &self,
-            _id: i64,
+            _id: String,
             _embedding_model: &str,
         ) -> Result<bool, EmbeddingRepositoryError> {
             unreachable!()
@@ -250,7 +250,7 @@ mod tests {
             &self,
             _embedding_model: &str,
             _limit: u32,
-        ) -> Result<Vec<EmbeddingCandidate<i64>>, EmbeddingRepositoryError> {
+        ) -> Result<Vec<EmbeddingCandidate<String>>, EmbeddingRepositoryError> {
             unreachable!()
         }
         async fn count_entries_missing_or_failed_embedding(
@@ -267,7 +267,7 @@ mod tests {
             _from_date: Option<NaiveDate>,
             _to_date_exclusive: Option<NaiveDate>,
             _limit: usize,
-        ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
+        ) -> Result<Vec<EmbeddingSearchResult<String>>, EmbeddingRepositoryError> {
             Ok(self.results.clone())
         }
     }
@@ -333,7 +333,7 @@ mod tests {
             received_at: at(11, 0),
         };
         repo.store(&other).await.unwrap();
-        let other_id: i64 = sqlx::query_scalar(
+        let other_id: String = sqlx::query_scalar(
             "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = '2'",
         )
         .fetch_one(repo.pool())
@@ -341,7 +341,7 @@ mod tests {
         .unwrap();
         index
             .store_embedding(
-                other_id,
+                &other_id,
                 TEST_MODEL,
                 SUPPORTED_EMBEDDING_DIMENSIONS,
                 &directional_embedding(0),
@@ -389,7 +389,7 @@ mod tests {
                 received_at: at(10, 0),
             };
             repo.store(&msg).await.unwrap();
-            sqlx::query_scalar::<_, i64>(
+            sqlx::query_scalar::<_, String>(
                 "SELECT id FROM journal_entries WHERE source_message_id = '1'",
             )
             .fetch_one(repo.pool())
@@ -400,7 +400,7 @@ mod tests {
         let stub_index = FakeIndex {
             results: vec![
                 EmbeddingSearchResult {
-                    id: 99_999,
+                    id: "missing".to_string(),
                     distance: 0.1,
                 },
                 EmbeddingSearchResult {

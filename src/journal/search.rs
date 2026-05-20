@@ -56,7 +56,7 @@ pub struct SemanticSearchService<I, E> {
 
 impl<I, E> SemanticSearchService<I, E>
 where
-    I: EmbeddingIndex<i64>,
+    I: EmbeddingIndex<String>,
     E: Embedder,
 {
     pub fn new(index: I, embedder: E, repository: JournalRepository) -> Self {
@@ -71,7 +71,7 @@ where
 #[async_trait]
 impl<I, E> SearchService for SemanticSearchService<I, E>
 where
-    I: EmbeddingIndex<i64> + Send + Sync,
+    I: EmbeddingIndex<String> + Send + Sync,
     E: Embedder + Send + Sync,
 {
     async fn search(
@@ -87,7 +87,7 @@ where
 
         let model = self.embedder.model();
 
-        let index_results: Vec<EmbeddingSearchResult<i64>> = self
+        let index_results: Vec<EmbeddingSearchResult<String>> = self
             .index
             .search_for_user(user_id, &embedding, model, None, None, MAX_SEARCH_LIMIT)
             .await
@@ -97,7 +97,7 @@ where
             return Ok(vec![]);
         }
 
-        let ids: Vec<i64> = index_results.iter().map(|r| r.id).collect();
+        let ids: Vec<String> = index_results.iter().map(|r| r.id.clone()).collect();
 
         let loaded = self
             .repository
@@ -105,7 +105,7 @@ where
             .await
             .map_err(|e| SemanticSearchError::Repository(e.to_string()))?;
 
-        let entry_map: HashMap<i64, JournalEntry> = loaded.into_iter().collect();
+        let entry_map: HashMap<String, JournalEntry> = loaded.into_iter().collect();
 
         let results = index_results
             .into_iter()
@@ -206,12 +206,12 @@ mod tests {
         text: &str,
         received_at: DateTime<Utc>,
         dim: usize,
-    ) -> i64 {
+    ) -> String {
         repo.store(&incoming(msg_id, text, received_at))
             .await
             .unwrap();
 
-        let entry_id: i64 = sqlx::query_scalar(
+        let entry_id: String = sqlx::query_scalar(
             "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = ?",
         )
         .bind(msg_id)
@@ -222,7 +222,7 @@ mod tests {
         let embedding = directional_embedding(dim);
         index
             .store_embedding(
-                entry_id,
+                &entry_id,
                 TEST_MODEL,
                 SUPPORTED_EMBEDDING_DIMENSIONS,
                 &embedding,
@@ -265,14 +265,14 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeIndex {
-        results: Vec<EmbeddingSearchResult<i64>>,
+        results: Vec<EmbeddingSearchResult<String>>,
     }
 
     #[async_trait]
-    impl EmbeddingIndex<i64> for FakeIndex {
+    impl EmbeddingIndex<String> for FakeIndex {
         async fn store_embedding(
             &self,
-            _id: i64,
+            _id: String,
             _embedding_model: &str,
             _embedding_dim: usize,
             _embedding: &Embedding,
@@ -282,7 +282,7 @@ mod tests {
 
         async fn record_embedding_failure(
             &self,
-            _id: i64,
+            _id: String,
             _embedding_model: &str,
             _error_message: &str,
         ) -> Result<(), EmbeddingRepositoryError> {
@@ -291,7 +291,7 @@ mod tests {
 
         async fn delete_failed_embedding(
             &self,
-            _id: i64,
+            _id: String,
             _embedding_model: &str,
         ) -> Result<bool, EmbeddingRepositoryError> {
             unreachable!("search tests do not delete through FakeIndex")
@@ -301,7 +301,7 @@ mod tests {
             &self,
             _embedding_model: &str,
             _limit: u32,
-        ) -> Result<Vec<EmbeddingCandidate<i64>>, EmbeddingRepositoryError> {
+        ) -> Result<Vec<EmbeddingCandidate<String>>, EmbeddingRepositoryError> {
             unreachable!("search tests do not backfill through FakeIndex")
         }
 
@@ -320,7 +320,7 @@ mod tests {
             _from_date: Option<chrono::NaiveDate>,
             _to_date_exclusive: Option<chrono::NaiveDate>,
             _limit: usize,
-        ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
+        ) -> Result<Vec<EmbeddingSearchResult<String>>, EmbeddingRepositoryError> {
             Ok(self.results.clone())
         }
     }
@@ -468,7 +468,7 @@ mod tests {
             received_at: at(11, 0),
         };
         repo.store(&other_msg).await.unwrap();
-        let other_id: i64 = sqlx::query_scalar(
+        let other_id: String = sqlx::query_scalar(
             "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = '2'",
         )
         .fetch_one(repo.pool())
@@ -476,7 +476,7 @@ mod tests {
         .unwrap();
         index
             .store_embedding(
-                other_id,
+                &other_id,
                 TEST_MODEL,
                 SUPPORTED_EMBEDDING_DIMENSIONS,
                 &directional_embedding(1),
@@ -510,7 +510,7 @@ mod tests {
                 received_at: at(11, i as u32),
             };
             repo.store(&msg).await.unwrap();
-            let other_id: i64 = sqlx::query_scalar(
+            let other_id: String = sqlx::query_scalar(
                 "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = ?",
             )
             .bind(format!("other-{i}"))
@@ -519,7 +519,7 @@ mod tests {
             .unwrap();
             index
                 .store_embedding(
-                    other_id,
+                    &other_id,
                     TEST_MODEL,
                     SUPPORTED_EMBEDDING_DIMENSIONS,
                     &directional_embedding(1),
@@ -546,7 +546,7 @@ mod tests {
         repo.store(&incoming("1", "kept entry", at(10, 0)))
             .await
             .unwrap();
-        let kept_id: i64 = sqlx::query_scalar(
+        let kept_id: String = sqlx::query_scalar(
             "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = '1'",
         )
         .fetch_one(repo.pool())
@@ -555,7 +555,7 @@ mod tests {
         let index = FakeIndex {
             results: vec![
                 EmbeddingSearchResult {
-                    id: 99_999,
+                    id: "missing".to_string(),
                     distance: 0.1,
                 },
                 EmbeddingSearchResult {

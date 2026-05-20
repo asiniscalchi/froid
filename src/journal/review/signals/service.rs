@@ -245,7 +245,7 @@ impl DailyReviewSignalService {
             return Ok(vec![]);
         }
 
-        let entry_ids: Vec<i64> = entries.iter().map(|s| s.id).collect();
+        let entry_ids: Vec<String> = entries.iter().map(|s| s.id.clone()).collect();
         let mut completed_extractions = self
             .extractions
             .find_completed_by_journal_entry_ids(&entry_ids)
@@ -253,13 +253,14 @@ impl DailyReviewSignalService {
 
         Ok(entries
             .into_iter()
-            .map(
-                |stored| crate::journal::review::JournalEntryWithExtraction {
+            .map(|stored| {
+                let extraction = completed_extractions.remove(&stored.id);
+                crate::journal::review::JournalEntryWithExtraction {
                     id: stored.id,
                     entry: stored.entry,
-                    extraction: completed_extractions.remove(&stored.id),
-                },
-            )
+                    extraction,
+                }
+            })
             .collect())
     }
 }

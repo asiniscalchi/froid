@@ -63,14 +63,14 @@ mod tests {
         source_message_id: &str,
         text: &str,
         received_at: chrono::DateTime<Utc>,
-    ) -> i64 {
+    ) -> String {
         journal_repository
             .store(&incoming(source_message_id, text, received_at))
             .await
             .unwrap();
 
-        sqlx::query_scalar(
-            "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = ?",
+        sqlx::query_scalar::<_, String>(
+            "SELECT id FROM journal_entries WHERE source = \'telegram\' AND source_message_id = ?",
         )
         .bind(source_message_id)
         .fetch_one(journal_repository.pool())
@@ -109,14 +109,14 @@ mod tests {
     #[derive(Debug, Clone)]
     struct StorageFailingIndex {
         inner: SqliteEmbeddingRepository,
-        failing_journal_entry_id: i64,
+        failing_journal_entry_id: String,
     }
 
     #[async_trait]
-    impl EmbeddingIndex<i64> for StorageFailingIndex {
+    impl EmbeddingIndex<String> for StorageFailingIndex {
         async fn store_embedding(
             &self,
-            journal_entry_id: i64,
+            journal_entry_id: String,
             embedding_model: &str,
             embedding_dim: usize,
             embedding: &Embedding,
@@ -128,30 +128,30 @@ mod tests {
             }
 
             self.inner
-                .store_embedding(journal_entry_id, embedding_model, embedding_dim, embedding)
+                .store_embedding(&journal_entry_id, embedding_model, embedding_dim, embedding)
                 .await
                 .map_err(Into::into)
         }
 
         async fn record_embedding_failure(
             &self,
-            journal_entry_id: i64,
+            journal_entry_id: String,
             embedding_model: &str,
             error_message: &str,
         ) -> Result<(), EmbeddingRepositoryError> {
             self.inner
-                .record_embedding_failure(journal_entry_id, embedding_model, error_message)
+                .record_embedding_failure(&journal_entry_id, embedding_model, error_message)
                 .await
                 .map_err(Into::into)
         }
 
         async fn delete_failed_embedding(
             &self,
-            journal_entry_id: i64,
+            journal_entry_id: String,
             embedding_model: &str,
         ) -> Result<bool, EmbeddingRepositoryError> {
             self.inner
-                .delete_failed_embedding(journal_entry_id, embedding_model)
+                .delete_failed_embedding(&journal_entry_id, embedding_model)
                 .await
                 .map_err(Into::into)
         }
@@ -160,7 +160,7 @@ mod tests {
             &self,
             embedding_model: &str,
             limit: u32,
-        ) -> Result<Vec<EmbeddingCandidate<i64>>, EmbeddingRepositoryError> {
+        ) -> Result<Vec<EmbeddingCandidate<String>>, EmbeddingRepositoryError> {
             self.inner
                 .find_entries_missing_or_failed_embedding(embedding_model, limit)
                 .await
@@ -185,7 +185,7 @@ mod tests {
             from_date: Option<chrono::NaiveDate>,
             to_date_exclusive: Option<chrono::NaiveDate>,
             limit: usize,
-        ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
+        ) -> Result<Vec<EmbeddingSearchResult<String>>, EmbeddingRepositoryError> {
             self.inner
                 .search_for_user(
                     user_id,
@@ -225,12 +225,12 @@ mod tests {
         );
         assert!(
             embedding_repository
-                .has_embedding(first, TEST_EMBEDDING_MODEL)
+                .has_embedding(&first, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
         let first_stored = embedding_repository
-            .stored_embedding(first, TEST_EMBEDDING_MODEL)
+            .stored_embedding(&first, TEST_EMBEDDING_MODEL)
             .await
             .unwrap()
             .unwrap();
@@ -238,13 +238,13 @@ mod tests {
         assert_eq!(first_stored.embedding_dim, TEST_EMBEDDING_DIMENSIONS as i64);
         assert!(
             embedding_repository
-                .has_embedding(second, TEST_EMBEDDING_MODEL)
+                .has_embedding(&second, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
         assert!(
             !embedding_repository
-                .has_embedding(third, TEST_EMBEDDING_MODEL)
+                .has_embedding(&third, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
@@ -318,7 +318,7 @@ mod tests {
         );
         assert!(
             embedding_repository
-                .has_embedding(second, TEST_EMBEDDING_MODEL)
+                .has_embedding(&second, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
@@ -338,7 +338,7 @@ mod tests {
         let second = store_entry(&journal_repository, "2", "second", at(11, 0)).await;
         let failing_index = StorageFailingIndex {
             inner: embedding_repository.clone(),
-            failing_journal_entry_id: first,
+            failing_journal_entry_id: first.clone(),
         };
         let service = EmbeddingBackfillService::new(failing_index, FakeEmbedder);
 
@@ -366,14 +366,14 @@ mod tests {
         );
         assert!(
             embedding_repository
-                .stored_embedding(first, TEST_EMBEDDING_MODEL)
+                .stored_embedding(&first, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(
             embedding_repository
-                .has_embedding(second, TEST_EMBEDDING_MODEL)
+                .has_embedding(&second, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );

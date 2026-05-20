@@ -77,7 +77,7 @@ where
             if let Err(error) = self.process_candidate(&candidate).await {
                 result.errored += 1;
                 warn!(
-                    journal_entry_id = candidate.journal_entry_id,
+                    journal_entry_id = %candidate.journal_entry_id,
                     error = %error,
                     "extraction reconciliation candidate failed"
                 );
@@ -97,12 +97,12 @@ where
         candidate: &JournalEntryExtractionCandidate,
     ) -> Result<(), ProcessCandidateError> {
         self.repository
-            .delete_failed_if_present(candidate.journal_entry_id)
+            .delete_failed_if_present(&candidate.journal_entry_id)
             .await
             .map_err(ProcessCandidateError::Repository)?;
 
         self.runner
-            .extract_entry(candidate.journal_entry_id, &candidate.raw_text)
+            .extract_entry(&candidate.journal_entry_id, &candidate.raw_text)
             .await
             .map_err(ProcessCandidateError::Extraction)?;
 
@@ -161,7 +161,7 @@ mod tests {
         source_message_id: &str,
         text: &str,
         h: u32,
-    ) -> i64 {
+    ) -> String {
         let received_at = chrono::Utc.with_ymd_and_hms(2026, 1, 1, h, 0, 0).unwrap();
         let message = IncomingMessage {
             source: MessageSource::Telegram,
@@ -181,7 +181,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeRunner {
         result: Result<(), String>,
-        calls: Arc<Mutex<Vec<(i64, String)>>>,
+        calls: Arc<Mutex<Vec<(String, String)>>>,
     }
 
     impl FakeRunner {
@@ -199,7 +199,7 @@ mod tests {
             }
         }
 
-        fn calls(&self) -> Vec<(i64, String)> {
+        fn calls(&self) -> Vec<(String, String)> {
             self.calls.lock().unwrap().clone()
         }
 
@@ -220,13 +220,13 @@ mod tests {
 
         async fn extract_entry(
             &self,
-            journal_entry_id: i64,
+            journal_entry_id: &str,
             text: &str,
         ) -> Result<(), JournalEntryExtractionServiceError> {
             self.calls
                 .lock()
                 .unwrap()
-                .push((journal_entry_id, text.to_string()));
+                .push((journal_entry_id.to_string(), text.to_string()));
             self.result.clone().map_err(|msg| {
                 JournalEntryExtractionServiceError::Repository(
                     crate::journal::extraction::repository::JournalEntryExtractionRepositoryError::Storage(msg),
@@ -286,11 +286,11 @@ mod tests {
         let runner = FakeRunner::succeeding();
         let entry_id = store_entry(&journal_repo, "1", "my note", 10).await;
         extraction_repo
-            .insert_pending_if_absent(entry_id, "model-a", "v1")
+            .insert_pending_if_absent(&entry_id, "model-a", "v1")
             .await
             .unwrap();
         extraction_repo
-            .mark_failed(entry_id, "model-a", "v1", "provider down")
+            .mark_failed(&entry_id, "model-a", "v1", "provider down")
             .await
             .unwrap();
         let service = backfill_service(extraction_repo.clone(), runner.clone());
@@ -302,10 +302,13 @@ mod tests {
 
         assert_eq!(result.attempted, 1);
         assert_eq!(result.errored, 0);
-        assert_eq!(runner.calls(), vec![(entry_id, "my note".to_string())]);
+        assert_eq!(
+            runner.calls(),
+            vec![(entry_id.clone(), "my note".to_string())]
+        );
         assert!(
             extraction_repo
-                .find_by_journal_entry_id(entry_id)
+                .find_by_journal_entry_id(&entry_id)
                 .await
                 .unwrap()
                 .is_none(),
@@ -320,15 +323,15 @@ mod tests {
         let pending_id = store_entry(&journal_repo, "1", "pending", 10).await;
         let completed_id = store_entry(&journal_repo, "2", "completed", 11).await;
         extraction_repo
-            .insert_pending_if_absent(pending_id, "model-a", "v1")
+            .insert_pending_if_absent(&pending_id, "model-a", "v1")
             .await
             .unwrap();
         extraction_repo
-            .insert_pending_if_absent(completed_id, "model-a", "v1")
+            .insert_pending_if_absent(&completed_id, "model-a", "v1")
             .await
             .unwrap();
         extraction_repo
-            .mark_completed(completed_id, valid_json(), "model-a", "v1")
+            .mark_completed(&completed_id, valid_json(), "model-a", "v1")
             .await
             .unwrap();
         let service = backfill_service(extraction_repo, runner.clone());
@@ -392,7 +395,7 @@ mod tests {
             .await
             .unwrap();
 
-        let call_ids: Vec<i64> = runner.calls().into_iter().map(|(id, _)| id).collect();
+        let call_ids: Vec<String> = runner.calls().into_iter().map(|(id, _)| id).collect();
         assert_eq!(call_ids, vec![first, second, third]);
     }
 
@@ -403,11 +406,11 @@ mod tests {
         // Simulate what the real runner does: insert pending, then mark completed
         let entry_id = store_entry(&journal_repo, "1", "first", 10).await;
         extraction_repo
-            .insert_pending_if_absent(entry_id, "model-a", "v1")
+            .insert_pending_if_absent(&entry_id, "model-a", "v1")
             .await
             .unwrap();
         extraction_repo
-            .mark_completed(entry_id, valid_json(), "model-a", "v1")
+            .mark_completed(&entry_id, valid_json(), "model-a", "v1")
             .await
             .unwrap();
 

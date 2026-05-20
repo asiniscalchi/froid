@@ -15,16 +15,18 @@ impl JournalEntryStore {
         Self { pool }
     }
 
-    pub async fn store(&self, message: &IncomingMessage) -> Result<Option<i64>, sqlx::Error> {
+    pub async fn store(&self, message: &IncomingMessage) -> Result<Option<String>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
+        let id = ulid::Ulid::new().to_string();
         let result = sqlx::query(
             r#"
             INSERT OR IGNORE INTO journal_entries
-                (source, source_conversation_id, source_message_id, raw_text, received_at)
-            VALUES (?, ?, ?, ?, ?)
+                (id, source, source_conversation_id, source_message_id, raw_text, received_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             "#,
         )
+        .bind(&id)
         .bind(message.source.to_string())
         .bind(&message.source_conversation_id)
         .bind(&message.source_message_id)
@@ -37,7 +39,7 @@ impl JournalEntryStore {
             None
         } else {
             delete_daily_review(&mut tx, message.received_at.date_naive()).await?;
-            Some(result.last_insert_rowid())
+            Some(id)
         };
 
         tx.commit().await?;
@@ -85,7 +87,7 @@ impl JournalEntryStore {
             )
             "#,
         )
-        .bind(entry.id)
+        .bind(&entry.id)
         .execute(&mut *tx)
         .await?;
 
@@ -95,7 +97,7 @@ impl JournalEntryStore {
             WHERE journal_entry_id = ?
             "#,
         )
-        .bind(entry.id)
+        .bind(&entry.id)
         .execute(&mut *tx)
         .await?;
 
@@ -105,7 +107,7 @@ impl JournalEntryStore {
             WHERE id = ?
             "#,
         )
-        .bind(entry.id)
+        .bind(&entry.id)
         .execute(&mut *tx)
         .await?;
 
@@ -255,7 +257,7 @@ mod tests {
             .unwrap();
         let embedding = Embedding::new(vec![0.1; 1536], 1536).unwrap();
         embedding_repo
-            .store_embedding(entry_id, "test-model", 1536, &embedding)
+            .store_embedding(&entry_id, "test-model", 1536, &embedding)
             .await
             .unwrap();
 

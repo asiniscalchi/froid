@@ -6,7 +6,7 @@ use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
 use super::{Embedding, EmbeddingCandidate, EmbeddingSearchResult};
 
-fn map_search_result(row: SqliteRow) -> EmbeddingSearchResult<i64> {
+fn map_search_result(row: SqliteRow) -> EmbeddingSearchResult<String> {
     EmbeddingSearchResult {
         id: row.get("journal_entry_id"),
         distance: row.get("distance"),
@@ -100,7 +100,7 @@ impl SqliteEmbeddingRepository {
 
     pub async fn record_embedding_failure(
         &self,
-        id: i64,
+        id: &str,
         embedding_model: &str,
         error_message: &str,
     ) -> Result<(), sqlx::Error> {
@@ -122,7 +122,7 @@ impl SqliteEmbeddingRepository {
 
     pub async fn delete_failed_embedding(
         &self,
-        id: i64,
+        id: &str,
         embedding_model: &str,
     ) -> Result<bool, sqlx::Error> {
         let result = sqlx::query(
@@ -141,7 +141,7 @@ impl SqliteEmbeddingRepository {
 
     pub async fn store_embedding(
         &self,
-        id: i64,
+        id: &str,
         embedding_model: &str,
         embedding_dim: usize,
         embedding: &Embedding,
@@ -185,7 +185,7 @@ impl SqliteEmbeddingRepository {
     #[cfg(test)]
     pub(crate) async fn has_embedding(
         &self,
-        id: i64,
+        id: &str,
         embedding_model: &str,
     ) -> Result<bool, sqlx::Error> {
         let exists: bool = sqlx::query_scalar(
@@ -210,7 +210,7 @@ impl SqliteEmbeddingRepository {
         &self,
         embedding_model: &str,
         limit: u32,
-    ) -> Result<Vec<EmbeddingCandidate<i64>>, sqlx::Error> {
+    ) -> Result<Vec<EmbeddingCandidate<String>>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT journal_entries.id, journal_entries.raw_text
@@ -287,7 +287,7 @@ impl SqliteEmbeddingRepository {
         embedding: &Embedding,
         embedding_model: &str,
         limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult<i64>>, sqlx::Error> {
+    ) -> Result<Vec<EmbeddingSearchResult<String>>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -317,7 +317,7 @@ impl SqliteEmbeddingRepository {
         from_date: Option<NaiveDate>,
         to_date_exclusive: Option<NaiveDate>,
         limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult<i64>>, sqlx::Error> {
+    ) -> Result<Vec<EmbeddingSearchResult<String>>, sqlx::Error> {
         let mut sql = String::from(
             r#"
             SELECT
@@ -354,7 +354,7 @@ impl SqliteEmbeddingRepository {
     #[cfg(test)]
     pub(crate) async fn stored_embedding(
         &self,
-        id: i64,
+        id: &str,
         embedding_model: &str,
     ) -> Result<Option<StoredEmbedding>, sqlx::Error> {
         let row = sqlx::query(
@@ -391,17 +391,17 @@ impl SqliteEmbeddingRepository {
 }
 
 #[async_trait]
-impl EmbeddingIndex<i64> for SqliteEmbeddingRepository {
+impl EmbeddingIndex<String> for SqliteEmbeddingRepository {
     async fn store_embedding(
         &self,
-        id: i64,
+        id: String,
         embedding_model: &str,
         embedding_dim: usize,
         embedding: &Embedding,
     ) -> Result<bool, EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::store_embedding(
             self,
-            id,
+            &id,
             embedding_model,
             embedding_dim,
             embedding,
@@ -412,13 +412,13 @@ impl EmbeddingIndex<i64> for SqliteEmbeddingRepository {
 
     async fn record_embedding_failure(
         &self,
-        id: i64,
+        id: String,
         embedding_model: &str,
         error_message: &str,
     ) -> Result<(), EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::record_embedding_failure(
             self,
-            id,
+            &id,
             embedding_model,
             error_message,
         )
@@ -428,10 +428,10 @@ impl EmbeddingIndex<i64> for SqliteEmbeddingRepository {
 
     async fn delete_failed_embedding(
         &self,
-        id: i64,
+        id: String,
         embedding_model: &str,
     ) -> Result<bool, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::delete_failed_embedding(self, id, embedding_model)
+        SqliteEmbeddingRepository::delete_failed_embedding(self, &id, embedding_model)
             .await
             .map_err(Into::into)
     }
@@ -440,7 +440,7 @@ impl EmbeddingIndex<i64> for SqliteEmbeddingRepository {
         &self,
         embedding_model: &str,
         limit: u32,
-    ) -> Result<Vec<EmbeddingCandidate<i64>>, EmbeddingRepositoryError> {
+    ) -> Result<Vec<EmbeddingCandidate<String>>, EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::find_entries_missing_or_failed_embedding(
             self,
             embedding_model,
@@ -467,7 +467,7 @@ impl EmbeddingIndex<i64> for SqliteEmbeddingRepository {
         from_date: Option<NaiveDate>,
         to_date_exclusive: Option<NaiveDate>,
         limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
+    ) -> Result<Vec<EmbeddingSearchResult<String>>, EmbeddingRepositoryError> {
         SqliteEmbeddingRepository::search_for_user(
             self,
             user_id,
@@ -503,7 +503,7 @@ impl PendingEmbeddingCounter for SqliteEmbeddingRepository {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StoredEmbedding {
     pub(crate) metadata_id: i64,
-    pub(crate) id: i64,
+    pub(crate) id: String,
     pub(crate) embedding_model: String,
     pub(crate) embedding_dim: i64,
     pub(crate) embedding: Embedding,
@@ -560,19 +560,12 @@ mod tests {
         source_message_id: &str,
         text: &str,
         received_at: chrono::DateTime<Utc>,
-    ) -> i64 {
+    ) -> String {
         journal_repository
             .store(&incoming(source_message_id, text, received_at))
             .await
-            .unwrap();
-
-        sqlx::query_scalar(
-            "SELECT id FROM journal_entries WHERE source = 'telegram' AND source_message_id = ?",
-        )
-        .bind(source_message_id)
-        .fetch_one(journal_repository.pool())
-        .await
-        .unwrap()
+            .unwrap()
+            .unwrap()
     }
 
     const TEST_EMBEDDING_MODEL: &str = "test-model-v1";
@@ -613,7 +606,7 @@ mod tests {
 
         let created = embedding_repository
             .store_embedding(
-                journal_entry_id,
+                &journal_entry_id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &embedding(1.0),
@@ -624,7 +617,7 @@ mod tests {
         assert!(created);
 
         let stored = embedding_repository
-            .stored_embedding(journal_entry_id, TEST_EMBEDDING_MODEL)
+            .stored_embedding(&journal_entry_id, TEST_EMBEDDING_MODEL)
             .await
             .unwrap()
             .unwrap();
@@ -642,7 +635,7 @@ mod tests {
 
         let first_created = embedding_repository
             .store_embedding(
-                journal_entry_id,
+                &journal_entry_id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &embedding(1.0),
@@ -651,7 +644,7 @@ mod tests {
             .unwrap();
         let second_created = embedding_repository
             .store_embedding(
-                journal_entry_id,
+                &journal_entry_id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &embedding(4.0),
@@ -662,14 +655,14 @@ mod tests {
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM journal_entry_embedding_metadata WHERE journal_entry_id = ? AND embedding_model = ?",
         )
-        .bind(journal_entry_id)
+        .bind(&journal_entry_id)
         .bind(TEST_EMBEDDING_MODEL)
         .fetch_one(&embedding_repository.pool)
         .await
         .unwrap();
 
         let stored = embedding_repository
-            .stored_embedding(journal_entry_id, TEST_EMBEDDING_MODEL)
+            .stored_embedding(&journal_entry_id, TEST_EMBEDDING_MODEL)
             .await
             .unwrap()
             .unwrap();
@@ -687,7 +680,7 @@ mod tests {
 
         embedding_repository
             .store_embedding(
-                journal_entry_id,
+                &journal_entry_id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &embedding(1.0),
@@ -696,7 +689,7 @@ mod tests {
             .unwrap();
         embedding_repository
             .store_embedding(
-                journal_entry_id,
+                &journal_entry_id,
                 "test-model-v2",
                 TEST_EMBEDDING_DIMENSIONS,
                 &embedding(4.0),
@@ -706,13 +699,13 @@ mod tests {
 
         assert!(
             embedding_repository
-                .has_embedding(journal_entry_id, TEST_EMBEDDING_MODEL)
+                .has_embedding(&journal_entry_id, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
         assert!(
             embedding_repository
-                .has_embedding(journal_entry_id, "test-model-v2")
+                .has_embedding(&journal_entry_id, "test-model-v2")
                 .await
                 .unwrap()
         );
@@ -728,7 +721,7 @@ mod tests {
         // second has a completed embedding — should not appear
         embedding_repository
             .store_embedding(
-                second,
+                &second,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &embedding(1.0),
@@ -737,7 +730,7 @@ mod tests {
             .unwrap();
         // third has a failed embedding — should appear
         embedding_repository
-            .record_embedding_failure(third, TEST_EMBEDDING_MODEL, "provider error")
+            .record_embedding_failure(&third, TEST_EMBEDDING_MODEL, "provider error")
             .await
             .unwrap();
 
@@ -783,14 +776,14 @@ mod tests {
         let entry_id = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
 
         embedding_repository
-            .record_embedding_failure(entry_id, TEST_EMBEDDING_MODEL, "provider down")
+            .record_embedding_failure(&entry_id, TEST_EMBEDDING_MODEL, "provider down")
             .await
             .unwrap();
 
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM journal_entry_embedding_metadata WHERE journal_entry_id = ? AND status = 'failed'",
         )
-        .bind(entry_id)
+        .bind(&entry_id)
         .fetch_one(&embedding_repository.pool)
         .await
         .unwrap();
@@ -804,7 +797,7 @@ mod tests {
 
         embedding_repository
             .store_embedding(
-                entry_id,
+                &entry_id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &embedding(1.0),
@@ -812,14 +805,14 @@ mod tests {
             .await
             .unwrap();
         embedding_repository
-            .record_embedding_failure(entry_id, TEST_EMBEDDING_MODEL, "should be ignored")
+            .record_embedding_failure(&entry_id, TEST_EMBEDDING_MODEL, "should be ignored")
             .await
             .unwrap();
 
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM journal_entry_embedding_metadata WHERE journal_entry_id = ? AND status = 'completed'",
         )
-        .bind(entry_id)
+        .bind(&entry_id)
         .fetch_one(&embedding_repository.pool)
         .await
         .unwrap();
@@ -832,12 +825,12 @@ mod tests {
         let entry_id = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
 
         embedding_repository
-            .record_embedding_failure(entry_id, TEST_EMBEDDING_MODEL, "error")
+            .record_embedding_failure(&entry_id, TEST_EMBEDDING_MODEL, "error")
             .await
             .unwrap();
 
         let deleted = embedding_repository
-            .delete_failed_embedding(entry_id, TEST_EMBEDDING_MODEL)
+            .delete_failed_embedding(&entry_id, TEST_EMBEDDING_MODEL)
             .await
             .unwrap();
 
@@ -856,7 +849,7 @@ mod tests {
         let entry_id = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
 
         let deleted = embedding_repository
-            .delete_failed_embedding(entry_id, TEST_EMBEDDING_MODEL)
+            .delete_failed_embedding(&entry_id, TEST_EMBEDDING_MODEL)
             .await
             .unwrap();
 
@@ -870,7 +863,7 @@ mod tests {
 
         embedding_repository
             .store_embedding(
-                entry_id,
+                &entry_id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &embedding(1.0),
@@ -878,14 +871,14 @@ mod tests {
             .await
             .unwrap();
         let deleted = embedding_repository
-            .delete_failed_embedding(entry_id, TEST_EMBEDDING_MODEL)
+            .delete_failed_embedding(&entry_id, TEST_EMBEDDING_MODEL)
             .await
             .unwrap();
 
         assert!(!deleted);
         assert!(
             embedding_repository
-                .has_embedding(entry_id, TEST_EMBEDDING_MODEL)
+                .has_embedding(&entry_id, TEST_EMBEDDING_MODEL)
                 .await
                 .unwrap()
         );
@@ -898,7 +891,7 @@ mod tests {
 
         embedding_repository
             .store_embedding(
-                journal_entry_id,
+                &journal_entry_id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &embedding(1.0),
@@ -928,7 +921,7 @@ mod tests {
         let entry_id = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
 
         embedding_repository
-            .record_embedding_failure(entry_id, TEST_EMBEDDING_MODEL, "error")
+            .record_embedding_failure(&entry_id, TEST_EMBEDDING_MODEL, "error")
             .await
             .unwrap();
 
@@ -952,7 +945,7 @@ mod tests {
         // query points along dim 1, so second (also dim 1) is the closest match.
         embedding_repository
             .store_embedding(
-                first,
+                &first,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &directional_embedding(0, 1.0),
@@ -961,7 +954,7 @@ mod tests {
             .unwrap();
         embedding_repository
             .store_embedding(
-                second,
+                &second,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &directional_embedding(1, 1.0),
@@ -970,7 +963,7 @@ mod tests {
             .unwrap();
         embedding_repository
             .store_embedding(
-                third,
+                &third,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &directional_embedding(2, 1.0),
@@ -1000,7 +993,7 @@ mod tests {
         for (id, dim) in [(first, 0), (second, 1), (third, 2)] {
             embedding_repository
                 .store_embedding(
-                    id,
+                    &id,
                     TEST_EMBEDDING_MODEL,
                     TEST_EMBEDDING_DIMENSIONS,
                     &directional_embedding(dim, 1.0),
@@ -1023,7 +1016,12 @@ mod tests {
         let entry = store_entry(&journal_repository, "1", "first", at(10, 0)).await;
 
         embedding_repository
-            .store_embedding(entry, "model-a", TEST_EMBEDDING_DIMENSIONS, &embedding(1.0))
+            .store_embedding(
+                &entry,
+                "model-a",
+                TEST_EMBEDDING_DIMENSIONS,
+                &embedding(1.0),
+            )
             .await
             .unwrap();
 
@@ -1055,7 +1053,7 @@ mod tests {
 
         embedding_repository
             .store_embedding(
-                outside,
+                &outside,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &directional_embedding(0, 1.0),
@@ -1064,7 +1062,7 @@ mod tests {
             .unwrap();
         embedding_repository
             .store_embedding(
-                inside,
+                &inside,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &directional_embedding(1, 1.0),

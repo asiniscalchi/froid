@@ -209,11 +209,11 @@ mod tests {
     fn format_entries_works_with_stored_journal_entries() {
         let entries = vec![
             StoredJournalEntry {
-                id: 1,
+                id: "1".to_string(),
                 entry: entry(28, "first"),
             },
             StoredJournalEntry {
-                id: 2,
+                id: "2".to_string(),
                 entry: entry(28, "second"),
             },
         ];

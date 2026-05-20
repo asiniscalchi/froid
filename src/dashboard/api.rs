@@ -11,7 +11,8 @@ use tracing::error;
 
 use crate::journal::repository::{BulkImportError, JournalEntryRecord, JournalRepository};
 
-pub const EXPORT_FORMAT_VERSION: u32 = 1;
+pub const EXPORT_FORMAT_VERSION: u32 = 2;
+pub const MIN_SUPPORTED_IMPORT_VERSION: u32 = 1;
 
 pub fn router(repo: JournalRepository) -> Router {
     Router::new()
@@ -22,6 +23,7 @@ pub fn router(repo: JournalRepository) -> Router {
 
 #[derive(Serialize)]
 struct ExportedMessage {
+    id: String,
     source: String,
     source_conversation_id: String,
     source_message_id: String,
@@ -51,6 +53,7 @@ async fn export_messages(State(repo): State<JournalRepository>) -> Response {
         messages: records
             .into_iter()
             .map(|r| ExportedMessage {
+                id: r.id,
                 source: r.source,
                 source_conversation_id: r.source_conversation_id,
                 source_message_id: r.source_message_id,
@@ -93,6 +96,8 @@ async fn export_messages(State(repo): State<JournalRepository>) -> Response {
 
 #[derive(Deserialize)]
 struct ImportedMessage {
+    #[serde(default)]
+    id: Option<String>,
     source: String,
     source_conversation_id: String,
     source_message_id: String,
@@ -132,13 +137,13 @@ async fn import_messages(
     State(repo): State<JournalRepository>,
     Json(envelope): Json<ImportEnvelope>,
 ) -> Response {
-    if envelope.version != EXPORT_FORMAT_VERSION {
+    if envelope.version < MIN_SUPPORTED_IMPORT_VERSION || envelope.version > EXPORT_FORMAT_VERSION {
         return (
             StatusCode::BAD_REQUEST,
             Json(ImportError {
                 error: format!(
-                    "unsupported export version {} (expected {})",
-                    envelope.version, EXPORT_FORMAT_VERSION
+                    "unsupported export version {} (supported {}..={})",
+                    envelope.version, MIN_SUPPORTED_IMPORT_VERSION, EXPORT_FORMAT_VERSION
                 ),
                 conflict: None,
             }),
@@ -154,6 +159,7 @@ async fn import_messages(
         .messages
         .into_iter()
         .map(|m| JournalEntryRecord {
+            id: m.id.unwrap_or_default(),
             source: m.source,
             source_conversation_id: m.source_conversation_id,
             source_message_id: m.source_message_id,
@@ -297,7 +303,13 @@ mod tests {
         assert_eq!(messages[0]["source"], "telegram");
         assert_eq!(messages[0]["source_conversation_id"], "42");
         assert_eq!(messages[0]["source_message_id"], "2");
-        assert!(messages[0].get("id").is_none(), "id must not be exported");
+        assert!(
+            messages[0]
+                .get("id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty()),
+            "id must be exported as a non-empty string"
+        );
         assert_eq!(messages[0]["received_at"], "2026-04-28T12:00:00Z");
         assert_eq!(messages[1]["text"], "older");
     }
@@ -442,5 +454,89 @@ mod tests {
             .unwrap();
 
         assert!(response.status().is_client_error());
+    }
+
+    #[tokio::test]
+    async fn export_uses_v2_envelope_and_round_trips_ids() {
+        let (router, repo) = setup().await;
+        repo.store(&incoming(
+            "1",
+            "round trip",
+            Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
+        ))
+        .await
+        .unwrap();
+
+        let export_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/messages/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(export_response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["version"], 2);
+        let exported_id = payload["messages"][0]["id"].as_str().unwrap().to_string();
+        assert!(!exported_id.is_empty());
+
+        let (router2, repo2) = setup().await;
+        let response = router2
+            .oneshot(
+                Request::builder()
+                    .uri("/messages/import")
+                    .method("POST")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let round_tripped: String = sqlx::query_scalar("SELECT id FROM journal_entries")
+            .fetch_one(repo2.pool())
+            .await
+            .unwrap();
+        assert_eq!(round_tripped, exported_id);
+    }
+
+    #[tokio::test]
+    async fn import_accepts_v1_payload_without_id_and_generates_one() {
+        let (router, repo) = setup().await;
+        let payload = json!({
+            "version": 1,
+            "messages": [{
+                "source": "telegram",
+                "source_conversation_id": "42",
+                "source_message_id": "v1-msg",
+                "text": "from v1 export",
+                "received_at": "2026-04-28T10:00:00Z"
+            }]
+        });
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/messages/import")
+                    .method("POST")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let id: String = sqlx::query_scalar("SELECT id FROM journal_entries")
+            .fetch_one(repo.pool())
+            .await
+            .unwrap();
+        assert!(!id.is_empty(), "v1 import must assign a fresh id");
     }
 }

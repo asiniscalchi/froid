@@ -384,7 +384,7 @@ mod tests {
 
     fn entry(text: &str) -> JournalEntryWithExtraction {
         JournalEntryWithExtraction {
-            id: 1,
+            id: "1".to_string(),
             entry: JournalEntry {
                 text: text.to_string(),
                 received_at: Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
@@ -535,7 +535,7 @@ mod tests {
             possible_patterns: vec![],
         };
         let entry_with_extraction = JournalEntryWithExtraction {
-            id: 1,
+            id: "1".to_string(),
             entry: JournalEntry {
                 text: "Felt anxious at work.".to_string(),
                 received_at: Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
