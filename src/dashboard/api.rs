@@ -455,4 +455,88 @@ mod tests {
 
         assert!(response.status().is_client_error());
     }
+
+    #[tokio::test]
+    async fn export_uses_v2_envelope_and_round_trips_ids() {
+        let (router, repo) = setup().await;
+        repo.store(&incoming(
+            "1",
+            "round trip",
+            Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
+        ))
+        .await
+        .unwrap();
+
+        let export_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/messages/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(export_response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["version"], 2);
+        let exported_id = payload["messages"][0]["id"].as_str().unwrap().to_string();
+        assert!(!exported_id.is_empty());
+
+        let (router2, repo2) = setup().await;
+        let response = router2
+            .oneshot(
+                Request::builder()
+                    .uri("/messages/import")
+                    .method("POST")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let round_tripped: String = sqlx::query_scalar("SELECT id FROM journal_entries")
+            .fetch_one(repo2.pool())
+            .await
+            .unwrap();
+        assert_eq!(round_tripped, exported_id);
+    }
+
+    #[tokio::test]
+    async fn import_accepts_v1_payload_without_id_and_generates_one() {
+        let (router, repo) = setup().await;
+        let payload = json!({
+            "version": 1,
+            "messages": [{
+                "source": "telegram",
+                "source_conversation_id": "42",
+                "source_message_id": "v1-msg",
+                "text": "from v1 export",
+                "received_at": "2026-04-28T10:00:00Z"
+            }]
+        });
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/messages/import")
+                    .method("POST")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let id: String = sqlx::query_scalar("SELECT id FROM journal_entries")
+            .fetch_one(repo.pool())
+            .await
+            .unwrap();
+        assert!(!id.is_empty(), "v1 import must assign a fresh id");
+    }
 }
