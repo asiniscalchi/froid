@@ -86,7 +86,7 @@ where
         let ids: Vec<String> = index_results.iter().map(|r| r.id.clone()).collect();
         let loaded = self
             .repository
-            .fetch_by_ids(user_id, &ids)
+            .fetch_by_ids(&ids)
             .await
             .map_err(|e| AnalyzerError::Internal(Box::new(e)))?;
 

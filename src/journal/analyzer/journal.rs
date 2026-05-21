@@ -63,7 +63,7 @@ fn map_storage_error(err: sqlx::Error) -> AnalyzerError {
 impl JournalReadService for DefaultJournalReadService {
     async fn get_recent(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: GetRecentRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_RECENT_LIMIT)?;
@@ -72,14 +72,14 @@ impl JournalReadService for DefaultJournalReadService {
         let entries = match (request.from_date, request.to_date_exclusive) {
             (None, None) => self
                 .repository
-                .fetch_recent(&ctx.user_id, limit)
+                .fetch_recent(limit)
                 .await
                 .map_err(map_storage_error)?,
             (from, to) => {
                 let from = from.unwrap_or(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
                 let to = to.unwrap_or(chrono::NaiveDate::from_ymd_opt(9999, 1, 1).unwrap());
                 self.repository
-                    .fetch_in_range(&ctx.user_id, from, to, limit)
+                    .fetch_in_range(from, to, limit)
                     .await
                     .map_err(map_storage_error)?
             }
@@ -90,7 +90,7 @@ impl JournalReadService for DefaultJournalReadService {
 
     async fn search_text(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: SearchTextRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_TEXT_SEARCH_LIMIT)?;
@@ -104,13 +104,7 @@ impl JournalReadService for DefaultJournalReadService {
 
         let entries = self
             .repository
-            .search_text(
-                &ctx.user_id,
-                trimmed,
-                request.from_date,
-                request.to_date_exclusive,
-                limit,
-            )
+            .search_text(trimmed, request.from_date, request.to_date_exclusive, limit)
             .await
             .map_err(map_storage_error)?;
 
@@ -147,12 +141,12 @@ impl JournalReadService for DefaultJournalReadService {
 
     async fn get_by_id(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         id: &str,
     ) -> Result<Option<JournalEntryView>, AnalyzerError> {
         let mut rows = self
             .repository
-            .fetch_by_ids(&ctx.user_id, &[id.to_string()])
+            .fetch_by_ids(&[id.to_string()])
             .await
             .map_err(map_storage_error)?;
 

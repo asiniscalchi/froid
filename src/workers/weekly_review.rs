@@ -2,7 +2,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc, Weekday};
 use teloxide::{prelude::*, types::ChatId};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
+
+use crate::workers::{
+    ReconciliationWorker, config::ReconciliationWorkerConfig, reconciliation::ReconciliationCycle,
+};
 
 use crate::{
     journal::{
@@ -114,7 +118,7 @@ impl WeeklyReviewSender for TelegramWeeklyReviewSender {
     }
 }
 
-pub struct WeeklyReviewDeliveryWorker<R, S> {
+pub struct WeeklyReviewDeliveryCycle<R, S> {
     journal_entries: JournalRepository,
     weekly_reviews: WeeklyReviewRepository,
     review_runner: R,
@@ -122,7 +126,9 @@ pub struct WeeklyReviewDeliveryWorker<R, S> {
     config: WeeklyReviewDeliveryWorkerConfig,
 }
 
-impl<R, S> WeeklyReviewDeliveryWorker<R, S>
+pub type WeeklyReviewDeliveryWorker<R, S> = WeeklyReviewDeliveryCycle<R, S>;
+
+impl<R, S> WeeklyReviewDeliveryCycle<R, S>
 where
     R: WeeklyReviewRunner,
     S: WeeklyReviewSender,
@@ -220,9 +226,7 @@ where
                 .await
             {
                 Ok(WeeklyReviewSendOutcome::Sent) => {
-                    self.weekly_reviews
-                        .mark_delivered(&target.user_id, week_start)
-                        .await?;
+                    self.weekly_reviews.mark_delivered(week_start).await?;
                     result.delivered += 1;
                 }
                 Ok(WeeklyReviewSendOutcome::Skipped) => {
@@ -230,7 +234,7 @@ where
                 }
                 Err(error) => {
                     self.weekly_reviews
-                        .mark_delivery_failed(&target.user_id, week_start, &error)
+                        .mark_delivery_failed(week_start, &error)
                         .await?;
                     warn!(
                         user_id = %target.user_id,
@@ -249,57 +253,73 @@ where
 
     async fn record_review_runner_error(
         &self,
-        user_id: &str,
+        _user_id: &str,
         week_start: NaiveDate,
         error: WeeklyReviewServiceError,
     ) -> Result<(), WeeklyReviewDeliveryWorkerError> {
         warn!(
-            user_id = %user_id,
+            user_id = %_user_id,
             week_start = %week_start,
             error = %error,
             "weekly review runner failed during delivery"
         );
         self.weekly_reviews
-            .mark_delivery_failed(user_id, week_start, &error.to_string())
+            .mark_delivery_failed(week_start, &error.to_string())
             .await?;
         Ok(())
     }
 
-    pub async fn run_forever(self, shutdown: CancellationToken) {
+    pub async fn run_forever(self, shutdown: CancellationToken)
+    where
+        R: Send + Sync + 'static,
+        S: Send + Sync + 'static,
+    {
+        let worker_config = ReconciliationWorkerConfig {
+            enabled: self.config.enabled,
+            batch_size: 1,
+            interval: self.config.interval,
+        };
+        ReconciliationWorker::new(self, worker_config)
+            .run_forever(shutdown)
+            .await;
+    }
+}
+
+impl<R, S> ReconciliationCycle for WeeklyReviewDeliveryCycle<R, S>
+where
+    R: WeeklyReviewRunner + Send + Sync + 'static,
+    S: WeeklyReviewSender + Send + Sync + 'static,
+{
+    type Outcome = WeeklyReviewDeliveryResult;
+    type Error = WeeklyReviewDeliveryWorkerError;
+
+    fn worker_label(&self) -> &'static str {
+        "weekly_review_delivery"
+    }
+
+    fn log_startup(&self, config: &ReconciliationWorkerConfig) {
         info!(
-            enabled = self.config.enabled,
-            interval_seconds = self.config.interval.as_secs(),
+            enabled = config.enabled,
+            interval_seconds = config.interval.as_secs(),
             kickoff_weekday = ?self.config.kickoff_weekday,
             "weekly review delivery worker started"
         );
+    }
 
-        loop {
-            if shutdown.is_cancelled() {
-                return;
-            }
-
-            match self.run_once(Utc::now()).await {
-                Ok(result) => {
-                    if result.attempted > 0 && (result.delivered > 0 || result.failed > 0) {
-                        info!(
-                            attempted = result.attempted,
-                            delivered = result.delivered,
-                            skipped = result.skipped,
-                            failed = result.failed,
-                            "weekly review delivery cycle completed"
-                        );
-                    }
-                }
-                Err(err) => {
-                    error!(error = %err, "weekly review delivery cycle failed");
-                }
-            }
-
-            tokio::select! {
-                _ = tokio::time::sleep(self.config.interval) => {}
-                _ = shutdown.cancelled() => return,
-            }
+    fn log_cycle_complete(&self, outcome: &Self::Outcome) {
+        if outcome.attempted > 0 && (outcome.delivered > 0 || outcome.failed > 0) {
+            info!(
+                attempted = outcome.attempted,
+                delivered = outcome.delivered,
+                skipped = outcome.skipped,
+                failed = outcome.failed,
+                "weekly review delivery cycle completed"
+            );
         }
+    }
+
+    async fn run_once(&self, _batch_size: u32) -> Result<Self::Outcome, Self::Error> {
+        self.run_once(Utc::now()).await
     }
 }
 
@@ -471,11 +491,11 @@ mod tests {
         }
     }
 
-    async fn seed_three_daily_reviews(daily_reviews: &DailyReviewRepository, user_id: &str) {
+    async fn seed_three_daily_reviews(daily_reviews: &DailyReviewRepository, _user_id: &str) {
         for offset in 0..3 {
             let date = week_start() + Duration::days(offset);
             daily_reviews
-                .upsert_completed(user_id, date, "daily text", "model", "v1")
+                .upsert_completed(date, "daily text", "model", "v1")
                 .await
                 .unwrap();
         }
@@ -564,7 +584,7 @@ mod tests {
         assert!(sent[0].1.contains("generated week review"));
 
         let stored = weekly_reviews
-            .find_by_user_and_week("7", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -581,7 +601,7 @@ mod tests {
         for offset in 0..2 {
             let date = week_start() + Duration::days(offset);
             daily
-                .upsert_completed("7", date, "text", "m", "v1")
+                .upsert_completed(date, "text", "m", "v1")
                 .await
                 .unwrap();
         }
@@ -623,7 +643,7 @@ mod tests {
         assert_eq!(sender.sent().len(), 1);
 
         let stored = weekly_reviews
-            .find_by_user_and_week("7", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -656,7 +676,7 @@ mod tests {
         assert_eq!(sender.sent().len(), 1);
 
         let stored = weekly_reviews
-            .find_by_user_and_week("7", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -672,13 +692,10 @@ mod tests {
         seed_three_daily_reviews(&daily, "7").await;
         journal.store(&entry("7", "42", "1", 0)).await.unwrap();
         weekly_reviews
-            .upsert_completed("7", week_start(), "existing", "m", "v1", "{}")
+            .upsert_completed(week_start(), "existing", "m", "v1", "{}")
             .await
             .unwrap();
-        weekly_reviews
-            .mark_delivered("7", week_start())
-            .await
-            .unwrap();
+        weekly_reviews.mark_delivered(week_start()).await.unwrap();
 
         let result = worker.run_once_for_week(week_start()).await.unwrap();
 

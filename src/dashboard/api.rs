@@ -51,14 +51,91 @@ struct ExportEnvelope {
     messages: Vec<ExportedMessage>,
 }
 
-async fn export_messages(State(repo): State<JournalRepository>) -> Response {
-    let records = match repo.fetch_all_for_export().await {
-        Ok(records) => records,
-        Err(err) => {
-            error!(error = %err, "failed to fetch journal entries for export");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to load messages").into_response();
+#[derive(Debug)]
+enum DashboardError {
+    ExportRepository(sqlx::Error),
+    Serialization(serde_json::Error),
+    UnsupportedVersion {
+        version: u32,
+    },
+    ImportConflict {
+        source: String,
+        source_conversation_id: String,
+        source_message_id: String,
+    },
+    ImportRepository(sqlx::Error),
+}
+
+impl IntoResponse for DashboardError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::ExportRepository(err) => {
+                error!(error = %err, "failed to fetch journal entries for export");
+                (StatusCode::INTERNAL_SERVER_ERROR, "failed to load messages").into_response()
+            }
+            Self::Serialization(err) => {
+                error!(error = %err, "failed to serialize journal entries for export");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to serialize messages",
+                )
+                    .into_response()
+            }
+            Self::UnsupportedVersion { version } => {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ImportError {
+                        error: format!(
+                            "unsupported export version {} (supported {}..={})",
+                            version, MIN_SUPPORTED_IMPORT_VERSION, EXPORT_FORMAT_VERSION
+                        ),
+                        conflict: None,
+                    }),
+                )
+                    .into_response()
+            }
+            Self::ImportConflict {
+                source,
+                source_conversation_id,
+                source_message_id,
+            } => {
+                (
+                    StatusCode::CONFLICT,
+                    Json(ImportError {
+                        error: format!(
+                            "import aborted: entry ({source}, {source_conversation_id}, {source_message_id}) collides with an existing message"
+                        ),
+                        conflict: Some(ConflictDetails {
+                            source: source.clone(),
+                            source_conversation_id: source_conversation_id.clone(),
+                            source_message_id: source_message_id.clone(),
+                        }),
+                    }),
+                )
+                    .into_response()
+            }
+            Self::ImportRepository(err) => {
+                error!(error = %err, "failed to import journal entries");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ImportError {
+                        error: "failed to import messages".to_string(),
+                        conflict: None,
+                    }),
+                )
+                    .into_response()
+            }
         }
-    };
+    }
+}
+
+async fn export_messages(
+    State(repo): State<JournalRepository>,
+) -> Result<impl IntoResponse, DashboardError> {
+    let records = repo
+        .fetch_all_for_export()
+        .await
+        .map_err(DashboardError::ExportRepository)?;
 
     let envelope = ExportEnvelope {
         version: EXPORT_FORMAT_VERSION,
@@ -76,24 +153,14 @@ async fn export_messages(State(repo): State<JournalRepository>) -> Response {
             .collect(),
     };
 
-    let body = match serde_json::to_vec(&envelope) {
-        Ok(body) => body,
-        Err(err) => {
-            error!(error = %err, "failed to serialize journal entries for export");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to serialize messages",
-            )
-                .into_response();
-        }
-    };
+    let body = serde_json::to_vec(&envelope).map_err(DashboardError::Serialization)?;
 
     let filename = format!(
         "froid-messages-{}.json",
         envelope.exported_at.format("%Y-%m-%d")
     );
 
-    (
+    Ok((
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "application/json".to_string()),
@@ -103,8 +170,7 @@ async fn export_messages(State(repo): State<JournalRepository>) -> Response {
             ),
         ],
         body,
-    )
-        .into_response()
+    ))
 }
 
 #[derive(Deserialize)]
@@ -149,23 +215,15 @@ struct ImportError {
 async fn import_messages(
     State(repo): State<JournalRepository>,
     Json(envelope): Json<ImportEnvelope>,
-) -> Response {
+) -> Result<impl IntoResponse, DashboardError> {
     if envelope.version < MIN_SUPPORTED_IMPORT_VERSION || envelope.version > EXPORT_FORMAT_VERSION {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ImportError {
-                error: format!(
-                    "unsupported export version {} (supported {}..={})",
-                    envelope.version, MIN_SUPPORTED_IMPORT_VERSION, EXPORT_FORMAT_VERSION
-                ),
-                conflict: None,
-            }),
-        )
-            .into_response();
+        return Err(DashboardError::UnsupportedVersion {
+            version: envelope.version,
+        });
     }
 
     if envelope.messages.is_empty() {
-        return (StatusCode::OK, Json(ImportResult { imported: 0 })).into_response();
+        return Ok((StatusCode::OK, Json(ImportResult { imported: 0 })).into_response());
     }
 
     let records: Vec<JournalEntryRecord> = envelope
@@ -181,38 +239,20 @@ async fn import_messages(
         })
         .collect();
 
-    match repo.bulk_import(&records).await {
-        Ok(imported) => (StatusCode::OK, Json(ImportResult { imported })).into_response(),
-        Err(BulkImportError::Conflict {
+    let imported = repo.bulk_import(&records).await.map_err(|err| match err {
+        BulkImportError::Conflict {
             source,
             source_conversation_id,
             source_message_id,
-        }) => (
-            StatusCode::CONFLICT,
-            Json(ImportError {
-                error: format!(
-                    "import aborted: entry ({source}, {source_conversation_id}, {source_message_id}) collides with an existing message"
-                ),
-                conflict: Some(ConflictDetails {
-                    source,
-                    source_conversation_id,
-                    source_message_id,
-                }),
-            }),
-        )
-            .into_response(),
-        Err(BulkImportError::Database(err)) => {
-            error!(error = %err, "failed to import journal entries");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ImportError {
-                    error: "failed to import messages".to_string(),
-                    conflict: None,
-                }),
-            )
-                .into_response()
-        }
-    }
+        } => DashboardError::ImportConflict {
+            source,
+            source_conversation_id,
+            source_message_id,
+        },
+        BulkImportError::Database(e) => DashboardError::ImportRepository(e),
+    })?;
+
+    Ok((StatusCode::OK, Json(ImportResult { imported })).into_response())
 }
 
 #[derive(Serialize)]
@@ -564,7 +604,7 @@ mod tests {
         let parsed: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["imported"], 2);
 
-        let entries = repo.fetch_recent("7", 10).await.unwrap();
+        let entries = repo.fetch_recent(10).await.unwrap();
         assert_eq!(entries.len(), 2);
     }
 
@@ -616,7 +656,7 @@ mod tests {
         assert_eq!(parsed["conflict"]["source_conversation_id"], "42");
         assert_eq!(parsed["conflict"]["source_message_id"], "dup");
 
-        let entries = repo.fetch_recent("7", 10).await.unwrap();
+        let entries = repo.fetch_recent(10).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].entry.text, "existing");
     }

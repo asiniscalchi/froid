@@ -54,7 +54,6 @@ impl WeeklyReviewRepository {
 
     pub async fn find_by_user_and_week(
         &self,
-        _user_id: &str,
         week_start_date: NaiveDate,
     ) -> Result<Option<WeeklyReview>, WeeklyReviewRepositoryError> {
         let row = sqlx::query(
@@ -75,7 +74,6 @@ impl WeeklyReviewRepository {
 
     pub async fn fetch_completed_in_range(
         &self,
-        _user_id: &str,
         start_date: NaiveDate,
         end_date_exclusive: NaiveDate,
     ) -> Result<Vec<WeeklyReview>, WeeklyReviewRepositoryError> {
@@ -103,7 +101,6 @@ impl WeeklyReviewRepository {
 
     pub async fn upsert_completed(
         &self,
-        user_id: &str,
         week_start_date: NaiveDate,
         review_text: &str,
         model: &str,
@@ -134,7 +131,7 @@ impl WeeklyReviewRepository {
         .execute(&self.pool)
         .await?;
 
-        self.find_by_user_and_week(user_id, week_start_date)
+        self.find_by_user_and_week(week_start_date)
             .await?
             .ok_or_else(|| {
                 WeeklyReviewRepositoryError::Storage("weekly review was not stored".into())
@@ -143,7 +140,6 @@ impl WeeklyReviewRepository {
 
     pub async fn upsert_failed(
         &self,
-        user_id: &str,
         week_start_date: NaiveDate,
         model: &str,
         prompt_version: &str,
@@ -172,7 +168,7 @@ impl WeeklyReviewRepository {
         .execute(&self.pool)
         .await?;
 
-        self.find_by_user_and_week(user_id, week_start_date)
+        self.find_by_user_and_week(week_start_date)
             .await?
             .ok_or_else(|| {
                 WeeklyReviewRepositoryError::Storage("weekly review was not stored".into())
@@ -181,7 +177,6 @@ impl WeeklyReviewRepository {
 
     pub async fn mark_delivered(
         &self,
-        _user_id: &str,
         week_start_date: NaiveDate,
     ) -> Result<(), WeeklyReviewRepositoryError> {
         sqlx::query(
@@ -203,7 +198,6 @@ impl WeeklyReviewRepository {
 
     pub async fn mark_delivery_failed(
         &self,
-        _user_id: &str,
         week_start_date: NaiveDate,
         error_message: &str,
     ) -> Result<(), WeeklyReviewRepositoryError> {
@@ -277,14 +271,7 @@ mod tests {
         let repo = setup().await;
 
         let review = repo
-            .upsert_completed(
-                "user-1",
-                week_start(),
-                "review text",
-                "test-model",
-                "v1",
-                "{}",
-            )
+            .upsert_completed(week_start(), "review text", "test-model", "v1", "{}")
             .await
             .unwrap();
 
@@ -305,7 +292,7 @@ mod tests {
         let repo = setup().await;
 
         let review = repo
-            .upsert_failed("user-1", week_start(), "test-model", "v1", "provider down")
+            .upsert_failed(week_start(), "test-model", "v1", "provider down")
             .await
             .unwrap();
 
@@ -321,19 +308,12 @@ mod tests {
     #[tokio::test]
     async fn finds_review_by_user_and_week() {
         let repo = setup().await;
-        repo.upsert_completed(
-            "user-1",
-            week_start(),
-            "review text",
-            "test-model",
-            "v1",
-            "{}",
-        )
-        .await
-        .unwrap();
+        repo.upsert_completed(week_start(), "review text", "test-model", "v1", "{}")
+            .await
+            .unwrap();
 
         let found = repo
-            .find_by_user_and_week("user-1", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -346,18 +326,18 @@ mod tests {
         let repo = setup().await;
         let other_week = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
 
-        repo.upsert_completed("user-1", week_start(), "user one", "test-model", "v1", "{}")
+        repo.upsert_completed(week_start(), "user one", "test-model", "v1", "{}")
             .await
             .unwrap();
-        repo.upsert_completed("user-2", week_start(), "user two", "test-model", "v1", "{}")
+        repo.upsert_completed(week_start(), "user two", "test-model", "v1", "{}")
             .await
             .unwrap();
-        repo.upsert_completed("user-1", other_week, "other week", "test-model", "v1", "{}")
+        repo.upsert_completed(other_week, "other week", "test-model", "v1", "{}")
             .await
             .unwrap();
 
         assert_eq!(
-            repo.find_by_user_and_week("user-2", week_start())
+            repo.find_by_user_and_week(week_start())
                 .await
                 .unwrap()
                 .unwrap()
@@ -365,7 +345,7 @@ mod tests {
             Some("user two".to_string())
         );
         assert_eq!(
-            repo.find_by_user_and_week("user-1", other_week)
+            repo.find_by_user_and_week(other_week)
                 .await
                 .unwrap()
                 .unwrap()
@@ -379,18 +359,11 @@ mod tests {
         let repo = setup().await;
 
         let original = repo
-            .upsert_completed("user-1", week_start(), "original", "test-model", "v1", "{}")
+            .upsert_completed(week_start(), "original", "test-model", "v1", "{}")
             .await
             .unwrap();
         let updated = repo
-            .upsert_completed(
-                "user-1",
-                week_start(),
-                "new review",
-                "new-model",
-                "v2",
-                "{}",
-            )
+            .upsert_completed(week_start(), "new review", "new-model", "v2", "{}")
             .await
             .unwrap();
 
@@ -407,11 +380,11 @@ mod tests {
         let repo = setup().await;
 
         let original = repo
-            .upsert_completed("user-1", week_start(), "original", "test-model", "v1", "{}")
+            .upsert_completed(week_start(), "original", "test-model", "v1", "{}")
             .await
             .unwrap();
         let after_failed = repo
-            .upsert_failed("user-1", week_start(), "new-model", "v2", "new error")
+            .upsert_failed(week_start(), "new-model", "v2", "new error")
             .await
             .unwrap();
 
@@ -423,20 +396,13 @@ mod tests {
         let repo = setup().await;
 
         let failed = repo
-            .upsert_failed("user-1", week_start(), "test-model", "v1", "provider down")
+            .upsert_failed(week_start(), "test-model", "v1", "provider down")
             .await
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
 
         let completed = repo
-            .upsert_completed(
-                "user-1",
-                week_start(),
-                "review text",
-                "test-model",
-                "v1",
-                "{}",
-            )
+            .upsert_completed(week_start(), "review text", "test-model", "v1", "{}")
             .await
             .unwrap();
 
@@ -453,11 +419,11 @@ mod tests {
         let repo = setup().await;
 
         let first = repo
-            .upsert_failed("user-1", week_start(), "test-model", "v1", "first error")
+            .upsert_failed(week_start(), "test-model", "v1", "first error")
             .await
             .unwrap();
         let second = repo
-            .upsert_failed("user-1", week_start(), "test-model-2", "v2", "second error")
+            .upsert_failed(week_start(), "test-model-2", "v2", "second error")
             .await
             .unwrap();
 
@@ -471,24 +437,17 @@ mod tests {
     #[tokio::test]
     async fn mark_delivered_records_delivery_time_and_clears_delivery_error() {
         let repo = setup().await;
-        repo.upsert_completed(
-            "user-1",
-            week_start(),
-            "review text",
-            "test-model",
-            "v1",
-            "{}",
-        )
-        .await
-        .unwrap();
-        repo.mark_delivery_failed("user-1", week_start(), "telegram failed")
+        repo.upsert_completed(week_start(), "review text", "test-model", "v1", "{}")
+            .await
+            .unwrap();
+        repo.mark_delivery_failed(week_start(), "telegram failed")
             .await
             .unwrap();
 
-        repo.mark_delivered("user-1", week_start()).await.unwrap();
+        repo.mark_delivered(week_start()).await.unwrap();
 
         let review = repo
-            .find_by_user_and_week("user-1", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -499,26 +458,19 @@ mod tests {
     #[tokio::test]
     async fn mark_delivery_failed_records_latest_delivery_error() {
         let repo = setup().await;
-        repo.upsert_completed(
-            "user-1",
-            week_start(),
-            "review text",
-            "test-model",
-            "v1",
-            "{}",
-        )
-        .await
-        .unwrap();
-
-        repo.mark_delivery_failed("user-1", week_start(), "first error")
+        repo.upsert_completed(week_start(), "review text", "test-model", "v1", "{}")
             .await
             .unwrap();
-        repo.mark_delivery_failed("user-1", week_start(), "second error")
+
+        repo.mark_delivery_failed(week_start(), "first error")
+            .await
+            .unwrap();
+        repo.mark_delivery_failed(week_start(), "second error")
             .await
             .unwrap();
 
         let review = repo
-            .find_by_user_and_week("user-1", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -561,7 +513,7 @@ mod tests {
     #[tokio::test]
     async fn unique_constraint_enforced_on_user_and_week() {
         let repo = setup().await;
-        repo.upsert_completed("user-1", week_start(), "first", "m", "v1", "{}")
+        repo.upsert_completed(week_start(), "first", "m", "v1", "{}")
             .await
             .unwrap();
 
@@ -584,7 +536,7 @@ mod tests {
         let snapshot = r#"{"week_start":"2026-04-27","days":[]}"#;
 
         let stored = repo
-            .upsert_completed("user-1", week_start(), "review", "m", "v1", snapshot)
+            .upsert_completed(week_start(), "review", "m", "v1", snapshot)
             .await
             .unwrap();
 
@@ -594,12 +546,12 @@ mod tests {
     #[tokio::test]
     async fn upsert_completed_overwrites_inputs_snapshot_on_regeneration() {
         let repo = setup().await;
-        repo.upsert_completed("user-1", week_start(), "first", "m", "v1", r#"{"v":1}"#)
+        repo.upsert_completed(week_start(), "first", "m", "v1", r#"{"v":1}"#)
             .await
             .unwrap();
 
         let updated = repo
-            .upsert_completed("user-1", week_start(), "second", "m", "v1", r#"{"v":2}"#)
+            .upsert_completed(week_start(), "second", "m", "v1", r#"{"v":2}"#)
             .await
             .unwrap();
 
@@ -609,15 +561,15 @@ mod tests {
     #[tokio::test]
     async fn upsert_failed_leaves_existing_inputs_snapshot_untouched() {
         let repo = setup().await;
-        repo.upsert_completed("user-1", week_start(), "first", "m", "v1", r#"{"v":1}"#)
+        repo.upsert_completed(week_start(), "first", "m", "v1", r#"{"v":1}"#)
             .await
             .unwrap();
-        repo.upsert_failed("user-1", week_start(), "m", "v1", "ignored")
+        repo.upsert_failed(week_start(), "m", "v1", "ignored")
             .await
             .unwrap();
 
         let stored = repo
-            .find_by_user_and_week("user-1", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -631,18 +583,18 @@ mod tests {
         let w2 = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
         let w3 = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
 
-        repo.upsert_completed("user-1", w2, "second", "m", "v1", "{}")
+        repo.upsert_completed(w2, "second", "m", "v1", "{}")
             .await
             .unwrap();
-        repo.upsert_completed("user-1", w1, "first", "m", "v1", "{}")
+        repo.upsert_completed(w1, "first", "m", "v1", "{}")
             .await
             .unwrap();
-        repo.upsert_completed("user-1", w3, "third", "m", "v1", "{}")
+        repo.upsert_completed(w3, "third", "m", "v1", "{}")
             .await
             .unwrap();
 
         let reviews = repo
-            .fetch_completed_in_range("user-1", w1, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
+            .fetch_completed_in_range(w1, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
             .await
             .unwrap();
 
@@ -658,17 +610,14 @@ mod tests {
         let w1 = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
         let w2 = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
 
-        repo.upsert_completed("user-1", w1, "in", "m", "v1", "{}")
+        repo.upsert_completed(w1, "in", "m", "v1", "{}")
             .await
             .unwrap();
-        repo.upsert_completed("user-1", w2, "out", "m", "v1", "{}")
+        repo.upsert_completed(w2, "out", "m", "v1", "{}")
             .await
             .unwrap();
 
-        let reviews = repo
-            .fetch_completed_in_range("user-1", w1, w2)
-            .await
-            .unwrap();
+        let reviews = repo.fetch_completed_in_range(w1, w2).await.unwrap();
 
         assert_eq!(reviews.len(), 1);
         assert_eq!(reviews[0].review_text, Some("in".to_string()));
@@ -679,20 +628,17 @@ mod tests {
         let repo = setup().await;
         let w = week_start();
 
-        repo.upsert_completed("user-1", w, "mine", "m", "v1", "{}")
-            .await
-            .unwrap();
-        repo.upsert_completed("user-2", w, "theirs", "m", "v1", "{}")
+        repo.upsert_completed(w, "mine", "m", "v1", "{}")
             .await
             .unwrap();
 
         let reviews = repo
-            .fetch_completed_in_range("user-1", w, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
+            .fetch_completed_in_range(w, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
             .await
             .unwrap();
 
         assert_eq!(reviews.len(), 1);
-        assert_eq!(reviews[0].review_text, Some("theirs".to_string()));
+        assert_eq!(reviews[0].review_text, Some("mine".to_string()));
     }
 
     #[tokio::test]
@@ -701,15 +647,13 @@ mod tests {
         let w1 = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
         let w2 = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
 
-        repo.upsert_completed("user-1", w1, "ok", "m", "v1", "{}")
+        repo.upsert_completed(w1, "ok", "m", "v1", "{}")
             .await
             .unwrap();
-        repo.upsert_failed("user-1", w2, "m", "v1", "boom")
-            .await
-            .unwrap();
+        repo.upsert_failed(w2, "m", "v1", "boom").await.unwrap();
 
         let reviews = repo
-            .fetch_completed_in_range("user-1", w1, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
+            .fetch_completed_in_range(w1, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
             .await
             .unwrap();
 
@@ -723,7 +667,6 @@ mod tests {
 
         let reviews = repo
             .fetch_completed_in_range(
-                "user-1",
                 NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
                 NaiveDate::from_ymd_opt(2026, 4, 27).unwrap(),
             )
@@ -737,7 +680,7 @@ mod tests {
     async fn upsert_failed_starts_with_null_inputs_snapshot() {
         let repo = setup().await;
         let stored = repo
-            .upsert_failed("user-1", week_start(), "m", "v1", "boom")
+            .upsert_failed(week_start(), "m", "v1", "boom")
             .await
             .unwrap();
         assert_eq!(stored.inputs_snapshot, None);

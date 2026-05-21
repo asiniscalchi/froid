@@ -861,7 +861,7 @@ async fn undo_deletes_daily_review_for_deleted_entry_date() {
         .await
         .unwrap();
     daily_reviews
-        .upsert_completed("7", yesterday, "persisted review", "model", "v1")
+        .upsert_completed(yesterday, "persisted review", "model", "v1")
         .await
         .unwrap();
 
@@ -874,7 +874,7 @@ async fn undo_deletes_daily_review_for_deleted_entry_date() {
         .await
         .unwrap();
     let persisted_review = daily_reviews
-        .find_by_user_and_date("7", yesterday)
+        .find_by_user_and_date(yesterday)
         .await
         .unwrap();
 

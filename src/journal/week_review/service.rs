@@ -126,7 +126,7 @@ impl WeeklyReviewService {
     ) -> Result<WeeklyReviewResult, WeeklyReviewServiceError> {
         let existing = self
             .weekly_reviews
-            .find_by_user_and_week(user_id, week_start)
+            .find_by_user_and_week(week_start)
             .await?;
 
         if let Some(review) = &existing
@@ -142,7 +142,7 @@ impl WeeklyReviewService {
         let week_end = week_start + Duration::days(DAYS_PER_WEEK);
         let dailies = self
             .daily_reviews
-            .fetch_completed_in_range(user_id, week_start, week_end)
+            .fetch_completed_in_range(week_start, week_end)
             .await?;
 
         if dailies.len() < self.min_daily_reviews {
@@ -151,7 +151,7 @@ impl WeeklyReviewService {
 
         let signals = self
             .signals
-            .find_by_user_in_range(user_id, week_start, week_end)
+            .find_by_user_in_range(week_start, week_end)
             .await?;
 
         let mut signals_by_date: HashMap<NaiveDate, Vec<_>> = HashMap::new();
@@ -204,7 +204,6 @@ impl WeeklyReviewService {
                 let review = self
                     .weekly_reviews
                     .upsert_completed(
-                        user_id,
                         week_start,
                         trimmed,
                         model,
@@ -225,12 +224,12 @@ impl WeeklyReviewService {
 
     pub async fn fetch_review(
         &self,
-        user_id: &str,
+        _user_id: &str,
         week_start: NaiveDate,
     ) -> Result<Option<WeeklyReview>, WeeklyReviewServiceError> {
         let review = self
             .weekly_reviews
-            .find_by_user_and_week(user_id, week_start)
+            .find_by_user_and_week(week_start)
             .await?;
         Ok(review.filter(|r| {
             r.status == WeeklyReviewStatus::Completed
@@ -249,7 +248,7 @@ impl WeeklyReviewService {
         error_message: &str,
     ) -> Result<WeeklyReviewResult, WeeklyReviewServiceError> {
         self.weekly_reviews
-            .upsert_failed(user_id, week_start, model, prompt_version, error_message)
+            .upsert_failed(week_start, model, prompt_version, error_message)
             .await?;
         Ok(WeeklyReviewResult::GenerationFailed(WeeklyReviewFailure {
             user_id: user_id.to_string(),
@@ -366,12 +365,12 @@ mod tests {
 
     async fn seed_completed_daily(
         daily_reviews: &DailyReviewRepository,
-        user_id: &str,
+        _user_id: &str,
         date: NaiveDate,
         text: &str,
     ) -> i64 {
         daily_reviews
-            .upsert_completed(user_id, date, text, "model", "v1")
+            .upsert_completed(date, text, "model", "v1")
             .await
             .unwrap()
             .id
@@ -389,7 +388,7 @@ mod tests {
         let (service, weekly_reviews, _daily, _signals, generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("new")).await;
         let existing = weekly_reviews
-            .upsert_completed("user-1", week_start(), "existing", "model", "v1", "{}")
+            .upsert_completed(week_start(), "existing", "model", "v1", "{}")
             .await
             .unwrap();
 
@@ -429,7 +428,7 @@ mod tests {
         assert_eq!(generator.calls(), 1);
 
         let stored = weekly_reviews
-            .find_by_user_and_week("user-1", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -450,20 +449,12 @@ mod tests {
         seed_completed_daily(&daily, "user-1", day(2), "wednesday").await;
 
         signals_repo
-            .replace_in_transaction(
-                monday_review,
-                "user-1",
-                day(0),
-                &[theme_candidate()],
-                "model",
-                "v1",
-            )
+            .replace_in_transaction(monday_review, day(0), &[theme_candidate()], "model", "v1")
             .await
             .unwrap();
         signals_repo
             .replace_in_transaction(
                 tuesday_review,
-                "user-1",
                 day(1),
                 &[theme_candidate(), need_candidate()],
                 "model",
@@ -494,14 +485,7 @@ mod tests {
         seed_completed_daily(&daily, "user-1", day(7), "next monday").await;
 
         signals_repo
-            .replace_in_transaction(
-                prior_review,
-                "user-1",
-                day(-1),
-                &[theme_candidate()],
-                "m",
-                "v1",
-            )
+            .replace_in_transaction(prior_review, day(-1), &[theme_candidate()], "m", "v1")
             .await
             .unwrap();
 
@@ -538,7 +522,7 @@ mod tests {
         assert_eq!(generator.calls(), 1);
 
         let stored = weekly_reviews
-            .find_by_user_and_week("user-1", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -569,7 +553,7 @@ mod tests {
         );
 
         let stored = weekly_reviews
-            .find_by_user_and_week("user-1", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -593,7 +577,7 @@ mod tests {
             WeeklyReviewResult::GenerationFailed(_)
         ));
         let failed = weekly_reviews
-            .find_by_user_and_week("user-1", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();
@@ -618,7 +602,7 @@ mod tests {
             seed_completed_daily(&daily, "user-1", day(offset), "text").await;
         }
         let existing = weekly_reviews
-            .upsert_completed("user-1", week_start(), "", "old-model", "v0", "{}")
+            .upsert_completed(week_start(), "", "old-model", "v0", "{}")
             .await
             .unwrap();
 
@@ -660,7 +644,7 @@ mod tests {
         let (service, weekly_reviews, _daily, _signals, _generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("any")).await;
         weekly_reviews
-            .upsert_completed("user-1", week_start(), "review text", "model", "v1", "{}")
+            .upsert_completed(week_start(), "review text", "model", "v1", "{}")
             .await
             .unwrap();
 
@@ -684,7 +668,7 @@ mod tests {
         let (service, weekly_reviews, _daily, _signals, _generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("any")).await;
         weekly_reviews
-            .upsert_failed("user-1", week_start(), "model", "v1", "provider down")
+            .upsert_failed(week_start(), "model", "v1", "provider down")
             .await
             .unwrap();
 
@@ -701,21 +685,14 @@ mod tests {
         seed_completed_daily(&daily, "user-1", day(1), "tuesday text").await;
         seed_completed_daily(&daily, "user-1", day(2), "wednesday text").await;
         signals_repo
-            .replace_in_transaction(
-                monday_review,
-                "user-1",
-                day(0),
-                &[theme_candidate()],
-                "model",
-                "v1",
-            )
+            .replace_in_transaction(monday_review, day(0), &[theme_candidate()], "model", "v1")
             .await
             .unwrap();
 
         service.review_week("user-1", week_start()).await.unwrap();
 
         let stored = weekly_reviews
-            .find_by_user_and_week("user-1", week_start())
+            .find_by_user_and_week(week_start())
             .await
             .unwrap()
             .unwrap();

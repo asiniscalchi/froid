@@ -68,14 +68,14 @@ fn map_weekly_error(err: WeeklyReviewRepositoryError) -> AnalyzerError {
 impl ReviewReadService for DefaultReviewReadService {
     async fn get_daily_reviews(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: GetReviewsRequest,
     ) -> Result<Vec<DailyReviewView>, AnalyzerError> {
         validate_range(request.from_date, request.to_date_exclusive)?;
 
         let rows = self
             .daily
-            .fetch_completed_in_range(&ctx.user_id, request.from_date, request.to_date_exclusive)
+            .fetch_completed_in_range(request.from_date, request.to_date_exclusive)
             .await
             .map_err(map_daily_error)?;
 
@@ -91,14 +91,14 @@ impl ReviewReadService for DefaultReviewReadService {
 
     async fn get_weekly_reviews(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: GetReviewsRequest,
     ) -> Result<Vec<WeeklyReviewView>, AnalyzerError> {
         validate_range(request.from_date, request.to_date_exclusive)?;
 
         let rows = self
             .weekly
-            .fetch_completed_in_range(&ctx.user_id, request.from_date, request.to_date_exclusive)
+            .fetch_completed_in_range(request.from_date, request.to_date_exclusive)
             .await
             .map_err(map_weekly_error)?;
 
@@ -115,12 +115,12 @@ impl ReviewReadService for DefaultReviewReadService {
 
     async fn get_daily_review(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         review_date: NaiveDate,
     ) -> Result<Option<DailyReviewView>, AnalyzerError> {
         let row = self
             .daily
-            .find_by_user_and_date(&ctx.user_id, review_date)
+            .find_by_user_and_date(review_date)
             .await
             .map_err(map_daily_error)?;
 
@@ -129,12 +129,12 @@ impl ReviewReadService for DefaultReviewReadService {
 
     async fn get_weekly_review(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         week_start: NaiveDate,
     ) -> Result<Option<WeeklyReviewView>, AnalyzerError> {
         let row = self
             .weekly
-            .find_by_user_and_week(&ctx.user_id, week_start)
+            .find_by_user_and_week(week_start)
             .await
             .map_err(map_weekly_error)?;
 
@@ -214,15 +214,15 @@ mod tests {
     async fn get_daily_reviews_returns_completed_reviews_in_range_ascending() {
         let (service, daily, _) = setup().await;
         daily
-            .upsert_completed("user-1", ymd(2026, 4, 27), "first", "m", "v1")
+            .upsert_completed(ymd(2026, 4, 27), "first", "m", "v1")
             .await
             .unwrap();
         daily
-            .upsert_completed("user-1", ymd(2026, 4, 28), "second", "m", "v1")
+            .upsert_completed(ymd(2026, 4, 28), "second", "m", "v1")
             .await
             .unwrap();
         daily
-            .upsert_completed("user-1", ymd(2026, 4, 29), "third", "m", "v1")
+            .upsert_completed(ymd(2026, 4, 29), "third", "m", "v1")
             .await
             .unwrap();
 
@@ -242,11 +242,11 @@ mod tests {
     async fn get_daily_reviews_excludes_failed_reviews() {
         let (service, daily, _) = setup().await;
         daily
-            .upsert_completed("user-1", ymd(2026, 4, 27), "ok", "m", "v1")
+            .upsert_completed(ymd(2026, 4, 27), "ok", "m", "v1")
             .await
             .unwrap();
         daily
-            .upsert_failed("user-1", ymd(2026, 4, 28), "m", "v1", "boom")
+            .upsert_failed(ymd(2026, 4, 28), "m", "v1", "boom")
             .await
             .unwrap();
 
@@ -263,11 +263,11 @@ mod tests {
     async fn get_daily_reviews_uses_single_user_scope() {
         let (service, daily, _) = setup().await;
         daily
-            .upsert_completed("user-1", ymd(2026, 4, 27), "mine", "m", "v1")
+            .upsert_completed(ymd(2026, 4, 27), "mine", "m", "v1")
             .await
             .unwrap();
         daily
-            .upsert_completed("user-2", ymd(2026, 4, 27), "theirs", "m", "v1")
+            .upsert_completed(ymd(2026, 4, 27), "theirs", "m", "v1")
             .await
             .unwrap();
 
@@ -307,11 +307,11 @@ mod tests {
         let w2 = ymd(2026, 4, 27);
 
         weekly
-            .upsert_completed("user-1", w1, "first", "m", "v1", "{}")
+            .upsert_completed(w1, "first", "m", "v1", "{}")
             .await
             .unwrap();
         weekly
-            .upsert_completed("user-1", w2, "second", "m", "v1", "{}")
+            .upsert_completed(w2, "second", "m", "v1", "{}")
             .await
             .unwrap();
 
@@ -335,13 +335,10 @@ mod tests {
         let w2 = ymd(2026, 4, 27);
 
         weekly
-            .upsert_completed("user-1", w1, "ok", "m", "v1", "{}")
+            .upsert_completed(w1, "ok", "m", "v1", "{}")
             .await
             .unwrap();
-        weekly
-            .upsert_failed("user-1", w2, "m", "v1", "boom")
-            .await
-            .unwrap();
+        weekly.upsert_failed(w2, "m", "v1", "boom").await.unwrap();
 
         let result = service
             .get_weekly_reviews(&ctx(), req(w1, ymd(2026, 5, 4)))
@@ -357,11 +354,11 @@ mod tests {
         let (service, _, weekly) = setup().await;
         let w = ymd(2026, 4, 20);
         weekly
-            .upsert_completed("user-1", w, "mine", "m", "v1", "{}")
+            .upsert_completed(w, "mine", "m", "v1", "{}")
             .await
             .unwrap();
         weekly
-            .upsert_completed("user-2", w, "theirs", "m", "v1", "{}")
+            .upsert_completed(w, "theirs", "m", "v1", "{}")
             .await
             .unwrap();
 
@@ -378,7 +375,7 @@ mod tests {
     async fn get_daily_review_returns_completed_review_for_date() {
         let (service, daily, _) = setup().await;
         daily
-            .upsert_completed("user-1", ymd(2026, 4, 28), "today", "m", "v1")
+            .upsert_completed(ymd(2026, 4, 28), "today", "m", "v1")
             .await
             .unwrap();
 
@@ -406,7 +403,7 @@ mod tests {
     async fn get_daily_review_returns_none_when_failed() {
         let (service, daily, _) = setup().await;
         daily
-            .upsert_failed("user-1", ymd(2026, 4, 28), "m", "v1", "boom")
+            .upsert_failed(ymd(2026, 4, 28), "m", "v1", "boom")
             .await
             .unwrap();
 
@@ -422,7 +419,7 @@ mod tests {
         let (service, _, weekly) = setup().await;
         let w = ymd(2026, 4, 20);
         weekly
-            .upsert_completed("user-1", w, "weekly", "m", "v1", "{}")
+            .upsert_completed(w, "weekly", "m", "v1", "{}")
             .await
             .unwrap();
 
@@ -451,10 +448,7 @@ mod tests {
     async fn get_weekly_review_returns_none_when_failed() {
         let (service, _, weekly) = setup().await;
         let w = ymd(2026, 4, 20);
-        weekly
-            .upsert_failed("user-1", w, "m", "v1", "boom")
-            .await
-            .unwrap();
+        weekly.upsert_failed(w, "m", "v1", "boom").await.unwrap();
 
         let result = service.get_weekly_review(&ctx(), w).await.unwrap();
         assert!(result.is_none());

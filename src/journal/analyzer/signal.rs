@@ -64,7 +64,7 @@ fn normalize_label_contains(value: Option<String>) -> Result<Option<String>, Ana
 impl SignalReadService for DefaultSignalReadService {
     async fn search(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: SearchSignalsRequest,
     ) -> Result<Vec<SignalView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_SIGNAL_LIMIT)?;
@@ -85,7 +85,7 @@ impl SignalReadService for DefaultSignalReadService {
 
         let rows = self
             .repository
-            .search(&ctx.user_id, &filters)
+            .search(&filters)
             .await
             .map_err(map_storage_error)?;
 
@@ -178,16 +178,16 @@ mod tests {
     async fn seed(
         signals: &DailyReviewSignalRepository,
         reviews: &DailyReviewRepository,
-        user_id: &str,
+        _user_id: &str,
         date: NaiveDate,
         candidates: &[DailyReviewSignalCandidate],
     ) {
         let review = reviews
-            .upsert_completed(user_id, date, "review text", "m", "v1")
+            .upsert_completed(date, "review text", "m", "v1")
             .await
             .unwrap();
         signals
-            .replace_in_transaction(review.id, user_id, date, candidates, "m", "v1")
+            .replace_in_transaction(review.id, date, candidates, "m", "v1")
             .await
             .unwrap();
     }

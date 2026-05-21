@@ -66,7 +66,6 @@ impl DailyReviewSignalRepository {
     pub async fn replace_in_transaction(
         &self,
         daily_review_id: i64,
-        _user_id: &str,
         review_date: NaiveDate,
         candidates: &[DailyReviewSignalCandidate],
         model: &str,
@@ -186,7 +185,6 @@ impl DailyReviewSignalRepository {
 
     pub async fn find_by_user_and_date(
         &self,
-        _user_id: &str,
         review_date: NaiveDate,
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalRepositoryError> {
         let rows = sqlx::query(
@@ -208,7 +206,6 @@ impl DailyReviewSignalRepository {
 
     pub async fn search(
         &self,
-        _user_id: &str,
         filters: &SignalSearchFilters,
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalRepositoryError> {
         let mut sql = String::from(
@@ -271,7 +268,6 @@ impl DailyReviewSignalRepository {
 
     pub async fn find_by_user_in_range(
         &self,
-        _user_id: &str,
         start_date: NaiveDate,
         end_date_exclusive: NaiveDate,
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalRepositoryError> {
@@ -427,7 +423,6 @@ mod tests {
         let review_repo = DailyReviewRepository::new(pool.clone());
         let review = review_repo
             .upsert_completed(
-                user_id,
                 NaiveDate::from_ymd_opt(2026, 4, 28).unwrap(),
                 "review text",
                 "model",
@@ -475,7 +470,6 @@ mod tests {
         let stored = repo
             .replace_in_transaction(
                 review_id,
-                "user-1",
                 date(),
                 &[theme_candidate(), need_candidate()],
                 "model",
@@ -546,10 +540,10 @@ mod tests {
         assert_eq!(candidates.len(), 1);
     }
 
-    async fn insert_daily_review_for(pool: &SqlitePool, user_id: &str, date: NaiveDate) -> i64 {
+    async fn insert_daily_review_for(pool: &SqlitePool, _user_id: &str, date: NaiveDate) -> i64 {
         let review_repo = DailyReviewRepository::new(pool.clone());
         review_repo
-            .upsert_completed(user_id, date, "review text", "model", "v1")
+            .upsert_completed(date, "review text", "model", "v1")
             .await
             .unwrap()
             .id
@@ -566,19 +560,11 @@ mod tests {
         let wednesday_review = insert_daily_review_for(&pool, "user-1", wednesday).await;
         let outside_review = insert_daily_review_for(&pool, "user-1", outside).await;
 
-        repo.replace_in_transaction(
-            monday_review,
-            "user-1",
-            monday,
-            &[theme_candidate()],
-            "m",
-            "v1",
-        )
-        .await
-        .unwrap();
+        repo.replace_in_transaction(monday_review, monday, &[theme_candidate()], "m", "v1")
+            .await
+            .unwrap();
         repo.replace_in_transaction(
             wednesday_review,
-            "user-1",
             wednesday,
             &[theme_candidate(), need_candidate()],
             "m",
@@ -586,23 +572,12 @@ mod tests {
         )
         .await
         .unwrap();
-        repo.replace_in_transaction(
-            outside_review,
-            "user-1",
-            outside,
-            &[theme_candidate()],
-            "m",
-            "v1",
-        )
-        .await
-        .unwrap();
+        repo.replace_in_transaction(outside_review, outside, &[theme_candidate()], "m", "v1")
+            .await
+            .unwrap();
 
         let in_range = repo
-            .find_by_user_in_range(
-                "user-1",
-                monday,
-                NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
-            )
+            .find_by_user_in_range(monday, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
             .await
             .unwrap();
 
@@ -632,29 +607,14 @@ mod tests {
         let wednesday_review = insert_daily_review_for(pool, "user-1", wednesday).await;
 
         let repo = DailyReviewSignalRepository::new(pool.clone());
-        repo.replace_in_transaction(
-            monday_review,
-            "user-1",
-            monday,
-            &[theme_candidate()],
-            "m",
-            "v1",
-        )
-        .await
-        .unwrap();
-        repo.replace_in_transaction(
-            tuesday_review,
-            "user-1",
-            tuesday,
-            &[need_candidate()],
-            "m",
-            "v1",
-        )
-        .await
-        .unwrap();
+        repo.replace_in_transaction(monday_review, monday, &[theme_candidate()], "m", "v1")
+            .await
+            .unwrap();
+        repo.replace_in_transaction(tuesday_review, tuesday, &[need_candidate()], "m", "v1")
+            .await
+            .unwrap();
         repo.replace_in_transaction(
             wednesday_review,
-            "user-1",
             wednesday,
             &[behavior_candidate()],
             "m",
@@ -676,7 +636,7 @@ mod tests {
         let (repo, _reviews, pool) = setup().await;
         seed_three_signals(&pool).await;
 
-        let rows = repo.search("user-1", &filters(10)).await.unwrap();
+        let rows = repo.search(&filters(10)).await.unwrap();
 
         assert_eq!(rows.len(), 3);
         let dates: Vec<_> = rows.iter().map(|s| s.review_date.to_string()).collect();
@@ -689,13 +649,10 @@ mod tests {
         seed_three_signals(&pool).await;
 
         let rows = repo
-            .search(
-                "user-1",
-                &SignalSearchFilters {
-                    signal_type: Some(SignalType::Need),
-                    ..filters(10)
-                },
-            )
+            .search(&SignalSearchFilters {
+                signal_type: Some(SignalType::Need),
+                ..filters(10)
+            })
             .await
             .unwrap();
 
@@ -709,13 +666,10 @@ mod tests {
         seed_three_signals(&pool).await;
 
         let rows = repo
-            .search(
-                "user-1",
-                &SignalSearchFilters {
-                    status: Some(NeedStatus::Unmet),
-                    ..filters(10)
-                },
-            )
+            .search(&SignalSearchFilters {
+                status: Some(NeedStatus::Unmet),
+                ..filters(10)
+            })
             .await
             .unwrap();
 
@@ -729,13 +683,10 @@ mod tests {
         seed_three_signals(&pool).await;
 
         let rows = repo
-            .search(
-                "user-1",
-                &SignalSearchFilters {
-                    valence: Some(BehaviorValence::Negative),
-                    ..filters(10)
-                },
-            )
+            .search(&SignalSearchFilters {
+                valence: Some(BehaviorValence::Negative),
+                ..filters(10)
+            })
             .await
             .unwrap();
 
@@ -749,13 +700,10 @@ mod tests {
         seed_three_signals(&pool).await;
 
         let rows = repo
-            .search(
-                "user-1",
-                &SignalSearchFilters {
-                    label_contains: Some("PHYSICAL".to_string()),
-                    ..filters(10)
-                },
-            )
+            .search(&SignalSearchFilters {
+                label_contains: Some("PHYSICAL".to_string()),
+                ..filters(10)
+            })
             .await
             .unwrap();
 
@@ -769,14 +717,11 @@ mod tests {
         seed_three_signals(&pool).await;
 
         let rows = repo
-            .search(
-                "user-1",
-                &SignalSearchFilters {
-                    from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
-                    to_date_exclusive: Some(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()),
-                    ..filters(10)
-                },
-            )
+            .search(&SignalSearchFilters {
+                from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
+                to_date_exclusive: Some(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()),
+                ..filters(10)
+            })
             .await
             .unwrap();
 
@@ -793,13 +738,10 @@ mod tests {
         seed_three_signals(&pool).await;
 
         let rows = repo
-            .search(
-                "user-1",
-                &SignalSearchFilters {
-                    min_strength: Some(0.75),
-                    ..filters(10)
-                },
-            )
+            .search(&SignalSearchFilters {
+                min_strength: Some(0.75),
+                ..filters(10)
+            })
             .await
             .unwrap();
 
@@ -812,7 +754,7 @@ mod tests {
         let (repo, _reviews, pool) = setup().await;
         seed_three_signals(&pool).await;
 
-        let rows = repo.search("user-1", &filters(2)).await.unwrap();
+        let rows = repo.search(&filters(2)).await.unwrap();
 
         assert_eq!(rows.len(), 2);
     }
@@ -824,28 +766,14 @@ mod tests {
         let user_one_review = insert_daily_review_for(&pool, "user-1", target).await;
         let user_two_review = insert_daily_review_for(&pool, "user-2", target).await;
 
-        repo.replace_in_transaction(
-            user_one_review,
-            "user-1",
-            target,
-            &[theme_candidate()],
-            "m",
-            "v1",
-        )
-        .await
-        .unwrap();
-        repo.replace_in_transaction(
-            user_two_review,
-            "user-2",
-            target,
-            &[theme_candidate()],
-            "m",
-            "v1",
-        )
-        .await
-        .unwrap();
+        repo.replace_in_transaction(user_one_review, target, &[theme_candidate()], "m", "v1")
+            .await
+            .unwrap();
+        repo.replace_in_transaction(user_two_review, target, &[theme_candidate()], "m", "v1")
+            .await
+            .unwrap();
 
-        let rows = repo.search("user-1", &filters(10)).await.unwrap();
+        let rows = repo.search(&filters(10)).await.unwrap();
 
         assert_eq!(rows.len(), 1);
         assert!(rows.iter().all(|row| row.user_id == SINGLE_USER_ID));
@@ -857,15 +785,12 @@ mod tests {
         seed_three_signals(&pool).await;
 
         let rows = repo
-            .search(
-                "user-1",
-                &SignalSearchFilters {
-                    signal_type: Some(SignalType::Behavior),
-                    valence: Some(BehaviorValence::Negative),
-                    min_strength: Some(0.3),
-                    ..filters(10)
-                },
-            )
+            .search(&SignalSearchFilters {
+                signal_type: Some(SignalType::Behavior),
+                valence: Some(BehaviorValence::Negative),
+                min_strength: Some(0.3),
+                ..filters(10)
+            })
             .await
             .unwrap();
 
@@ -879,13 +804,10 @@ mod tests {
         seed_three_signals(&pool).await;
 
         let rows = repo
-            .search(
-                "user-1",
-                &SignalSearchFilters {
-                    signal_type: Some(SignalType::Tension),
-                    ..filters(10)
-                },
-            )
+            .search(&SignalSearchFilters {
+                signal_type: Some(SignalType::Tension),
+                ..filters(10)
+            })
             .await
             .unwrap();
 
@@ -899,33 +821,15 @@ mod tests {
         let user_one_review = insert_daily_review_for(&pool, "user-1", target).await;
         let user_two_review = insert_daily_review_for(&pool, "user-2", target).await;
 
-        repo.replace_in_transaction(
-            user_one_review,
-            "user-1",
-            target,
-            &[theme_candidate()],
-            "m",
-            "v1",
-        )
-        .await
-        .unwrap();
-        repo.replace_in_transaction(
-            user_two_review,
-            "user-2",
-            target,
-            &[theme_candidate()],
-            "m",
-            "v1",
-        )
-        .await
-        .unwrap();
+        repo.replace_in_transaction(user_one_review, target, &[theme_candidate()], "m", "v1")
+            .await
+            .unwrap();
+        repo.replace_in_transaction(user_two_review, target, &[theme_candidate()], "m", "v1")
+            .await
+            .unwrap();
 
         let rows = repo
-            .find_by_user_in_range(
-                "user-1",
-                target,
-                NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
-            )
+            .find_by_user_in_range(target, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
             .await
             .unwrap();
 

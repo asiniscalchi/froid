@@ -44,7 +44,7 @@ use crate::{
     prompts::{PromptKey, PromptRepository, PromptSource},
     version,
     workers::{
-        ReconciliationWorker,
+        ReconciliationWorker, ReconciliationWorkerConfig,
         daily_review::{DailyReviewDeliveryWorker, TelegramDailyReviewSender},
         embedding::EmbeddingCycle,
         extraction::ExtractionCycle,
@@ -440,7 +440,7 @@ fn spawn_daily_review_delivery_worker(
         return Ok(false);
     };
 
-    let worker = DailyReviewDeliveryWorker::new(
+    let cycle = DailyReviewDeliveryWorker::new(
         JournalRepository::new(pool.clone()),
         crate::journal::review::repository::DailyReviewRepository::new(pool.clone()),
         daily_review_service,
@@ -450,6 +450,12 @@ fn spawn_daily_review_delivery_worker(
         ),
         config.daily_review_delivery.clone(),
     );
+    let worker_config = ReconciliationWorkerConfig {
+        enabled: config.daily_review_delivery.enabled,
+        batch_size: 1,
+        interval: config.daily_review_delivery.interval,
+    };
+    let worker = ReconciliationWorker::new(cycle, worker_config);
     let token = shutdown.clone();
     workers.spawn(async move {
         worker.run_forever(token).await;
@@ -477,7 +483,7 @@ fn spawn_weekly_review_delivery_worker(
         return Ok(());
     };
 
-    let worker = WeeklyReviewDeliveryWorker::new(
+    let cycle = WeeklyReviewDeliveryWorker::new(
         JournalRepository::new(pool.clone()),
         crate::journal::week_review::repository::WeeklyReviewRepository::new(pool.clone()),
         weekly_review_service,
@@ -487,6 +493,12 @@ fn spawn_weekly_review_delivery_worker(
         ),
         config.weekly_review_delivery.clone(),
     );
+    let worker_config = ReconciliationWorkerConfig {
+        enabled: config.weekly_review_delivery.enabled,
+        batch_size: 1,
+        interval: config.weekly_review_delivery.interval,
+    };
+    let worker = ReconciliationWorker::new(cycle, worker_config);
     let token = shutdown.clone();
     workers.spawn(async move {
         worker.run_forever(token).await;

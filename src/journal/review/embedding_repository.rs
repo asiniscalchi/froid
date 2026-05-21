@@ -321,7 +321,7 @@ mod tests {
         let (review_repo, embedding_repo) = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
         let review = review_repo
-            .upsert_completed("user-1", date, "review text", "model", "v1")
+            .upsert_completed(date, "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -350,7 +350,7 @@ mod tests {
         let (review_repo, embedding_repo) = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
         let review = review_repo
-            .upsert_completed("user-1", date, "review text", "model", "v1")
+            .upsert_completed(date, "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -369,7 +369,7 @@ mod tests {
         let (review_repo, embedding_repo) = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
         let review = review_repo
-            .upsert_completed("user-1", date, "review text", "model", "v1")
+            .upsert_completed(date, "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -392,7 +392,7 @@ mod tests {
         let (review_repo, embedding_repo) = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
         let review = review_repo
-            .upsert_completed("user-1", date, "review text", "model", "v1")
+            .upsert_completed(date, "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -424,15 +424,15 @@ mod tests {
         let date3 = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
 
         let review1 = review_repo
-            .upsert_completed("user-1", date1, "review 1", "model", "v1")
+            .upsert_completed(date1, "review 1", "model", "v1")
             .await
             .unwrap();
         let review2 = review_repo
-            .upsert_completed("user-1", date2, "review 2", "model", "v1")
+            .upsert_completed(date2, "review 2", "model", "v1")
             .await
             .unwrap();
         let review3 = review_repo
-            .upsert_completed("user-1", date3, "review 3", "model", "v1")
+            .upsert_completed(date3, "review 3", "model", "v1")
             .await
             .unwrap();
 

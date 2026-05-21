@@ -125,7 +125,7 @@ impl DailyReviewSignalService {
     ) -> Result<DailyReviewSignalResult, DailyReviewSignalServiceError> {
         let review = self
             .daily_reviews
-            .find_by_user_and_date(user_id, review_date)
+            .find_by_user_and_date(review_date)
             .await?;
 
         let Some(review) = review else {
@@ -191,7 +191,6 @@ impl DailyReviewSignalService {
             .signals
             .replace_in_transaction(
                 review.id,
-                user_id,
                 review_date,
                 &valid_candidates,
                 self.generator.model(),
@@ -221,24 +220,21 @@ impl DailyReviewSignalService {
 
     pub async fn fetch_signals(
         &self,
-        user_id: &str,
+        _user_id: &str,
         review_date: NaiveDate,
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalServiceError> {
-        Ok(self
-            .signals
-            .find_by_user_and_date(user_id, review_date)
-            .await?)
+        Ok(self.signals.find_by_user_and_date(review_date).await?)
     }
 
     async fn fetch_entries_with_extractions(
         &self,
-        user_id: &str,
+        _user_id: &str,
         date: NaiveDate,
     ) -> Result<
         Vec<crate::journal::review::JournalEntryWithExtraction>,
         DailyReviewSignalServiceError,
     > {
-        let entries = self.journal_entries.fetch_today(user_id, date).await?;
+        let entries = self.journal_entries.fetch_today(date).await?;
         if entries.is_empty() {
             return Ok(vec![]);
         }
@@ -374,7 +370,7 @@ mod tests {
         let (service, reviews, _) =
             setup(FakeSignalGenerator::succeeding(output_with(vec![]))).await;
         reviews
-            .upsert_failed("user-1", date(), "model", "v1", "error")
+            .upsert_failed(date(), "model", "v1", "error")
             .await
             .unwrap();
 
@@ -395,7 +391,7 @@ mod tests {
             .await
             .unwrap();
         reviews
-            .upsert_completed("user-1", date(), "review text", "model", "v1")
+            .upsert_completed(date(), "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -417,7 +413,7 @@ mod tests {
         let generator = FakeSignalGenerator::succeeding(output_with(vec![theme_signal()]));
         let (service, reviews, _) = setup(generator).await;
         reviews
-            .upsert_completed("user-1", date(), "review text", "model", "v1")
+            .upsert_completed(date(), "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -439,7 +435,7 @@ mod tests {
         let generator = FakeSignalGenerator::failing("provider down");
         let (service, reviews, _) = setup(generator).await;
         reviews
-            .upsert_completed("user-1", date(), "review text", "model", "v1")
+            .upsert_completed(date(), "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -468,7 +464,7 @@ mod tests {
         let generator = FakeSignalGenerator::succeeding(output_with(vec![invalid, need_signal()]));
         let (service, reviews, _) = setup(generator).await;
         reviews
-            .upsert_completed("user-1", date(), "review text", "model", "v1")
+            .upsert_completed(date(), "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -489,11 +485,11 @@ mod tests {
         let generator = FakeSignalGenerator::succeeding(output_with(vec![theme_signal()]));
         let (service, reviews, _) = setup(generator).await;
         reviews
-            .upsert_completed("user-1", date(), "user one review", "model", "v1")
+            .upsert_completed(date(), "user one review", "model", "v1")
             .await
             .unwrap();
         reviews
-            .upsert_completed("user-2", date(), "user two review", "model", "v1")
+            .upsert_completed(date(), "user two review", "model", "v1")
             .await
             .unwrap();
 
@@ -523,7 +519,7 @@ mod tests {
         let generator = FakeSignalGenerator::succeeding(output_with(vec![theme_signal()]));
         let (service, reviews, _) = setup(generator.clone()).await;
         reviews
-            .upsert_completed("user-1", date(), "review text", "model", "v1")
+            .upsert_completed(date(), "review text", "model", "v1")
             .await
             .unwrap();
 

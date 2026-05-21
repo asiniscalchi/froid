@@ -174,11 +174,7 @@ impl JournalService {
     async fn last(&self, request: &JournalCommandRequest) -> Result<OutgoingMessage, sqlx::Error> {
         let Some(entry) = self
             .repository
-            .fetch_last_for_conversation(
-                &request.user_id,
-                &request.source,
-                &request.source_conversation_id,
-            )
+            .fetch_last_for_conversation(&request.source, &request.source_conversation_id)
             .await?
         else {
             return Ok(OutgoingMessage {
@@ -194,11 +190,7 @@ impl JournalService {
     async fn undo(&self, request: &JournalCommandRequest) -> Result<OutgoingMessage, sqlx::Error> {
         let Some(_) = self
             .store
-            .delete_last_for_conversation(
-                &request.user_id,
-                &request.source,
-                &request.source_conversation_id,
-            )
+            .delete_last_for_conversation(&request.source, &request.source_conversation_id)
             .await?
         else {
             return Ok(OutgoingMessage {
@@ -211,9 +203,9 @@ impl JournalService {
         })
     }
 
-    async fn recent(&self, user_id: &str, limit: u32) -> Result<OutgoingMessage, sqlx::Error> {
+    async fn recent(&self, _user_id: &str, limit: u32) -> Result<OutgoingMessage, sqlx::Error> {
         let limit = limit.min(MAX_RECENT_LIMIT);
-        let entries = self.repository.fetch_recent(user_id, limit).await?;
+        let entries = self.repository.fetch_recent(limit).await?;
 
         if entries.is_empty() {
             return Ok(OutgoingMessage {
@@ -228,10 +220,10 @@ impl JournalService {
 
     async fn today(
         &self,
-        user_id: &str,
+        _user_id: &str,
         date: chrono::NaiveDate,
     ) -> Result<OutgoingMessage, sqlx::Error> {
-        let entries = self.repository.fetch_today(user_id, date).await?;
+        let entries = self.repository.fetch_today(date).await?;
 
         if entries.is_empty() {
             return Ok(OutgoingMessage {
@@ -246,10 +238,10 @@ impl JournalService {
 
     async fn stats(
         &self,
-        user_id: &str,
+        _user_id: &str,
         today: chrono::NaiveDate,
     ) -> Result<OutgoingMessage, sqlx::Error> {
-        let stats = self.repository.stats(user_id, today).await?;
+        let stats = self.repository.stats(today).await?;
 
         Ok(OutgoingMessage {
             text: stats_response(&stats),
@@ -261,7 +253,7 @@ impl JournalService {
         user_id: &str,
         today: chrono::NaiveDate,
     ) -> Result<OutgoingMessage, sqlx::Error> {
-        let journal = self.repository.stats(user_id, today).await?;
+        let journal = self.repository.stats(today).await?;
         let embeddings = self.embedding_status(user_id).await;
         let daily_review = self.daily_review_status();
 
