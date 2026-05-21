@@ -1,7 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CheckIcon } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
@@ -81,6 +90,8 @@ function PromptsPanel() {
   const [detail, setDetail] = useState<PromptDetail | null>(null)
   const [draft, setDraft] = useState<string>('')
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
+  const [resetOpen, setResetOpen] = useState(false)
+  const saveRef = useRef<() => void>(() => {})
 
   async function loadList(preserveSelection = true) {
     try {
@@ -142,13 +153,7 @@ function PromptsPanel() {
 
   async function handleReset() {
     if (!selectedKey || !detail || !detail.is_customized) return
-    if (
-      !window.confirm(
-        `Reset "${detail.label}" to the bundled default? This discards your customization.`,
-      )
-    ) {
-      return
-    }
+    setResetOpen(false)
     setStatus({ kind: 'busy', message: 'Resetting…' })
     try {
       await resetPrompt(selectedKey)
@@ -166,6 +171,23 @@ function PromptsPanel() {
   const dirty = detail !== null && draft !== detail.current_text
   const busy = status.kind === 'busy'
   const editedAt = detail ? formatEditedAt(detail.updated_at) : null
+
+  useEffect(() => {
+    saveRef.current = () => {
+      if (dirty && !busy) void handleSave()
+    }
+  })
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        saveRef.current()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
 
   return (
     <div
@@ -229,7 +251,7 @@ function PromptsPanel() {
               </Button>
               <Button
                 variant="ghost"
-                onClick={handleReset}
+                onClick={() => setResetOpen(true)}
                 disabled={busy || !detail.is_customized}
                 className="text-destructive hover:bg-destructive/10 hover:text-destructive"
               >
@@ -237,7 +259,43 @@ function PromptsPanel() {
                   ? 'Resetting…'
                   : 'Reset to default'}
               </Button>
+              <span className="ml-auto self-center text-xs text-muted-foreground">
+                <kbd className="rounded border border-border bg-muted px-1 font-mono">
+                  ⌘
+                </kbd>
+                <span className="mx-1">+</span>
+                <kbd className="rounded border border-border bg-muted px-1 font-mono">
+                  S
+                </kbd>{' '}
+                to save
+              </span>
             </div>
+            <Dialog open={resetOpen} onOpenChange={setResetOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Reset to default?</DialogTitle>
+                  <DialogDescription>
+                    This discards your customization of{' '}
+                    <span className="font-medium text-foreground">
+                      {detail.label}
+                    </span>{' '}
+                    and restores the bundled default. This cannot be undone.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <DialogClose asChild>
+                    <Button variant="outline">Cancel</Button>
+                  </DialogClose>
+                  <Button
+                    variant="default"
+                    onClick={handleReset}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    Reset
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
             {status.kind === 'error' && (
               <p
                 className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
