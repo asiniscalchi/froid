@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -9,16 +9,29 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::journal::repository::{BulkImportError, JournalEntryRecord, JournalRepository};
+use crate::{
+    journal::repository::{BulkImportError, JournalEntryRecord, JournalRepository},
+    prompts::{PromptKey, PromptRepository, load_default, registry::version_for},
+};
 
 pub const EXPORT_FORMAT_VERSION: u32 = 2;
 pub const MIN_SUPPORTED_IMPORT_VERSION: u32 = 1;
 
-pub fn router(repo: JournalRepository) -> Router {
-    Router::new()
+pub fn router(journal: JournalRepository, prompts: PromptRepository) -> Router {
+    let messages = Router::new()
         .route("/messages/export", get(export_messages))
         .route("/messages/import", post(import_messages))
-        .with_state(repo)
+        .with_state(journal);
+
+    let prompts = Router::new()
+        .route("/prompts", get(list_prompts))
+        .route(
+            "/prompts/{key}",
+            get(get_prompt).put(update_prompt).delete(reset_prompt),
+        )
+        .with_state(prompts);
+
+    Router::new().merge(messages).merge(prompts)
 }
 
 #[derive(Serialize)]
@@ -39,7 +52,7 @@ struct ExportEnvelope {
 }
 
 #[derive(Debug)]
-enum ApiError {
+enum DashboardError {
     ExportRepository(sqlx::Error),
     Serialization(serde_json::Error),
     UnsupportedVersion {
@@ -53,7 +66,7 @@ enum ApiError {
     ImportRepository(sqlx::Error),
 }
 
-impl IntoResponse for ApiError {
+impl IntoResponse for DashboardError {
     fn into_response(self) -> Response {
         match self {
             Self::ExportRepository(err) => {
@@ -118,11 +131,11 @@ impl IntoResponse for ApiError {
 
 async fn export_messages(
     State(repo): State<JournalRepository>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<impl IntoResponse, DashboardError> {
     let records = repo
         .fetch_all_for_export()
         .await
-        .map_err(ApiError::ExportRepository)?;
+        .map_err(DashboardError::ExportRepository)?;
 
     let envelope = ExportEnvelope {
         version: EXPORT_FORMAT_VERSION,
@@ -140,7 +153,7 @@ async fn export_messages(
             .collect(),
     };
 
-    let body = serde_json::to_vec(&envelope).map_err(ApiError::Serialization)?;
+    let body = serde_json::to_vec(&envelope).map_err(DashboardError::Serialization)?;
 
     let filename = format!(
         "froid-messages-{}.json",
@@ -202,9 +215,9 @@ struct ImportError {
 async fn import_messages(
     State(repo): State<JournalRepository>,
     Json(envelope): Json<ImportEnvelope>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<impl IntoResponse, DashboardError> {
     if envelope.version < MIN_SUPPORTED_IMPORT_VERSION || envelope.version > EXPORT_FORMAT_VERSION {
-        return Err(ApiError::UnsupportedVersion {
+        return Err(DashboardError::UnsupportedVersion {
             version: envelope.version,
         });
     }
@@ -231,15 +244,200 @@ async fn import_messages(
             source,
             source_conversation_id,
             source_message_id,
-        } => ApiError::ImportConflict {
+        } => DashboardError::ImportConflict {
             source,
             source_conversation_id,
             source_message_id,
         },
-        BulkImportError::Database(e) => ApiError::ImportRepository(e),
+        BulkImportError::Database(e) => DashboardError::ImportRepository(e),
     })?;
 
     Ok((StatusCode::OK, Json(ImportResult { imported })).into_response())
+}
+
+#[derive(Serialize)]
+struct PromptListItem {
+    key: &'static str,
+    label: &'static str,
+    default_version: String,
+    is_customized: bool,
+    updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize)]
+struct PromptDetail {
+    key: &'static str,
+    label: &'static str,
+    default_version: String,
+    current_version: String,
+    default_text: String,
+    current_text: String,
+    is_customized: bool,
+    updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Deserialize)]
+struct UpdatePromptBody {
+    content: String,
+}
+
+#[derive(Serialize)]
+struct ApiError {
+    error: String,
+}
+
+fn api_error(status: StatusCode, message: impl Into<String>) -> Response {
+    (
+        status,
+        Json(ApiError {
+            error: message.into(),
+        }),
+    )
+        .into_response()
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_prompt_key(raw: &str) -> Result<PromptKey, Response> {
+    PromptKey::parse(raw)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, format!("unknown prompt key '{raw}'")))
+}
+
+async fn list_prompts(State(repo): State<PromptRepository>) -> Response {
+    let rows = match repo.list_all().await {
+        Ok(rows) => rows,
+        Err(err) => {
+            error!(error = %err, "failed to list customized prompts");
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list prompts");
+        }
+    };
+
+    let items: Vec<PromptListItem> = PromptKey::ALL
+        .into_iter()
+        .map(|key| {
+            let row = rows.iter().find(|r| r.prompt_key == key.as_str());
+            let default_path = key.default_path();
+            PromptListItem {
+                key: key.as_str(),
+                label: key.label(),
+                default_version: version_for(&default_path, false),
+                is_customized: row.is_some(),
+                updated_at: row.map(|r| r.updated_at),
+            }
+        })
+        .collect();
+
+    (StatusCode::OK, Json(items)).into_response()
+}
+
+async fn get_prompt(State(repo): State<PromptRepository>, Path(raw_key): Path<String>) -> Response {
+    let key = match parse_prompt_key(&raw_key) {
+        Ok(k) => k,
+        Err(resp) => return resp,
+    };
+
+    let default_path = key.default_path();
+    let default = match load_default(key, &default_path) {
+        Ok(d) => d,
+        Err(err) => {
+            error!(error = %err, "failed to load default prompt");
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to load default prompt: {err}"),
+            );
+        }
+    };
+
+    let row = match repo.get(key.as_str()).await {
+        Ok(row) => row,
+        Err(err) => {
+            error!(error = %err, "failed to read customized prompt");
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to read prompt customization",
+            );
+        }
+    };
+
+    let (current_text, current_version, is_customized, updated_at) = match row {
+        Some(row) => (
+            row.content,
+            version_for(&default_path, true),
+            true,
+            Some(row.updated_at),
+        ),
+        None => (default.text.clone(), default.version.clone(), false, None),
+    };
+
+    (
+        StatusCode::OK,
+        Json(PromptDetail {
+            key: key.as_str(),
+            label: key.label(),
+            default_version: default.version,
+            current_version,
+            default_text: default.text,
+            current_text,
+            is_customized,
+            updated_at,
+        }),
+    )
+        .into_response()
+}
+
+async fn update_prompt(
+    State(repo): State<PromptRepository>,
+    Path(raw_key): Path<String>,
+    Json(body): Json<UpdatePromptBody>,
+) -> Response {
+    let key = match parse_prompt_key(&raw_key) {
+        Ok(k) => k,
+        Err(resp) => return resp,
+    };
+
+    if body.content.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "prompt content must not be empty");
+    }
+
+    let row = match repo.upsert(key.as_str(), &body.content).await {
+        Ok(row) => row,
+        Err(err) => {
+            error!(error = %err, "failed to upsert customized prompt");
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to save prompt");
+        }
+    };
+
+    let default_path = key.default_path();
+    (
+        StatusCode::OK,
+        Json(PromptDetail {
+            key: key.as_str(),
+            label: key.label(),
+            default_version: version_for(&default_path, false),
+            current_version: version_for(&default_path, true),
+            default_text: String::new(),
+            current_text: row.content,
+            is_customized: true,
+            updated_at: Some(row.updated_at),
+        }),
+    )
+        .into_response()
+}
+
+async fn reset_prompt(
+    State(repo): State<PromptRepository>,
+    Path(raw_key): Path<String>,
+) -> Response {
+    let key = match parse_prompt_key(&raw_key) {
+        Ok(k) => k,
+        Err(resp) => return resp,
+    };
+
+    if let Err(err) = repo.delete(key.as_str()).await {
+        error!(error = %err, "failed to delete customized prompt");
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to reset prompt");
+    }
+
+    StatusCode::NO_CONTENT.into_response()
 }
 
 #[cfg(test)]
@@ -258,8 +456,18 @@ mod tests {
         database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
-        let repo = JournalRepository::new(pool);
-        (router(repo.clone()), repo)
+        let journal = JournalRepository::new(pool.clone());
+        let prompts = PromptRepository::new(pool);
+        (router(journal.clone(), prompts), journal)
+    }
+
+    async fn setup_with_prompts() -> (Router, PromptRepository) {
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let journal = JournalRepository::new(pool.clone());
+        let prompts = PromptRepository::new(pool);
+        (router(journal, prompts.clone()), prompts)
     }
 
     fn incoming(message_id: &str, text: &str, received_at: DateTime<Utc>) -> IncomingMessage {
@@ -578,5 +786,188 @@ mod tests {
             .await
             .unwrap();
         assert!(!id.is_empty(), "v1 import must assign a fresh id");
+    }
+
+    #[tokio::test]
+    async fn list_prompts_returns_one_entry_per_known_key() {
+        let (router, _) = setup_with_prompts().await;
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/prompts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        let items = parsed.as_array().unwrap();
+        assert_eq!(items.len(), PromptKey::ALL.len());
+        for item in items {
+            assert!(item["key"].is_string());
+            assert!(item["label"].is_string());
+            assert!(item["default_version"].is_string());
+            assert_eq!(item["is_customized"], false);
+            assert!(item["updated_at"].is_null());
+        }
+    }
+
+    #[tokio::test]
+    async fn list_prompts_reflects_customization_state_after_upsert() {
+        let (router, prompts) = setup_with_prompts().await;
+        prompts
+            .upsert(PromptKey::DailyReview.as_str(), "custom body")
+            .await
+            .unwrap();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/prompts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        let item = parsed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["key"] == "daily_review")
+            .unwrap();
+        assert_eq!(item["is_customized"], true);
+        assert!(item["updated_at"].is_string());
+    }
+
+    #[tokio::test]
+    async fn get_prompt_returns_default_text_when_uncustomized() {
+        let (router, _) = setup_with_prompts().await;
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/prompts/daily_review")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["key"], "daily_review");
+        assert_eq!(parsed["is_customized"], false);
+        assert_eq!(parsed["default_text"], parsed["current_text"]);
+        assert_eq!(parsed["default_version"], parsed["current_version"]);
+        assert!(!parsed["default_text"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_prompt_returns_404_for_unknown_key() {
+        let (router, _) = setup_with_prompts().await;
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/prompts/unknown_key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn update_prompt_persists_content_and_marks_as_customized() {
+        let (router, prompts) = setup_with_prompts().await;
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/prompts/daily_review")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "content": "new prompt body" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let stored = prompts.get(PromptKey::DailyReview.as_str()).await.unwrap();
+        let stored = stored.expect("upsert should persist");
+        assert_eq!(stored.content, "new prompt body");
+    }
+
+    #[tokio::test]
+    async fn update_prompt_rejects_empty_content() {
+        let (router, _) = setup_with_prompts().await;
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/prompts/daily_review")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "content": "   \n" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn delete_prompt_removes_customization_and_is_idempotent() {
+        let (router, prompts) = setup_with_prompts().await;
+        prompts
+            .upsert(PromptKey::DailyReview.as_str(), "custom body")
+            .await
+            .unwrap();
+
+        let first = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/prompts/daily_review")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::NO_CONTENT);
+        assert!(
+            prompts
+                .get(PromptKey::DailyReview.as_str())
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let second = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/prompts/daily_review")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::NO_CONTENT);
     }
 }

@@ -54,7 +54,7 @@ impl DailyReviewSignalBackfillService {
         self.service.model()
     }
 
-    pub fn prompt_version(&self) -> &str {
+    pub fn prompt_version(&self) -> String {
         self.service.prompt_version()
     }
 

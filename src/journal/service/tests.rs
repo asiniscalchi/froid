@@ -264,8 +264,8 @@ impl JournalEntryExtractionRunner for FakeJournalEntryExtractionRunner {
         "test-extraction-model"
     }
 
-    fn prompt_version(&self) -> &str {
-        "entry_extraction_v1"
+    fn prompt_version(&self) -> String {
+        "entry_extraction_v1".to_string()
     }
 
     async fn extract_entry(
@@ -1338,8 +1338,8 @@ impl JournalEntryExtractionRunner for PanickingExtractionRunner {
         "panicking-extraction-model"
     }
 
-    fn prompt_version(&self) -> &str {
-        "panicking_v1"
+    fn prompt_version(&self) -> String {
+        "panicking_v1".to_string()
     }
 
     async fn extract_entry(

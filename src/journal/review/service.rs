@@ -118,7 +118,6 @@ impl DailyReviewService {
         }
 
         let model = self.generator.model();
-        let prompt_version = self.generator.prompt_version();
 
         match self
             .generator
@@ -126,6 +125,7 @@ impl DailyReviewService {
             .await
         {
             Ok(review_text) => {
+                let prompt_version = self.generator.prompt_version();
                 let review_text = review_text.trim();
                 if review_text.is_empty() {
                     return self
@@ -133,7 +133,7 @@ impl DailyReviewService {
                             user_id,
                             utc_date,
                             model,
-                            prompt_version,
+                            &prompt_version,
                             EMPTY_REVIEW_ERROR,
                         )
                         .await;
@@ -141,13 +141,14 @@ impl DailyReviewService {
 
                 let review = self
                     .daily_reviews
-                    .upsert_completed(utc_date, review_text, model, prompt_version)
+                    .upsert_completed(utc_date, review_text, model, &prompt_version)
                     .await?;
                 Ok(DailyReviewResult::Generated(review))
             }
             Err(error) => {
+                let prompt_version = self.generator.prompt_version();
                 let error_message = error.to_string();
-                self.store_failed_review(user_id, utc_date, model, prompt_version, &error_message)
+                self.store_failed_review(user_id, utc_date, model, &prompt_version, &error_message)
                     .await
             }
         }
@@ -672,8 +673,8 @@ mod tests {
             "pool-closing-model"
         }
 
-        fn prompt_version(&self) -> &str {
-            "pool-closing-prompt-v1"
+        fn prompt_version(&self) -> String {
+            "pool-closing-prompt-v1".to_string()
         }
 
         async fn generate_daily_review(
@@ -691,12 +692,22 @@ mod tests {
             setup(FakeReviewGenerator::succeeding("extraction review")).await;
 
         let entry_id = journal_entries
-            .store(&at_date(28, "1", "entry with extraction"))
+            .store(&incoming(
+                "user-1",
+                "1",
+                "entry with extraction",
+                Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
+            ))
             .await
             .unwrap()
             .unwrap();
         journal_entries
-            .store(&at_date(28, "2", "entry without extraction"))
+            .store(&incoming(
+                "user-1",
+                "2",
+                "entry without extraction",
+                Utc.with_ymd_and_hms(2026, 4, 28, 10, 1, 0).unwrap(),
+            ))
             .await
             .unwrap();
 

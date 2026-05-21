@@ -3,15 +3,20 @@ use std::env;
 use sqlx::SqlitePool;
 use tracing::warn;
 
-use crate::journal::{
-    review::{repository::DailyReviewRepository, signals::repository::DailyReviewSignalRepository},
-    service::JournalService,
-    week_review::{
-        generator::{RigOpenAiWeeklyReviewGenerator, WeeklyReviewConfig},
-        prompt::WeeklyReviewPromptConfig,
-        repository::WeeklyReviewRepository,
-        service::{DEFAULT_MIN_DAILY_REVIEWS, WeeklyReviewService},
+use crate::{
+    journal::{
+        review::{
+            repository::DailyReviewRepository, signals::repository::DailyReviewSignalRepository,
+        },
+        service::JournalService,
+        week_review::{
+            generator::{RigOpenAiWeeklyReviewGenerator, WeeklyReviewConfig},
+            prompt::WeeklyReviewPromptConfig,
+            repository::WeeklyReviewRepository,
+            service::{DEFAULT_MIN_DAILY_REVIEWS, WeeklyReviewService},
+        },
     },
+    prompts::{PromptKey, PromptRepository, PromptSource},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +45,7 @@ impl WeeklyReviewRuntimeConfig {
 
 pub fn build_weekly_review_service(
     pool: SqlitePool,
+    prompt_repository: &PromptRepository,
     config: WeeklyReviewRuntimeConfig,
 ) -> Result<Option<WeeklyReviewService>, Box<dyn std::error::Error>> {
     let Some(openai_api_key) = config
@@ -51,11 +57,17 @@ pub fn build_weekly_review_service(
     };
 
     let weekly_prompt = config.prompt.load()?;
+    let prompt_source = PromptSource::new(
+        prompt_repository.clone(),
+        PromptKey::WeeklyReview,
+        config.prompt.path.clone(),
+    );
     let weekly_generator = RigOpenAiWeeklyReviewGenerator::from_optional_api_key(
         config.review,
         weekly_prompt,
         Some(openai_api_key),
-    )?;
+    )?
+    .with_prompt_source(prompt_source);
 
     let service = WeeklyReviewService::new(
         WeeklyReviewRepository::new(pool.clone()),
@@ -71,9 +83,11 @@ pub fn build_weekly_review_service(
 pub fn configure_weekly_review(
     journal_service: JournalService,
     pool: SqlitePool,
+    prompt_repository: &PromptRepository,
     config: WeeklyReviewRuntimeConfig,
 ) -> Result<JournalService, Box<dyn std::error::Error>> {
-    let Some(weekly_review_service) = build_weekly_review_service(pool, config)? else {
+    let Some(weekly_review_service) = build_weekly_review_service(pool, prompt_repository, config)?
+    else {
         return Ok(journal_service);
     };
 

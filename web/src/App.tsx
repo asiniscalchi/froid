@@ -1,5 +1,6 @@
 import { useRef, useState, type DragEvent } from 'react'
 import { Button } from '@/components/ui/button'
+import Prompts from './Prompts'
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10)
@@ -11,7 +12,7 @@ type Status =
   | { kind: 'success'; message: string }
   | { kind: 'error'; message: string }
 
-function App() {
+function MessagesPanel() {
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const [isDragging, setIsDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -99,63 +100,94 @@ function App() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background text-foreground">
-      <div className="flex flex-col items-center gap-6">
-        <h1 className="text-3xl font-semibold tracking-tight">
-          Hello from Froid
-        </h1>
-        <p className="text-muted-foreground">
-          Dashboard scaffold. More to come.
-        </p>
-        <div className="flex gap-3">
-          <Button onClick={handleExport} disabled={busy}>
-            {status.kind === 'busy' && status.message === 'Exporting…'
-              ? 'Exporting…'
-              : 'Export raw messages'}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={busy}
-          >
-            {status.kind === 'busy' && status.message === 'Importing…'
-              ? 'Importing…'
-              : 'Import messages'}
-          </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={onFileChange}
-            data-testid="import-file-input"
-          />
-        </div>
-        <div
-          onDrop={onDrop}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          aria-label="Drop a JSON export to import"
-          data-testid="import-dropzone"
-          className={`flex h-24 w-80 items-center justify-center rounded-md border border-dashed text-sm transition-colors ${
-            isDragging
-              ? 'border-primary bg-primary/5 text-foreground'
-              : 'border-muted-foreground/40 text-muted-foreground'
-          }`}
+    <div className="flex flex-col items-center gap-6">
+      <div className="flex gap-3">
+        <Button onClick={handleExport} disabled={busy}>
+          {status.kind === 'busy' && status.message === 'Exporting…'
+            ? 'Exporting…'
+            : 'Export raw messages'}
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={busy}
         >
-          Drop a JSON export here to import
-        </div>
-        {status.kind === 'error' && (
-          <p className="text-sm text-destructive" role="alert">
-            {status.message}
-          </p>
-        )}
-        {status.kind === 'success' && (
-          <p className="text-sm text-foreground" role="status">
-            {status.message}
-          </p>
-        )}
+          {status.kind === 'busy' && status.message === 'Importing…'
+            ? 'Importing…'
+            : 'Import messages'}
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={onFileChange}
+          data-testid="import-file-input"
+        />
       </div>
+      <div
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        aria-label="Drop a JSON export to import"
+        data-testid="import-dropzone"
+        className={`flex h-24 w-80 items-center justify-center rounded-md border border-dashed text-sm transition-colors ${
+          isDragging
+            ? 'border-primary bg-primary/5 text-foreground'
+            : 'border-muted-foreground/40 text-muted-foreground'
+        }`}
+      >
+        Drop a JSON export here to import
+      </div>
+      {status.kind === 'error' && (
+        <p className="text-sm text-destructive" role="alert">
+          {status.message}
+        </p>
+      )}
+      {status.kind === 'success' && (
+        <p className="text-sm text-foreground" role="status">
+          {status.message}
+        </p>
+      )}
+    </div>
+  )
+}
+
+type Tab = 'messages' | 'prompts'
+
+function App() {
+  const [tab, setTab] = useState<Tab>('messages')
+
+  return (
+    <main className="flex min-h-screen flex-col items-center gap-6 bg-background px-6 py-10 text-foreground">
+      <h1 className="text-3xl font-semibold tracking-tight">
+        Hello from Froid
+      </h1>
+      <nav
+        className="flex gap-2"
+        role="tablist"
+        aria-label="Dashboard sections"
+      >
+        <Button
+          variant={tab === 'messages' ? 'default' : 'ghost'}
+          size="sm"
+          role="tab"
+          aria-selected={tab === 'messages'}
+          onClick={() => setTab('messages')}
+        >
+          Messages
+        </Button>
+        <Button
+          variant={tab === 'prompts' ? 'default' : 'ghost'}
+          size="sm"
+          role="tab"
+          aria-selected={tab === 'prompts'}
+          onClick={() => setTab('prompts')}
+        >
+          Prompts
+        </Button>
+      </nav>
+      {tab === 'messages' ? <MessagesPanel /> : <Prompts />}
     </main>
   )
 }

@@ -1,4 +1,9 @@
-use std::{env, error::Error, fmt, sync::Arc};
+use std::{
+    env,
+    error::Error,
+    fmt,
+    sync::{Arc, RwLock},
+};
 
 use async_trait::async_trait;
 use rig::{
@@ -7,8 +12,9 @@ use rig::{
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::review::{
-    DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction,
+use crate::{
+    journal::review::{DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction},
+    prompts::{PromptSource, ResolvedPrompt},
 };
 
 pub const DEFAULT_REVIEW_MODEL: &str = GPT_5_MINI;
@@ -65,7 +71,7 @@ impl Error for ReviewGenerationError {}
 #[async_trait]
 pub trait ReviewGenerator: Send + Sync {
     fn model(&self) -> &str;
-    fn prompt_version(&self) -> &str;
+    fn prompt_version(&self) -> String;
 
     async fn generate_daily_review(
         &self,
@@ -158,7 +164,8 @@ impl ReviewProvider for RigOpenAiReviewProvider {
 #[derive(Clone)]
 pub struct RigOpenAiReviewGenerator {
     config: ReviewConfig,
-    prompt: DailyReviewPrompt,
+    prompt: Arc<RwLock<ResolvedPrompt>>,
+    prompt_source: Option<PromptSource>,
     provider: Arc<dyn ReviewProvider>,
 }
 
@@ -175,9 +182,18 @@ impl RigOpenAiReviewGenerator {
 
         Ok(Self {
             config,
-            prompt,
+            prompt: Arc::new(RwLock::new(ResolvedPrompt {
+                version: prompt.version,
+                text: prompt.text,
+            })),
+            prompt_source: None,
             provider: Arc::new(provider),
         })
+    }
+
+    pub fn with_prompt_source(mut self, source: PromptSource) -> Self {
+        self.prompt_source = Some(source);
+        self
     }
 
     #[cfg(test)]
@@ -187,9 +203,25 @@ impl RigOpenAiReviewGenerator {
     {
         Self {
             config,
-            prompt,
+            prompt: Arc::new(RwLock::new(ResolvedPrompt {
+                version: prompt.version,
+                text: prompt.text,
+            })),
+            prompt_source: None,
             provider: Arc::new(provider),
         }
+    }
+
+    async fn refresh_prompt(&self) -> Result<(), ReviewGenerationError> {
+        let Some(source) = self.prompt_source.as_ref() else {
+            return Ok(());
+        };
+        let resolved = source
+            .resolve()
+            .await
+            .map_err(|error| ReviewGenerationError::new(error.to_string()))?;
+        *self.prompt.write().unwrap() = resolved;
+        Ok(())
     }
 }
 
@@ -199,17 +231,19 @@ impl ReviewGenerator for RigOpenAiReviewGenerator {
         &self.config.model
     }
 
-    fn prompt_version(&self) -> &str {
-        &self.prompt.version
+    fn prompt_version(&self) -> String {
+        self.prompt.read().unwrap().version.clone()
     }
 
     async fn generate_daily_review(
         &self,
         entries: &[JournalEntryWithExtraction],
     ) -> Result<String, ReviewGenerationError> {
+        self.refresh_prompt().await?;
         let prompt = build_daily_review_prompt(entries);
+        let instructions = self.prompt.read().unwrap().text.clone();
         self.provider
-            .complete_daily_review(&self.config.model, &self.prompt.text, &prompt)
+            .complete_daily_review(&self.config.model, &instructions, &prompt)
             .await
             .map_err(|error| ReviewGenerationError::new(error.to_string()))
     }
@@ -316,8 +350,8 @@ pub mod fake {
             &self.model
         }
 
-        fn prompt_version(&self) -> &str {
-            &self.prompt_version
+        fn prompt_version(&self) -> String {
+            self.prompt_version.clone()
         }
 
         async fn generate_daily_review(
@@ -534,6 +568,82 @@ mod tests {
         assert!(prompt_text.contains("Themes:"));
         assert!(prompt_text.contains("Pay attention tomorrow:"));
         assert!(prompt_text.contains("finished the feature"));
+    }
+
+    #[tokio::test]
+    async fn generator_with_prompt_source_refreshes_instructions_per_call() {
+        use crate::{database, prompts::PromptKey};
+        use sqlx::SqlitePool;
+        use std::path::PathBuf;
+
+        database::register_sqlite_vec_extension();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let prompts = crate::prompts::PromptRepository::new(pool);
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "froid-review-source-{}.md",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&temp_path, "Default instructions").unwrap();
+
+        let provider = FakeReviewProvider::succeeding("ok");
+        let source = crate::prompts::PromptSource::new(
+            prompts.clone(),
+            PromptKey::DailyReview,
+            PathBuf::from(&temp_path),
+        );
+        let generator = RigOpenAiReviewGenerator::new(
+            ReviewConfig::default(),
+            prompt("baked-version", "baked instructions"),
+            provider.clone(),
+        )
+        .with_prompt_source(source);
+
+        generator
+            .generate_daily_review(&[JournalEntryWithExtraction {
+                id: "1".to_string(),
+                entry: entry(28, "first"),
+                extraction: None,
+            }])
+            .await
+            .unwrap();
+
+        let first_stem = temp_path
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            provider.instructions().last().unwrap(),
+            "Default instructions"
+        );
+        assert_eq!(generator.prompt_version(), first_stem);
+
+        prompts
+            .upsert(PromptKey::DailyReview.as_str(), "Customized instructions")
+            .await
+            .unwrap();
+
+        generator
+            .generate_daily_review(&[JournalEntryWithExtraction {
+                id: "1".to_string(),
+                entry: entry(28, "second"),
+                extraction: None,
+            }])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider.instructions().last().unwrap(),
+            "Customized instructions"
+        );
+        assert_eq!(generator.prompt_version(), format!("{first_stem}-custom"));
+
+        std::fs::remove_file(temp_path).unwrap();
     }
 
     #[test]

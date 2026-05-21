@@ -3,13 +3,16 @@ use std::env;
 use sqlx::SqlitePool;
 use tracing::warn;
 
-use crate::journal::{
-    extraction::{
-        JournalEntryExtractionConfig, JournalEntryExtractionPromptConfig,
-        RigOpenAiJournalEntryExtractionGenerator, repository::JournalEntryExtractionRepository,
-        service::JournalEntryExtractionService,
+use crate::{
+    journal::{
+        extraction::{
+            JournalEntryExtractionConfig, JournalEntryExtractionPromptConfig,
+            RigOpenAiJournalEntryExtractionGenerator, repository::JournalEntryExtractionRepository,
+            service::JournalEntryExtractionService,
+        },
+        service::JournalService,
     },
-    service::JournalService,
+    prompts::{PromptKey, PromptRepository, PromptSource},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +35,7 @@ impl JournalEntryExtractionRuntimeConfig {
 pub fn configure_journal_entry_extraction(
     journal_service: JournalService,
     pool: SqlitePool,
+    prompt_repository: &PromptRepository,
     config: JournalEntryExtractionRuntimeConfig,
 ) -> Result<JournalService, Box<dyn std::error::Error>> {
     let Some(openai_api_key) = config
@@ -43,11 +47,17 @@ pub fn configure_journal_entry_extraction(
     };
 
     let prompt = config.prompt.load()?;
+    let prompt_source = PromptSource::new(
+        prompt_repository.clone(),
+        PromptKey::EntryExtraction,
+        config.prompt.path.clone(),
+    );
     let generator = RigOpenAiJournalEntryExtractionGenerator::from_optional_api_key(
         config.extraction,
         prompt,
         Some(openai_api_key),
-    )?;
+    )?
+    .with_prompt_source(prompt_source);
     let service =
         JournalEntryExtractionService::new(JournalEntryExtractionRepository::new(pool), generator);
 
