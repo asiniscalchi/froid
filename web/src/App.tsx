@@ -1,5 +1,7 @@
 import { useRef, useState, type DragEvent } from 'react'
+import { SparklesIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import Prompts from './Prompts'
 
 function todayIsoDate(): string {
@@ -153,42 +155,31 @@ function MessagesPanel() {
   )
 }
 
-type Tab = 'messages' | 'prompts'
-
 function App() {
-  const [tab, setTab] = useState<Tab>('messages')
-
   return (
-    <main className="flex min-h-screen flex-col items-center gap-6 bg-background px-6 py-10 text-foreground">
-      <h1 className="text-3xl font-semibold tracking-tight">
-        Hello from Froid
-      </h1>
-      <nav
-        className="flex gap-2"
-        role="tablist"
-        aria-label="Dashboard sections"
-      >
-        <Button
-          variant={tab === 'messages' ? 'default' : 'ghost'}
-          size="sm"
-          role="tab"
-          aria-selected={tab === 'messages'}
-          onClick={() => setTab('messages')}
-        >
-          Messages
-        </Button>
-        <Button
-          variant={tab === 'prompts' ? 'default' : 'ghost'}
-          size="sm"
-          role="tab"
-          aria-selected={tab === 'prompts'}
-          onClick={() => setTab('prompts')}
-        >
-          Prompts
-        </Button>
-      </nav>
-      {tab === 'messages' ? <MessagesPanel /> : <Prompts />}
-    </main>
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="sticky top-0 z-10 border-b border-border/60 bg-background/80 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-6">
+          <SparklesIcon className="size-5 text-primary" aria-hidden />
+          <span className="text-base font-semibold tracking-tight">Froid</span>
+          <span className="ml-1 text-sm text-muted-foreground">Dashboard</span>
+        </div>
+      </header>
+      <main className="mx-auto w-full max-w-6xl px-6 py-8">
+        <Tabs defaultValue="messages" className="gap-6">
+          <TabsList aria-label="Dashboard sections">
+            <TabsTrigger value="messages">Messages</TabsTrigger>
+            <TabsTrigger value="prompts">Prompts</TabsTrigger>
+          </TabsList>
+          <TabsContent value="messages">
+            <MessagesPanel />
+          </TabsContent>
+          <TabsContent value="prompts">
+            <Prompts />
+          </TabsContent>
+        </Tabs>
+      </main>
+    </div>
   )
 }
 
