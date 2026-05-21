@@ -18,6 +18,17 @@ use crate::journal::week_review::WeeklyReviewRuntimeConfig;
 use crate::messages::{IncomingMessage, OutgoingMessage};
 use crate::prompts::PromptRepository;
 
+pub struct JournalServiceRegistryConfig {
+    pub config: ServeConfig,
+    pub embedding_config: Option<EmbeddingConfig>,
+    pub entry_extraction_config: JournalEntryExtractionRuntimeConfig,
+    pub daily_review_config: DailyReviewRuntimeConfig,
+    pub weekly_review_config: WeeklyReviewRuntimeConfig,
+    pub signal_runtime_config: DailyReviewSignalRuntimeConfig,
+    pub delivery_configured: bool,
+    pub shutdown: CancellationToken,
+}
+
 #[derive(Clone)]
 pub struct JournalServiceRegistry {
     config: Arc<ServeConfig>,
@@ -37,31 +48,21 @@ pub struct JournalServiceRegistry {
 }
 
 impl JournalServiceRegistry {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        config: ServeConfig,
-        embedding_config: Option<EmbeddingConfig>,
-        entry_extraction_config: JournalEntryExtractionRuntimeConfig,
-        daily_review_config: DailyReviewRuntimeConfig,
-        weekly_review_config: WeeklyReviewRuntimeConfig,
-        signal_runtime_config: DailyReviewSignalRuntimeConfig,
-        delivery_configured: bool,
-        shutdown: CancellationToken,
-    ) -> Self {
-        let data_dir = std::path::Path::new(&config.database_path)
+    pub fn new(config: JournalServiceRegistryConfig) -> Self {
+        let data_dir = std::path::Path::new(&config.config.database_path)
             .parent()
             .unwrap_or_else(|| std::path::Path::new("data"));
         let base_dir = data_dir.join("journals");
 
         Self {
-            config: Arc::new(config),
-            embedding_config,
-            entry_extraction_config,
-            daily_review_config,
-            weekly_review_config,
-            signal_runtime_config,
-            delivery_configured,
-            shutdown,
+            config: Arc::new(config.config),
+            embedding_config: config.embedding_config,
+            entry_extraction_config: config.entry_extraction_config,
+            daily_review_config: config.daily_review_config,
+            weekly_review_config: config.weekly_review_config,
+            signal_runtime_config: config.signal_runtime_config,
+            delivery_configured: config.delivery_configured,
+            shutdown: config.shutdown,
             base_dir,
             services: Arc::new(RwLock::new(HashMap::new())),
             spawned_workers: Arc::new(RwLock::new(HashSet::new())),
@@ -150,17 +151,17 @@ impl JournalServiceRegistry {
         let mut spawned = self.spawned_workers.write().await;
         if !spawned.contains(chat_id) {
             info!(chat_id, "spawning background workers for tenant");
-            crate::app::spawn_tenant_workers(
+            crate::app::spawn_tenant_workers(crate::app::JournalTenantWorkersConfig {
                 pool,
-                self.config.clone(),
+                config: self.config.clone(),
                 prompt_repository,
-                self.embedding_config.clone(),
-                self.entry_extraction_config.clone(),
-                self.daily_review_config.clone(),
-                self.weekly_review_config.clone(),
-                self.signal_runtime_config.clone(),
-                self.shutdown.clone(),
-            );
+                embedding_config: self.embedding_config.clone(),
+                entry_extraction_config: self.entry_extraction_config.clone(),
+                daily_review_config: self.daily_review_config.clone(),
+                weekly_review_config: self.weekly_review_config.clone(),
+                signal_runtime_config: self.signal_runtime_config.clone(),
+                shutdown: self.shutdown.clone(),
+            });
             spawned.insert(chat_id.to_string());
         }
 

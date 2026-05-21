@@ -5,7 +5,8 @@ use froid::{
     journal::command::{JournalCommand, JournalCommandRequest},
     journal::{
         extraction::JournalEntryExtractionRuntimeConfig, registry::JournalServiceRegistry,
-        review::DailyReviewRuntimeConfig, review::signals::wiring::DailyReviewSignalRuntimeConfig,
+        registry::JournalServiceRegistryConfig, review::DailyReviewRuntimeConfig,
+        review::signals::wiring::DailyReviewSignalRuntimeConfig,
         week_review::WeeklyReviewRuntimeConfig,
     },
     messages::{IncomingMessage, MessageSource, SINGLE_USER_ID},
@@ -42,16 +43,16 @@ async fn test_multiuser_database_isolation_and_routing() {
     let shutdown = CancellationToken::new();
 
     // 3. Instantiate the registry with the custom base directory
-    let registry = JournalServiceRegistry::new(
+    let registry = JournalServiceRegistry::new(JournalServiceRegistryConfig {
         config,
         embedding_config,
         entry_extraction_config,
         daily_review_config,
         weekly_review_config,
         signal_runtime_config,
-        false, // delivery_configured
+        delivery_configured: false,
         shutdown,
-    )
+    })
     .with_base_dir(temp_base_dir.clone());
 
     // 4. Send message for User A (chat_id: "user_a")
@@ -156,16 +157,16 @@ async fn test_multiuser_database_isolation_and_routing() {
     // 7. Verify Startup Database Discovery
     // Create a new registry pointing to the same directory
     // This simulates starting up Froid with existing tenant databases on disk.
-    let registry_restart = JournalServiceRegistry::new(
-        cli.serve_config().unwrap(),
-        None,
-        JournalEntryExtractionRuntimeConfig::from_env(),
-        DailyReviewRuntimeConfig::from_env(),
-        WeeklyReviewRuntimeConfig::from_env(),
-        DailyReviewSignalRuntimeConfig::from_env(),
-        false,
-        CancellationToken::new(),
-    )
+    let registry_restart = JournalServiceRegistry::new(JournalServiceRegistryConfig {
+        config: cli.serve_config().unwrap(),
+        embedding_config: None,
+        entry_extraction_config: JournalEntryExtractionRuntimeConfig::from_env(),
+        daily_review_config: DailyReviewRuntimeConfig::from_env(),
+        weekly_review_config: WeeklyReviewRuntimeConfig::from_env(),
+        signal_runtime_config: DailyReviewSignalRuntimeConfig::from_env(),
+        delivery_configured: false,
+        shutdown: CancellationToken::new(),
+    })
     .with_base_dir(temp_base_dir.clone());
 
     // Run discovery

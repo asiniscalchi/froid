@@ -296,10 +296,8 @@ fn api_error(status: StatusCode, message: impl Into<String>) -> Response {
         .into_response()
 }
 
-#[allow(clippy::result_large_err)]
-fn parse_prompt_key(raw: &str) -> Result<PromptKey, Response> {
+fn parse_prompt_key(raw: &str) -> Option<PromptKey> {
     PromptKey::parse(raw)
-        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, format!("unknown prompt key '{raw}'")))
 }
 
 async fn list_prompts(State(repo): State<PromptRepository>) -> Response {
@@ -331,8 +329,13 @@ async fn list_prompts(State(repo): State<PromptRepository>) -> Response {
 
 async fn get_prompt(State(repo): State<PromptRepository>, Path(raw_key): Path<String>) -> Response {
     let key = match parse_prompt_key(&raw_key) {
-        Ok(k) => k,
-        Err(resp) => return resp,
+        Some(k) => k,
+        None => {
+            return api_error(
+                StatusCode::NOT_FOUND,
+                format!("unknown prompt key '{raw_key}'"),
+            );
+        }
     };
 
     let default_path = key.default_path();
@@ -390,8 +393,13 @@ async fn update_prompt(
     Json(body): Json<UpdatePromptBody>,
 ) -> Response {
     let key = match parse_prompt_key(&raw_key) {
-        Ok(k) => k,
-        Err(resp) => return resp,
+        Some(k) => k,
+        None => {
+            return api_error(
+                StatusCode::NOT_FOUND,
+                format!("unknown prompt key '{raw_key}'"),
+            );
+        }
     };
 
     if body.content.trim().is_empty() {
@@ -428,8 +436,13 @@ async fn reset_prompt(
     Path(raw_key): Path<String>,
 ) -> Response {
     let key = match parse_prompt_key(&raw_key) {
-        Ok(k) => k,
-        Err(resp) => return resp,
+        Some(k) => k,
+        None => {
+            return api_error(
+                StatusCode::NOT_FOUND,
+                format!("unknown prompt key '{raw_key}'"),
+            );
+        }
     };
 
     if let Err(err) = repo.delete(key.as_str()).await {
