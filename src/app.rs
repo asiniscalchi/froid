@@ -309,8 +309,6 @@ async fn shutdown_signal() {
     info!("received SIGINT, shutting down");
 }
 
-
-
 pub(crate) fn build_journal_service(
     pool: SqlitePool,
     prompt_repository: &PromptRepository,
@@ -466,7 +464,9 @@ pub fn spawn_tenant_workers(
 
     // 4. Daily Review Delivery Worker
     if config.daily_review_delivery.enabled {
-        if let Ok(Some(daily_review_service)) = build_daily_review_service(pool.clone(), &prompt_repository, daily_review_config) {
+        if let Ok(Some(daily_review_service)) =
+            build_daily_review_service(pool.clone(), &prompt_repository, daily_review_config)
+        {
             let cycle = DailyReviewDeliveryWorker::new(
                 JournalRepository::new(pool.clone()),
                 crate::journal::review::repository::DailyReviewRepository::new(pool.clone()),
@@ -492,7 +492,9 @@ pub fn spawn_tenant_workers(
 
     // 5. Weekly Review Delivery Worker
     if config.weekly_review_delivery.enabled {
-        if let Ok(Some(weekly_review_service)) = build_weekly_review_service(pool.clone(), &prompt_repository, weekly_review_config) {
+        if let Ok(Some(weekly_review_service)) =
+            build_weekly_review_service(pool.clone(), &prompt_repository, weekly_review_config)
+        {
             let cycle = WeeklyReviewDeliveryWorker::new(
                 JournalRepository::new(pool.clone()),
                 crate::journal::week_review::repository::WeeklyReviewRepository::new(pool.clone()),
@@ -518,7 +520,9 @@ pub fn spawn_tenant_workers(
 
     // 6. Signal Worker
     if config.signal_worker.enabled {
-        if let Ok(Some(service)) = build_signal_service(pool.clone(), &prompt_repository, signal_runtime_config) {
+        if let Ok(Some(service)) =
+            build_signal_service(pool.clone(), &prompt_repository, signal_runtime_config)
+        {
             let backfill = DailyReviewSignalBackfillService::new(
                 DailyReviewSignalRepository::new(pool.clone()),
                 service,

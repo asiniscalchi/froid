@@ -5,18 +5,18 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::database;
 use crate::cli::ServeConfig;
-use crate::journal::service::JournalService;
-use crate::prompts::PromptRepository;
+use crate::database;
+use crate::handler::MessageHandler;
+use crate::journal::command::JournalCommandRequest;
 use crate::journal::embedding::EmbeddingConfig;
 use crate::journal::extraction::JournalEntryExtractionRuntimeConfig;
 use crate::journal::review::DailyReviewRuntimeConfig;
-use crate::journal::week_review::WeeklyReviewRuntimeConfig;
 use crate::journal::review::signals::wiring::DailyReviewSignalRuntimeConfig;
-use crate::handler::MessageHandler;
+use crate::journal::service::JournalService;
+use crate::journal::week_review::WeeklyReviewRuntimeConfig;
 use crate::messages::{IncomingMessage, OutgoingMessage};
-use crate::journal::command::JournalCommandRequest;
+use crate::prompts::PromptRepository;
 
 #[derive(Clone)]
 pub struct JournalServiceRegistry {
@@ -74,7 +74,9 @@ impl JournalServiceRegistry {
     }
 
     /// Discover existing tenant databases on disk and pre-register/initialize them
-    pub async fn discover_and_register_existing(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn discover_and_register_existing(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if self.base_dir.exists() {
             let mut entries = tokio::fs::read_dir(&self.base_dir).await?;
             while let Some(entry) = entries.next_entry().await? {
@@ -82,7 +84,10 @@ impl JournalServiceRegistry {
                 if path.is_file() && path.extension().is_some_and(|ext| ext == "sqlite3") {
                     if let Some(file_name) = path.file_stem().and_then(|s| s.to_str()) {
                         if let Some(chat_id) = file_name.strip_prefix("user_") {
-                            info!(chat_id, "discovered existing tenant database; pre-registering");
+                            info!(
+                                chat_id,
+                                "discovered existing tenant database; pre-registering"
+                            );
                             let _ = self.get_or_create(chat_id).await?;
                         }
                     }
@@ -94,7 +99,10 @@ impl JournalServiceRegistry {
     }
 
     /// Retrieve or dynamically create a `JournalService` for the given Telegram `chat_id`
-    pub async fn get_or_create(&self, chat_id: &str) -> Result<JournalService, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn get_or_create(
+        &self,
+        chat_id: &str,
+    ) -> Result<JournalService, Box<dyn std::error::Error + Send + Sync>> {
         // First check read lock for cached instance
         {
             let guard = self.services.read().await;

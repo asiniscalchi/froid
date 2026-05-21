@@ -1,25 +1,23 @@
-use tokio_util::sync::CancellationToken;
+use clap::Parser;
 use froid::{
     cli::Cli,
-    journal::{
-        registry::JournalServiceRegistry,
-        extraction::JournalEntryExtractionRuntimeConfig,
-        review::DailyReviewRuntimeConfig,
-        week_review::WeeklyReviewRuntimeConfig,
-        review::signals::wiring::DailyReviewSignalRuntimeConfig,
-    },
     handler::MessageHandler,
-    messages::{IncomingMessage, MessageSource, SINGLE_USER_ID},
     journal::command::{JournalCommand, JournalCommandRequest},
+    journal::{
+        extraction::JournalEntryExtractionRuntimeConfig, registry::JournalServiceRegistry,
+        review::DailyReviewRuntimeConfig, review::signals::wiring::DailyReviewSignalRuntimeConfig,
+        week_review::WeeklyReviewRuntimeConfig,
+    },
+    messages::{IncomingMessage, MessageSource, SINGLE_USER_ID},
 };
-use clap::Parser;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn test_multiuser_database_isolation_and_routing() {
     // 1. Create a unique temporary directory for this test
     let test_id = ulid::Ulid::new().to_string();
     let temp_base_dir = std::env::temp_dir().join(format!("froid_test_{}", test_id));
-    
+
     // Ensure the temp directory exists
     tokio::fs::create_dir_all(&temp_base_dir).await.unwrap();
 
@@ -32,7 +30,7 @@ async fn test_multiuser_database_isolation_and_routing() {
         temp_base_dir.to_str().unwrap(),
     ])
     .unwrap();
-    
+
     let config = cli.serve_config().unwrap();
 
     // Setup basic configs
@@ -68,11 +66,19 @@ async fn test_multiuser_database_isolation_and_routing() {
 
     // Route message for User A
     let res_a = registry.process(&msg_a).await;
-    assert!(res_a.is_ok(), "Failed to process message for User A: {:?}", res_a.err());
+    assert!(
+        res_a.is_ok(),
+        "Failed to process message for User A: {:?}",
+        res_a.err()
+    );
 
     // Verify User A's physical database file was created
     let db_a_path = temp_base_dir.join("user_user_a.sqlite3");
-    assert!(db_a_path.exists(), "User A database file should exist at {:?}", db_a_path);
+    assert!(
+        db_a_path.exists(),
+        "User A database file should exist at {:?}",
+        db_a_path
+    );
 
     // 5. Send message for User B (chat_id: "user_b")
     let msg_b = IncomingMessage {
@@ -86,11 +92,19 @@ async fn test_multiuser_database_isolation_and_routing() {
 
     // Route message for User B
     let res_b = registry.process(&msg_b).await;
-    assert!(res_b.is_ok(), "Failed to process message for User B: {:?}", res_b.err());
+    assert!(
+        res_b.is_ok(),
+        "Failed to process message for User B: {:?}",
+        res_b.err()
+    );
 
     // Verify User B's physical database file was created
     let db_b_path = temp_base_dir.join("user_user_b.sqlite3");
-    assert!(db_b_path.exists(), "User B database file should exist at {:?}", db_b_path);
+    assert!(
+        db_b_path.exists(),
+        "User B database file should exist at {:?}",
+        db_b_path
+    );
 
     // 6. Verify Isolation via /recent command
     // Query recent entries for User A
@@ -99,9 +113,11 @@ async fn test_multiuser_database_isolation_and_routing() {
         source_conversation_id: "user_a".to_string(),
         user_id: SINGLE_USER_ID.to_string(),
         received_at: chrono::Utc::now(),
-        command: JournalCommand::Recent { requested_limit: 10 },
+        command: JournalCommand::Recent {
+            requested_limit: 10,
+        },
     };
-    
+
     let res_recent_a = registry.command(&cmd_a).await.unwrap();
     assert!(
         res_recent_a.text.contains("Today was a productive day"),
@@ -120,7 +136,9 @@ async fn test_multiuser_database_isolation_and_routing() {
         source_conversation_id: "user_b".to_string(),
         user_id: SINGLE_USER_ID.to_string(),
         received_at: chrono::Utc::now(),
-        command: JournalCommand::Recent { requested_limit: 10 },
+        command: JournalCommand::Recent {
+            requested_limit: 10,
+        },
     };
 
     let res_recent_b = registry.command(&cmd_b).await.unwrap();
@@ -152,7 +170,11 @@ async fn test_multiuser_database_isolation_and_routing() {
 
     // Run discovery
     let discovery_res = registry_restart.discover_and_register_existing().await;
-    assert!(discovery_res.is_ok(), "Failed to run database discovery: {:?}", discovery_res.err());
+    assert!(
+        discovery_res.is_ok(),
+        "Failed to run database discovery: {:?}",
+        discovery_res.err()
+    );
 
     // Verify both tenant services were loaded and cached
     // We can query recent again using the restarted registry without sending a new message first
@@ -169,8 +191,12 @@ async fn test_multiuser_database_isolation_and_routing() {
 
 #[tokio::test]
 async fn test_multiuser_whitelist_gatekeeping() {
-    use froid::workers::daily_review::{TelegramDailyReviewSender, DailyReviewSender, DailyReviewSendOutcome};
-    use froid::workers::weekly_review::{TelegramWeeklyReviewSender, WeeklyReviewSender, WeeklyReviewSendOutcome};
+    use froid::workers::daily_review::{
+        DailyReviewSendOutcome, DailyReviewSender, TelegramDailyReviewSender,
+    };
+    use froid::workers::weekly_review::{
+        TelegramWeeklyReviewSender, WeeklyReviewSendOutcome, WeeklyReviewSender,
+    };
 
     let test_id = ulid::Ulid::new().to_string();
     let temp_base_dir = std::env::temp_dir().join(format!("froid_test_whitelist_{}", test_id));
@@ -198,7 +224,10 @@ async fn test_multiuser_whitelist_gatekeeping() {
     );
 
     // Delivery to non-whitelisted user "99999" must be Skipped (DailyReviewSendOutcome::Skipped)
-    let skipped_res = daily_sender.send_daily_review("99999", "test").await.unwrap();
+    let skipped_res = daily_sender
+        .send_daily_review("99999", "test")
+        .await
+        .unwrap();
     assert_eq!(skipped_res, DailyReviewSendOutcome::Skipped);
 
     // Let's also verify weekly review sender behaves the same
@@ -206,7 +235,10 @@ async fn test_multiuser_whitelist_gatekeeping() {
         config.telegram_bot_token,
         config.telegram_allowed_user_ids,
     );
-    let skipped_weekly_res = weekly_sender.send_weekly_review("99999", "test").await.unwrap();
+    let skipped_weekly_res = weekly_sender
+        .send_weekly_review("99999", "test")
+        .await
+        .unwrap();
     assert_eq!(skipped_weekly_res, WeeklyReviewSendOutcome::Skipped);
 
     // Clean up
