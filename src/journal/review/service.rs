@@ -698,12 +698,22 @@ mod tests {
             setup(FakeReviewGenerator::succeeding("extraction review")).await;
 
         let entry_id = journal_entries
-            .store(&at_date(28, "1", "entry with extraction"))
+            .store(&incoming(
+                "user-1",
+                "1",
+                "entry with extraction",
+                Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
+            ))
             .await
             .unwrap()
             .unwrap();
         journal_entries
-            .store(&at_date(28, "2", "entry without extraction"))
+            .store(&incoming(
+                "user-1",
+                "2",
+                "entry without extraction",
+                Utc.with_ymd_and_hms(2026, 4, 28, 10, 1, 0).unwrap(),
+            ))
             .await
             .unwrap();
 
