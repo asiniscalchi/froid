@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
@@ -61,14 +63,24 @@ fn map_entry(row: SqliteRow) -> JournalEntry {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct JournalRepository {
     pool: SqlitePool,
+    id_generator: Arc<Mutex<ulid::Generator>>,
+}
+
+impl std::fmt::Debug for JournalRepository {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JournalRepository").finish_non_exhaustive()
+    }
 }
 
 impl JournalRepository {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            id_generator: Arc::new(Mutex::new(ulid::Generator::new())),
+        }
     }
 
     pub(crate) fn clone_pool(&self) -> SqlitePool {
@@ -80,8 +92,17 @@ impl JournalRepository {
         &self.pool
     }
 
+    fn next_id(&self) -> String {
+        self.id_generator
+            .lock()
+            .unwrap()
+            .generate()
+            .expect("ULID monotonic counter exhausted within a single millisecond")
+            .to_string()
+    }
+
     pub async fn store(&self, message: &IncomingMessage) -> Result<Option<String>, sqlx::Error> {
-        let id = ulid::Ulid::new().to_string();
+        let id = self.next_id();
         let result = sqlx::query(
             r#"
             INSERT OR IGNORE INTO journal_entries
