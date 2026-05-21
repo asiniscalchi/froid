@@ -1,5 +1,15 @@
 import { useRef, useState, type DragEvent } from 'react'
+import { DownloadIcon, UploadCloudIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 import { exportMessages, importMessages } from './api'
 
 function todayIsoDate(): string {
@@ -16,6 +26,8 @@ function MessagesPanel() {
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const [isDragging, setIsDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const exporting = status.kind === 'busy' && status.message === 'Exporting…'
+  const importing = status.kind === 'busy' && status.message === 'Importing…'
   const busy = status.kind === 'busy'
 
   async function handleExport() {
@@ -58,18 +70,14 @@ function MessagesPanel() {
   function onFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     event.target.value = ''
-    if (file) {
-      void handleImportFile(file)
-    }
+    if (file) void handleImportFile(file)
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setIsDragging(false)
     const file = event.dataTransfer.files?.[0]
-    if (file) {
-      void handleImportFile(file)
-    }
+    if (file) void handleImportFile(file)
   }
 
   function onDragOver(event: DragEvent<HTMLDivElement>) {
@@ -77,57 +85,100 @@ function MessagesPanel() {
     setIsDragging(true)
   }
 
-  function onDragLeave() {
-    setIsDragging(false)
+  function openFilePicker() {
+    if (!busy) fileInputRef.current?.click()
   }
 
   return (
-    <div className="flex flex-col items-center gap-6">
-      <div className="flex gap-3">
-        <Button onClick={handleExport} disabled={busy}>
-          {status.kind === 'busy' && status.message === 'Exporting…'
-            ? 'Exporting…'
-            : 'Export raw messages'}
-        </Button>
-        <Button
-          variant="secondary"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={busy}
-        >
-          {status.kind === 'busy' && status.message === 'Importing…'
-            ? 'Importing…'
-            : 'Import messages'}
-        </Button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="application/json,.json"
-          className="hidden"
-          onChange={onFileChange}
-          data-testid="import-file-input"
-        />
-      </div>
-      <div
-        onDrop={onDrop}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        aria-label="Drop a JSON export to import"
-        data-testid="import-dropzone"
-        className={`flex h-24 w-80 items-center justify-center rounded-md border border-dashed text-sm transition-colors ${
-          isDragging
-            ? 'border-primary bg-primary/5 text-foreground'
-            : 'border-muted-foreground/40 text-muted-foreground'
-        }`}
-      >
-        Drop a JSON export here to import
-      </div>
+    <div className="grid gap-6 md:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>Export raw messages</CardTitle>
+          <CardDescription>
+            Download every message as a JSON file you can archive or
+            re-import elsewhere.
+          </CardDescription>
+          <CardAction>
+            <DownloadIcon className="size-5 text-muted-foreground" aria-hidden />
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <Button onClick={handleExport} disabled={busy}>
+            {exporting ? 'Exporting…' : 'Export raw messages'}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Import messages</CardTitle>
+          <CardDescription>
+            Drop a JSON export to restore messages. Duplicates are skipped.
+          </CardDescription>
+          <CardAction>
+            <UploadCloudIcon
+              className="size-5 text-muted-foreground"
+              aria-hidden
+            />
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <div
+            role="button"
+            tabIndex={busy ? -1 : 0}
+            onClick={openFilePicker}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openFilePicker()
+              }
+            }}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onDragLeave={() => setIsDragging(false)}
+            aria-label="Drop a JSON export to import, or click to choose a file"
+            aria-disabled={busy}
+            data-testid="import-dropzone"
+            className={cn(
+              'flex h-32 cursor-pointer flex-col items-center justify-center gap-1 rounded-md border-2 border-dashed text-sm transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              isDragging
+                ? 'border-primary bg-primary/5 text-foreground'
+                : 'border-border text-muted-foreground hover:border-primary/60 hover:bg-accent/40',
+              busy && 'pointer-events-none opacity-60',
+            )}
+          >
+            <UploadCloudIcon className="size-5" aria-hidden />
+            <span>
+              {importing
+                ? 'Importing…'
+                : 'Drop a JSON export here or click to choose'}
+            </span>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={onFileChange}
+            data-testid="import-file-input"
+          />
+        </CardContent>
+      </Card>
+
       {status.kind === 'error' && (
-        <p className="text-sm text-destructive" role="alert">
+        <p
+          className="md:col-span-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          role="alert"
+        >
           {status.message}
         </p>
       )}
       {status.kind === 'success' && (
-        <p className="text-sm text-foreground" role="status">
+        <p
+          className="md:col-span-2 rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-foreground"
+          role="status"
+        >
           {status.message}
         </p>
       )}
