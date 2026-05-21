@@ -174,10 +174,7 @@ impl JournalService {
     async fn last(&self, request: &JournalCommandRequest) -> Result<OutgoingMessage, sqlx::Error> {
         let Some(entry) = self
             .repository
-            .fetch_last_for_conversation(
-                &request.source,
-                &request.source_conversation_id,
-            )
+            .fetch_last_for_conversation(&request.source, &request.source_conversation_id)
             .await?
         else {
             return Ok(OutgoingMessage {
@@ -193,10 +190,7 @@ impl JournalService {
     async fn undo(&self, request: &JournalCommandRequest) -> Result<OutgoingMessage, sqlx::Error> {
         let Some(_) = self
             .store
-            .delete_last_for_conversation(
-                &request.source,
-                &request.source_conversation_id,
-            )
+            .delete_last_for_conversation(&request.source, &request.source_conversation_id)
             .await?
         else {
             return Ok(OutgoingMessage {

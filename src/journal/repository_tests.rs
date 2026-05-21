@@ -1,8 +1,8 @@
 use chrono::{TimeZone, Utc};
 use sqlx::{Row, SqlitePool};
 
-use super::repository::*;
 use super::entry::{JournalEntry, JournalStats, StoredJournalEntry};
+use super::repository::*;
 use crate::database;
 use crate::messages::{IncomingMessage, MessageSource};
 
@@ -604,10 +604,7 @@ async fn search_text_returns_results_newest_first() {
         .await
         .unwrap();
 
-    let entries = repo
-        .search_text("match", None, None, 10)
-        .await
-        .unwrap();
+    let entries = repo.search_text("match", None, None, 10).await.unwrap();
 
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].entry.text, "match two");
@@ -648,10 +645,7 @@ async fn search_text_returns_matches_from_the_single_user_journal() {
     .await
     .unwrap();
 
-    let entries = repo
-        .search_text("matches", None, None, 10)
-        .await
-        .unwrap();
+    let entries = repo.search_text("matches", None, None, 10).await.unwrap();
 
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].entry.text, "theirs matches too");
@@ -673,12 +667,7 @@ async fn search_text_filters_by_date_range_with_exclusive_end() {
         .unwrap();
 
     let entries = repo
-        .search_text(
-            "match",
-            Some(ymd(2026, 4, 28)),
-            Some(ymd(2026, 4, 29)),
-            10,
-        )
+        .search_text("match", Some(ymd(2026, 4, 28)), Some(ymd(2026, 4, 29)), 10)
         .await
         .unwrap();
 
@@ -694,10 +683,7 @@ async fn search_text_returns_empty_when_no_match() {
         .await
         .unwrap();
 
-    let entries = repo
-        .search_text("anxiety", None, None, 10)
-        .await
-        .unwrap();
+    let entries = repo.search_text("anxiety", None, None, 10).await.unwrap();
 
     assert!(entries.is_empty());
 }
@@ -710,10 +696,7 @@ async fn search_text_ignores_caller_user_id() {
         .await
         .unwrap();
 
-    let entries = repo
-        .search_text("match", None, None, 10)
-        .await
-        .unwrap();
+    let entries = repo.search_text("match", None, None, 10).await.unwrap();
 
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].entry.text, "match");

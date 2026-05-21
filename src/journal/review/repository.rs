@@ -466,11 +466,7 @@ mod tests {
             .await
             .unwrap();
 
-        let found = repo
-            .find_by_user_and_date(date())
-            .await
-            .unwrap()
-            .unwrap();
+        let found = repo.find_by_user_and_date(date()).await.unwrap().unwrap();
 
         assert_eq!(found.review_text, Some("review text".to_string()));
     }
@@ -600,11 +596,7 @@ mod tests {
 
         repo.mark_delivered(date()).await.unwrap();
 
-        let review = repo
-            .find_by_user_and_date(date())
-            .await
-            .unwrap()
-            .unwrap();
+        let review = repo.find_by_user_and_date(date()).await.unwrap().unwrap();
         assert!(review.delivered_at.is_some());
         assert_eq!(review.delivery_error, None);
     }
@@ -623,11 +615,7 @@ mod tests {
             .await
             .unwrap();
 
-        let review = repo
-            .find_by_user_and_date(date())
-            .await
-            .unwrap()
-            .unwrap();
+        let review = repo.find_by_user_and_date(date()).await.unwrap().unwrap();
         assert_eq!(review.delivered_at, None);
         assert_eq!(review.delivery_error, Some("second error".to_string()));
     }
@@ -662,10 +650,7 @@ mod tests {
         .unwrap();
 
         let rows = repo
-            .fetch_completed_in_range(
-                monday,
-                NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
-            )
+            .fetch_completed_in_range(monday, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
             .await
             .unwrap();
 
@@ -686,10 +671,7 @@ mod tests {
             .unwrap();
 
         let rows = repo
-            .fetch_completed_in_range(
-                date_a,
-                NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
-            )
+            .fetch_completed_in_range(date_a, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
             .await
             .unwrap();
 
@@ -709,10 +691,7 @@ mod tests {
             .unwrap();
 
         let rows = repo
-            .fetch_completed_in_range(
-                target,
-                NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
-            )
+            .fetch_completed_in_range(target, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())
             .await
             .unwrap();
 

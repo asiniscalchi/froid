@@ -225,10 +225,7 @@ impl DailyReviewSignalService {
         user_id: &str,
         review_date: NaiveDate,
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalServiceError> {
-        Ok(self
-            .signals
-            .find_by_user_and_date(review_date)
-            .await?)
+        Ok(self.signals.find_by_user_and_date(review_date).await?)
     }
 
     async fn fetch_entries_with_extractions(

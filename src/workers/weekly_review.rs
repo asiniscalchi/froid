@@ -5,8 +5,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::workers::{
-    ReconciliationWorker, config::ReconciliationWorkerConfig,
-    reconciliation::ReconciliationCycle,
+    ReconciliationWorker, config::ReconciliationWorkerConfig, reconciliation::ReconciliationCycle,
 };
 
 use crate::{
@@ -227,9 +226,7 @@ where
                 .await
             {
                 Ok(WeeklyReviewSendOutcome::Sent) => {
-                    self.weekly_reviews
-                        .mark_delivered(week_start)
-                        .await?;
+                    self.weekly_reviews.mark_delivered(week_start).await?;
                     result.delivered += 1;
                 }
                 Ok(WeeklyReviewSendOutcome::Skipped) => {
@@ -282,7 +279,9 @@ where
             batch_size: 1,
             interval: self.config.interval,
         };
-        ReconciliationWorker::new(self, worker_config).run_forever(shutdown).await;
+        ReconciliationWorker::new(self, worker_config)
+            .run_forever(shutdown)
+            .await;
     }
 }
 
@@ -696,10 +695,7 @@ mod tests {
             .upsert_completed(week_start(), "existing", "m", "v1", "{}")
             .await
             .unwrap();
-        weekly_reviews
-            .mark_delivered(week_start())
-            .await
-            .unwrap();
+        weekly_reviews.mark_delivered(week_start()).await.unwrap();
 
         let result = worker.run_once_for_week(week_start()).await.unwrap();
 

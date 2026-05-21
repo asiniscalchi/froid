@@ -203,13 +203,7 @@ impl WeeklyReviewService {
 
                 let review = self
                     .weekly_reviews
-                    .upsert_completed(
-                        week_start,
-                        trimmed,
-                        model,
-                        prompt_version,
-                        &inputs_snapshot,
-                    )
+                    .upsert_completed(week_start, trimmed, model, prompt_version, &inputs_snapshot)
                     .await?;
                 Ok(WeeklyReviewResult::Generated(review))
             }
@@ -448,13 +442,7 @@ mod tests {
         seed_completed_daily(&daily, "user-1", day(2), "wednesday").await;
 
         signals_repo
-            .replace_in_transaction(
-                monday_review,
-                day(0),
-                &[theme_candidate()],
-                "model",
-                "v1",
-            )
+            .replace_in_transaction(monday_review, day(0), &[theme_candidate()], "model", "v1")
             .await
             .unwrap();
         signals_repo
@@ -490,13 +478,7 @@ mod tests {
         seed_completed_daily(&daily, "user-1", day(7), "next monday").await;
 
         signals_repo
-            .replace_in_transaction(
-                prior_review,
-                day(-1),
-                &[theme_candidate()],
-                "m",
-                "v1",
-            )
+            .replace_in_transaction(prior_review, day(-1), &[theme_candidate()], "m", "v1")
             .await
             .unwrap();
 
@@ -696,13 +678,7 @@ mod tests {
         seed_completed_daily(&daily, "user-1", day(1), "tuesday text").await;
         seed_completed_daily(&daily, "user-1", day(2), "wednesday text").await;
         signals_repo
-            .replace_in_transaction(
-                monday_review,
-                day(0),
-                &[theme_candidate()],
-                "model",
-                "v1",
-            )
+            .replace_in_transaction(monday_review, day(0), &[theme_candidate()], "model", "v1")
             .await
             .unwrap();
 

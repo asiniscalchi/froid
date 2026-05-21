@@ -101,10 +101,7 @@ impl JournalRepository {
         Ok((result.rows_affected() != 0).then_some(id))
     }
 
-    pub async fn fetch_recent(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
+    pub async fn fetch_recent(&self, limit: u32) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT id, raw_text, received_at
@@ -487,10 +484,7 @@ impl JournalRepository {
             .collect())
     }
 
-    pub async fn stats(
-        &self,
-        today: NaiveDate,
-    ) -> Result<JournalStats, sqlx::Error> {
+    pub async fn stats(&self, today: NaiveDate) -> Result<JournalStats, sqlx::Error> {
         let start = Utc.from_utc_datetime(&today.and_hms_opt(0, 0, 0).unwrap());
         let end = start + Duration::days(1);
 
@@ -515,4 +509,3 @@ impl JournalRepository {
         })
     }
 }
-

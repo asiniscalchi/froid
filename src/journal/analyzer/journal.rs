@@ -104,12 +104,7 @@ impl JournalReadService for DefaultJournalReadService {
 
         let entries = self
             .repository
-            .search_text(
-                trimmed,
-                request.from_date,
-                request.to_date_exclusive,
-                limit,
-            )
+            .search_text(trimmed, request.from_date, request.to_date_exclusive, limit)
             .await
             .map_err(map_storage_error)?;
 

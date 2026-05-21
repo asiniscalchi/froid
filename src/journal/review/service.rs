@@ -98,10 +98,7 @@ impl DailyReviewService {
         user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<DailyReviewResult, DailyReviewServiceError> {
-        let existing = self
-            .daily_reviews
-            .find_by_user_and_date(utc_date)
-            .await?;
+        let existing = self.daily_reviews.find_by_user_and_date(utc_date).await?;
 
         if let Some(review) = &existing
             && review.status == DailyReviewStatus::Completed
@@ -161,10 +158,7 @@ impl DailyReviewService {
         user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
-        let review = self
-            .daily_reviews
-            .find_by_user_and_date(utc_date)
-            .await?;
+        let review = self.daily_reviews.find_by_user_and_date(utc_date).await?;
         Ok(review.filter(|r| {
             r.status == DailyReviewStatus::Completed
                 && r.review_text

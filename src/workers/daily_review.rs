@@ -5,8 +5,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::workers::{
-    ReconciliationWorker, config::ReconciliationWorkerConfig,
-    reconciliation::ReconciliationCycle,
+    ReconciliationWorker, config::ReconciliationWorkerConfig, reconciliation::ReconciliationCycle,
 };
 
 use crate::{
@@ -215,9 +214,7 @@ where
                 .await
             {
                 Ok(DailyReviewSendOutcome::Sent) => {
-                    self.daily_reviews
-                        .mark_delivered(review_date)
-                        .await?;
+                    self.daily_reviews.mark_delivered(review_date).await?;
                     result.delivered += 1;
                 }
                 Ok(DailyReviewSendOutcome::Skipped) => {
@@ -270,7 +267,9 @@ where
             batch_size: 1,
             interval: self.config.interval,
         };
-        ReconciliationWorker::new(self, worker_config).run_forever(shutdown).await;
+        ReconciliationWorker::new(self, worker_config)
+            .run_forever(shutdown)
+            .await;
     }
 }
 

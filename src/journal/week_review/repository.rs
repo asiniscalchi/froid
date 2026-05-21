@@ -271,13 +271,7 @@ mod tests {
         let repo = setup().await;
 
         let review = repo
-            .upsert_completed(
-                week_start(),
-                "review text",
-                "test-model",
-                "v1",
-                "{}",
-            )
+            .upsert_completed(week_start(), "review text", "test-model", "v1", "{}")
             .await
             .unwrap();
 
@@ -314,15 +308,9 @@ mod tests {
     #[tokio::test]
     async fn finds_review_by_user_and_week() {
         let repo = setup().await;
-        repo.upsert_completed(
-            week_start(),
-            "review text",
-            "test-model",
-            "v1",
-            "{}",
-        )
-        .await
-        .unwrap();
+        repo.upsert_completed(week_start(), "review text", "test-model", "v1", "{}")
+            .await
+            .unwrap();
 
         let found = repo
             .find_by_user_and_week(week_start())
@@ -375,13 +363,7 @@ mod tests {
             .await
             .unwrap();
         let updated = repo
-            .upsert_completed(
-                week_start(),
-                "new review",
-                "new-model",
-                "v2",
-                "{}",
-            )
+            .upsert_completed(week_start(), "new review", "new-model", "v2", "{}")
             .await
             .unwrap();
 
@@ -420,13 +402,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
 
         let completed = repo
-            .upsert_completed(
-                week_start(),
-                "review text",
-                "test-model",
-                "v1",
-                "{}",
-            )
+            .upsert_completed(week_start(), "review text", "test-model", "v1", "{}")
             .await
             .unwrap();
 
@@ -461,15 +437,9 @@ mod tests {
     #[tokio::test]
     async fn mark_delivered_records_delivery_time_and_clears_delivery_error() {
         let repo = setup().await;
-        repo.upsert_completed(
-            week_start(),
-            "review text",
-            "test-model",
-            "v1",
-            "{}",
-        )
-        .await
-        .unwrap();
+        repo.upsert_completed(week_start(), "review text", "test-model", "v1", "{}")
+            .await
+            .unwrap();
         repo.mark_delivery_failed(week_start(), "telegram failed")
             .await
             .unwrap();
@@ -488,15 +458,9 @@ mod tests {
     #[tokio::test]
     async fn mark_delivery_failed_records_latest_delivery_error() {
         let repo = setup().await;
-        repo.upsert_completed(
-            week_start(),
-            "review text",
-            "test-model",
-            "v1",
-            "{}",
-        )
-        .await
-        .unwrap();
+        repo.upsert_completed(week_start(), "review text", "test-model", "v1", "{}")
+            .await
+            .unwrap();
 
         repo.mark_delivery_failed(week_start(), "first error")
             .await
@@ -653,10 +617,7 @@ mod tests {
             .await
             .unwrap();
 
-        let reviews = repo
-            .fetch_completed_in_range(w1, w2)
-            .await
-            .unwrap();
+        let reviews = repo.fetch_completed_in_range(w1, w2).await.unwrap();
 
         assert_eq!(reviews.len(), 1);
         assert_eq!(reviews[0].review_text, Some("in".to_string()));
@@ -689,9 +650,7 @@ mod tests {
         repo.upsert_completed(w1, "ok", "m", "v1", "{}")
             .await
             .unwrap();
-        repo.upsert_failed(w2, "m", "v1", "boom")
-            .await
-            .unwrap();
+        repo.upsert_failed(w2, "m", "v1", "boom").await.unwrap();
 
         let reviews = repo
             .fetch_completed_in_range(w1, NaiveDate::from_ymd_opt(2026, 5, 4).unwrap())

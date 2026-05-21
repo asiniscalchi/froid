@@ -338,10 +338,7 @@ mod tests {
             .upsert_completed(w1, "ok", "m", "v1", "{}")
             .await
             .unwrap();
-        weekly
-            .upsert_failed(w2, "m", "v1", "boom")
-            .await
-            .unwrap();
+        weekly.upsert_failed(w2, "m", "v1", "boom").await.unwrap();
 
         let result = service
             .get_weekly_reviews(&ctx(), req(w1, ymd(2026, 5, 4)))
@@ -451,10 +448,7 @@ mod tests {
     async fn get_weekly_review_returns_none_when_failed() {
         let (service, _, weekly) = setup().await;
         let w = ymd(2026, 4, 20);
-        weekly
-            .upsert_failed(w, "m", "v1", "boom")
-            .await
-            .unwrap();
+        weekly.upsert_failed(w, "m", "v1", "boom").await.unwrap();
 
         let result = service.get_weekly_review(&ctx(), w).await.unwrap();
         assert!(result.is_none());

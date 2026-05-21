@@ -42,7 +42,9 @@ struct ExportEnvelope {
 enum ApiError {
     ExportRepository(sqlx::Error),
     Serialization(serde_json::Error),
-    UnsupportedVersion { version: u32 },
+    UnsupportedVersion {
+        version: u32,
+    },
     ImportConflict {
         source: String,
         source_conversation_id: String,
