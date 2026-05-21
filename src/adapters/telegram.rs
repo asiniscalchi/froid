@@ -141,7 +141,7 @@ fn should_handle_message(message: &Message, allowed_user_ids: Option<&[u64]>) ->
         return false;
     };
 
-    allowed_user_ids.map_or(true, |ids| ids.contains(&sender.id.0))
+    allowed_user_ids.is_none_or(|ids| ids.contains(&sender.id.0))
 }
 
 fn saved_reaction() -> ReactionType {

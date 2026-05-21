@@ -81,16 +81,16 @@ impl JournalServiceRegistry {
             let mut entries = tokio::fs::read_dir(&self.base_dir).await?;
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
-                if path.is_file() && path.extension().is_some_and(|ext| ext == "sqlite3") {
-                    if let Some(file_name) = path.file_stem().and_then(|s| s.to_str()) {
-                        if let Some(chat_id) = file_name.strip_prefix("user_") {
-                            info!(
-                                chat_id,
-                                "discovered existing tenant database; pre-registering"
-                            );
-                            let _ = self.get_or_create(chat_id).await?;
-                        }
-                    }
+                if path.is_file()
+                    && path.extension().is_some_and(|ext| ext == "sqlite3")
+                    && let Some(file_name) = path.file_stem().and_then(|s| s.to_str())
+                    && let Some(chat_id) = file_name.strip_prefix("user_")
+                {
+                    info!(
+                        chat_id,
+                        "discovered existing tenant database; pre-registering"
+                    );
+                    let _ = self.get_or_create(chat_id).await?;
                 }
             }
         }
