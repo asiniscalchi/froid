@@ -70,6 +70,12 @@ impl JournalServiceRegistry {
         }
     }
 
+    /// Override the default base directory (mainly for testing)
+    pub fn with_base_dir(mut self, base_dir: PathBuf) -> Self {
+        self.base_dir = base_dir;
+        self
+    }
+
     /// Discover existing tenant databases on disk and pre-register/initialize them
     pub async fn discover_and_register_existing(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if self.base_dir.exists() {
