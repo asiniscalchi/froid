@@ -6,7 +6,7 @@ use axum::{
 };
 use rust_embed::RustEmbed;
 
-use crate::journal::repository::JournalRepository;
+use crate::{journal::repository::JournalRepository, prompts::PromptRepository};
 
 mod api;
 
@@ -14,9 +14,9 @@ mod api;
 #[folder = "web/dist/"]
 struct Assets;
 
-pub fn router(repo: JournalRepository) -> Router {
+pub fn router(journal: JournalRepository, prompts: PromptRepository) -> Router {
     Router::new()
-        .nest("/api", api::router(repo))
+        .nest("/api", api::router(journal, prompts))
         .fallback(spa_handler)
 }
 
@@ -55,7 +55,10 @@ mod tests {
         database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
-        router(JournalRepository::new(pool))
+        router(
+            JournalRepository::new(pool.clone()),
+            PromptRepository::new(pool),
+        )
     }
 
     #[tokio::test]

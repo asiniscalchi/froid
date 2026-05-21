@@ -199,7 +199,10 @@ async fn spawn_http_server(
     }
 
     if config.dashboard.enabled {
-        router = router.merge(dashboard::router(JournalRepository::new(pool.clone())));
+        router = router.merge(dashboard::router(
+            JournalRepository::new(pool.clone()),
+            PromptRepository::new(pool.clone()),
+        ));
     }
 
     let listener = tokio::net::TcpListener::bind(config.mcp_server.bind).await?;
