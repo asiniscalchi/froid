@@ -1,25 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-
-type PromptListItem = {
-  key: string
-  label: string
-  default_version: string
-  is_customized: boolean
-  updated_at: string | null
-}
-
-type PromptDetail = {
-  key: string
-  label: string
-  default_version: string
-  current_version: string
-  default_text: string
-  current_text: string
-  is_customized: boolean
-  updated_at: string | null
-}
+import {
+  getPrompt,
+  listPrompts,
+  resetPrompt,
+  savePrompt,
+  type PromptDetail,
+  type PromptListItem,
+} from './api'
 
 type Status =
   | { kind: 'idle' }
@@ -27,7 +16,7 @@ type Status =
   | { kind: 'success'; message: string }
   | { kind: 'error'; message: string }
 
-function Prompts() {
+function PromptsPanel() {
   const [items, setItems] = useState<PromptListItem[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [detail, setDetail] = useState<PromptDetail | null>(null)
@@ -36,11 +25,7 @@ function Prompts() {
 
   async function loadList(preserveSelection = true) {
     try {
-      const response = await fetch('/api/prompts')
-      if (!response.ok) {
-        throw new Error(`Failed to load prompts (${response.status})`)
-      }
-      const data: PromptListItem[] = await response.json()
+      const data = await listPrompts()
       setItems(data)
       if (!preserveSelection && data.length > 0) {
         setSelectedKey(data[0].key)
@@ -56,11 +41,7 @@ function Prompts() {
   async function loadDetail(key: string) {
     setStatus({ kind: 'busy', message: 'Loading…' })
     try {
-      const response = await fetch(`/api/prompts/${encodeURIComponent(key)}`)
-      if (!response.ok) {
-        throw new Error(`Failed to load prompt (${response.status})`)
-      }
-      const data: PromptDetail = await response.json()
+      const data = await getPrompt(key)
       setDetail(data)
       setDraft(data.current_text)
       setStatus({ kind: 'idle' })
@@ -88,22 +69,7 @@ function Prompts() {
     if (!selectedKey || !detail) return
     setStatus({ kind: 'busy', message: 'Saving…' })
     try {
-      const response = await fetch(
-        `/api/prompts/${encodeURIComponent(selectedKey)}`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: draft }),
-        },
-      )
-      const payload = await response.json().catch(() => null)
-      if (!response.ok) {
-        const detailMsg =
-          payload && typeof payload.error === 'string'
-            ? payload.error
-            : `Save failed (${response.status})`
-        throw new Error(detailMsg)
-      }
+      await savePrompt(selectedKey, draft)
       await loadList()
       await loadDetail(selectedKey)
       setStatus({ kind: 'success', message: 'Saved.' })
@@ -130,13 +96,7 @@ function Prompts() {
     }
     setStatus({ kind: 'busy', message: 'Resetting…' })
     try {
-      const response = await fetch(
-        `/api/prompts/${encodeURIComponent(selectedKey)}`,
-        { method: 'DELETE' },
-      )
-      if (!response.ok) {
-        throw new Error(`Reset failed (${response.status})`)
-      }
+      await resetPrompt(selectedKey)
       await loadList()
       await loadDetail(selectedKey)
       setStatus({ kind: 'success', message: 'Reset to default.' })
@@ -236,4 +196,4 @@ function Prompts() {
   )
 }
 
-export default Prompts
+export default PromptsPanel

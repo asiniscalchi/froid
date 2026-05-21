@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import Prompts from './Prompts'
+import Prompts from './PromptsPanel'
 
 const listResponse = [
   {
