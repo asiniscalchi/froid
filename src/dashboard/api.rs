@@ -356,7 +356,7 @@ mod tests {
         let parsed: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["imported"], 2);
 
-        let entries = repo.fetch_recent("7", 10).await.unwrap();
+        let entries = repo.fetch_recent(10).await.unwrap();
         assert_eq!(entries.len(), 2);
     }
 
@@ -408,7 +408,7 @@ mod tests {
         assert_eq!(parsed["conflict"]["source_conversation_id"], "42");
         assert_eq!(parsed["conflict"]["source_message_id"], "dup");
 
-        let entries = repo.fetch_recent("7", 10).await.unwrap();
+        let entries = repo.fetch_recent(10).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].entry.text, "existing");
     }

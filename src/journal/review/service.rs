@@ -100,7 +100,7 @@ impl DailyReviewService {
     ) -> Result<DailyReviewResult, DailyReviewServiceError> {
         let existing = self
             .daily_reviews
-            .find_by_user_and_date(user_id, utc_date)
+            .find_by_user_and_date(utc_date)
             .await?;
 
         if let Some(review) = &existing
@@ -144,7 +144,7 @@ impl DailyReviewService {
 
                 let review = self
                     .daily_reviews
-                    .upsert_completed(user_id, utc_date, review_text, model, prompt_version)
+                    .upsert_completed(utc_date, review_text, model, prompt_version)
                     .await?;
                 Ok(DailyReviewResult::Generated(review))
             }
@@ -163,7 +163,7 @@ impl DailyReviewService {
     ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
         let review = self
             .daily_reviews
-            .find_by_user_and_date(user_id, utc_date)
+            .find_by_user_and_date(utc_date)
             .await?;
         Ok(review.filter(|r| {
             r.status == DailyReviewStatus::Completed
@@ -178,7 +178,7 @@ impl DailyReviewService {
         user_id: &str,
         date: NaiveDate,
     ) -> Result<Vec<JournalEntryWithExtraction>, DailyReviewServiceError> {
-        let entries = self.journal_entries.fetch_today(user_id, date).await?;
+        let entries = self.journal_entries.fetch_today(date).await?;
         if entries.is_empty() {
             return Ok(vec![]);
         }
@@ -211,7 +211,7 @@ impl DailyReviewService {
         error_message: &str,
     ) -> Result<DailyReviewResult, DailyReviewServiceError> {
         self.daily_reviews
-            .upsert_failed(user_id, utc_date, model, prompt_version, error_message)
+            .upsert_failed(utc_date, model, prompt_version, error_message)
             .await?;
         Ok(DailyReviewResult::GenerationFailed(DailyReviewFailure {
             user_id: user_id.to_string(),
@@ -334,7 +334,7 @@ mod tests {
         let (service, daily_reviews, _journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::succeeding("new review")).await;
         let existing = daily_reviews
-            .upsert_completed("user-1", date(), "existing review", "model", "v1")
+            .upsert_completed(date(), "existing review", "model", "v1")
             .await
             .unwrap();
 
@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(generator.calls(), 1);
 
         let stored = daily_reviews
-            .find_by_user_and_date("user-1", date())
+            .find_by_user_and_date(date())
             .await
             .unwrap()
             .unwrap();
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(generator.calls(), 1);
 
         let stored = daily_reviews
-            .find_by_user_and_date("user-1", date())
+            .find_by_user_and_date(date())
             .await
             .unwrap()
             .unwrap();
@@ -419,7 +419,7 @@ mod tests {
             .await
             .unwrap();
         let existing = daily_reviews
-            .upsert_completed("user-1", date(), "", "model", "v1")
+            .upsert_completed(date(), "", "model", "v1")
             .await
             .unwrap();
 
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(generator.calls(), 1);
 
         let stored = daily_reviews
-            .find_by_user_and_date("user-1", date())
+            .find_by_user_and_date(date())
             .await
             .unwrap()
             .unwrap();
@@ -495,7 +495,7 @@ mod tests {
             DailyReviewResult::GenerationFailed(_)
         ));
         let failed = daily_reviews
-            .find_by_user_and_date("user-1", date())
+            .find_by_user_and_date(date())
             .await
             .unwrap()
             .unwrap();
@@ -610,7 +610,7 @@ mod tests {
         let (service, daily_reviews, _journal_entries, _extractions, _generator) =
             setup(FakeReviewGenerator::succeeding("any")).await;
         daily_reviews
-            .upsert_completed("user-1", date(), "review text", "model", "v1")
+            .upsert_completed(date(), "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -634,7 +634,7 @@ mod tests {
         let (service, daily_reviews, _journal_entries, _extractions, _generator) =
             setup(FakeReviewGenerator::succeeding("any")).await;
         daily_reviews
-            .upsert_failed("user-1", date(), "model", "v1", "provider down")
+            .upsert_failed(date(), "model", "v1", "provider down")
             .await
             .unwrap();
 

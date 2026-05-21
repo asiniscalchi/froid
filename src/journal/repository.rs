@@ -103,7 +103,6 @@ impl JournalRepository {
 
     pub async fn fetch_recent(
         &self,
-        _user_id: &str,
         limit: u32,
     ) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
         let rows = sqlx::query(
@@ -129,7 +128,6 @@ impl JournalRepository {
 
     pub async fn fetch_last_for_conversation(
         &self,
-        _user_id: &str,
         source: &MessageSource,
         source_conversation_id: &str,
     ) -> Result<Option<StoredJournalEntry>, sqlx::Error> {
@@ -156,7 +154,6 @@ impl JournalRepository {
 
     pub async fn delete_last_for_conversation(
         &self,
-        _user_id: &str,
         source: &MessageSource,
         source_conversation_id: &str,
     ) -> Result<Option<StoredJournalEntry>, sqlx::Error> {
@@ -204,7 +201,6 @@ impl JournalRepository {
 
     pub async fn search_text(
         &self,
-        _user_id: &str,
         query: &str,
         from_date: Option<NaiveDate>,
         to_date_exclusive: Option<NaiveDate>,
@@ -335,7 +331,6 @@ impl JournalRepository {
 
     pub async fn fetch_in_range(
         &self,
-        _user_id: &str,
         start_date: NaiveDate,
         end_date_exclusive: NaiveDate,
         limit: u32,
@@ -370,7 +365,6 @@ impl JournalRepository {
 
     pub async fn fetch_today(
         &self,
-        _user_id: &str,
         date: NaiveDate,
     ) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
         let start = Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap());
@@ -468,7 +462,6 @@ impl JournalRepository {
 
     pub async fn fetch_by_ids(
         &self,
-        _user_id: &str,
         ids: &[String],
     ) -> Result<Vec<(String, JournalEntry)>, sqlx::Error> {
         if ids.is_empty() {
@@ -496,7 +489,6 @@ impl JournalRepository {
 
     pub async fn stats(
         &self,
-        _user_id: &str,
         today: NaiveDate,
     ) -> Result<JournalStats, sqlx::Error> {
         let start = Utc.from_utc_datetime(&today.and_hms_opt(0, 0, 0).unwrap());

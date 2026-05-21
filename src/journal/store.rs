@@ -49,7 +49,6 @@ impl JournalEntryStore {
 
     pub async fn delete_last_for_conversation(
         &self,
-        _user_id: &str,
         source: &MessageSource,
         source_conversation_id: &str,
     ) -> Result<Option<StoredJournalEntry>, sqlx::Error> {
@@ -235,7 +234,7 @@ mod tests {
         .unwrap();
 
         store
-            .delete_last_for_conversation("7", &MessageSource::Telegram, "42")
+            .delete_last_for_conversation(&MessageSource::Telegram, "42")
             .await
             .unwrap();
 
@@ -262,7 +261,7 @@ mod tests {
             .unwrap();
 
         store
-            .delete_last_for_conversation("7", &MessageSource::Telegram, "42")
+            .delete_last_for_conversation(&MessageSource::Telegram, "42")
             .await
             .unwrap();
 

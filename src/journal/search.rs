@@ -101,7 +101,7 @@ where
 
         let loaded = self
             .repository
-            .fetch_by_ids(user_id, &ids)
+            .fetch_by_ids(&ids)
             .await
             .map_err(|e| SemanticSearchError::Repository(e.to_string()))?;
 

@@ -174,7 +174,7 @@ mod tests {
         let (worker, reviews, entries) = setup(generator.clone()).await;
         store_entry(&entries, "1", "entry text").await;
         reviews
-            .upsert_completed("user-1", date(), "review text", "model", "v1")
+            .upsert_completed(date(), "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -192,7 +192,7 @@ mod tests {
         let (worker, reviews, entries) = setup(generator.clone()).await;
         store_entry(&entries, "1", "entry text").await;
         reviews
-            .upsert_completed("user-1", date(), "review text", "model", "v1")
+            .upsert_completed(date(), "review text", "model", "v1")
             .await
             .unwrap();
 

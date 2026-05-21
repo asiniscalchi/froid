@@ -117,7 +117,7 @@ async fn fetch_recent_returns_entries_newest_first() {
         .await
         .unwrap();
 
-    let entries = repo.fetch_recent("7", 10).await.unwrap();
+    let entries = repo.fetch_recent(10).await.unwrap();
 
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].entry.text, "third");
@@ -187,7 +187,7 @@ async fn bulk_import_inserts_all_records() {
     let inserted = repo.bulk_import(&records).await.unwrap();
     assert_eq!(inserted, 2);
 
-    let entries = repo.fetch_recent("7", 10).await.unwrap();
+    let entries = repo.fetch_recent(10).await.unwrap();
     assert_eq!(entries.len(), 2);
 }
 
@@ -231,7 +231,7 @@ async fn bulk_import_rolls_back_on_unique_violation() {
         other => panic!("expected Conflict, got {other:?}"),
     }
 
-    let entries = repo.fetch_recent("7", 10).await.unwrap();
+    let entries = repo.fetch_recent(10).await.unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].entry.text, "existing");
 }
@@ -274,7 +274,7 @@ async fn fetch_last_for_conversation_returns_latest_entry_for_current_conversati
     .unwrap();
 
     let entry = repo
-        .fetch_last_for_conversation("7", &MessageSource::Telegram, "42")
+        .fetch_last_for_conversation(&MessageSource::Telegram, "42")
         .await
         .unwrap()
         .unwrap();
@@ -293,7 +293,7 @@ async fn fetch_last_for_conversation_breaks_timestamp_ties_by_id() {
         .unwrap();
 
     let entry = repo
-        .fetch_last_for_conversation("7", &MessageSource::Telegram, "42")
+        .fetch_last_for_conversation(&MessageSource::Telegram, "42")
         .await
         .unwrap()
         .unwrap();
@@ -312,16 +312,16 @@ async fn delete_last_for_conversation_deletes_same_entry_selected_by_fetch_last(
         .unwrap();
 
     let fetched = repo
-        .fetch_last_for_conversation("7", &MessageSource::Telegram, "42")
+        .fetch_last_for_conversation(&MessageSource::Telegram, "42")
         .await
         .unwrap()
         .unwrap();
     let deleted = repo
-        .delete_last_for_conversation("7", &MessageSource::Telegram, "42")
+        .delete_last_for_conversation(&MessageSource::Telegram, "42")
         .await
         .unwrap()
         .unwrap();
-    let remaining = repo.fetch_recent("7", 10).await.unwrap();
+    let remaining = repo.fetch_recent(10).await.unwrap();
 
     assert_eq!(deleted.id, fetched.id);
     assert_eq!(deleted.entry.text, "second inserted");
@@ -340,12 +340,12 @@ async fn delete_last_for_conversation_does_not_delete_other_conversations() {
         .unwrap();
 
     let deleted = repo
-        .delete_last_for_conversation("7", &MessageSource::Telegram, "42")
+        .delete_last_for_conversation(&MessageSource::Telegram, "42")
         .await
         .unwrap()
         .unwrap();
     let other = repo
-        .fetch_last_for_conversation("7", &MessageSource::Telegram, "99")
+        .fetch_last_for_conversation(&MessageSource::Telegram, "99")
         .await
         .unwrap()
         .unwrap();
@@ -368,7 +368,7 @@ async fn fetch_recent_respects_limit() {
         .await
         .unwrap();
 
-    let entries = repo.fetch_recent("7", 2).await.unwrap();
+    let entries = repo.fetch_recent(2).await.unwrap();
 
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].entry.text, "third");
@@ -379,7 +379,7 @@ async fn fetch_recent_respects_limit() {
 async fn fetch_recent_returns_empty_when_journal_has_no_entries() {
     let repo = setup().await;
 
-    let entries = repo.fetch_recent("7", 10).await.unwrap();
+    let entries = repo.fetch_recent(10).await.unwrap();
 
     assert!(entries.is_empty());
 }
@@ -402,7 +402,7 @@ async fn fetch_today_returns_entries_oldest_first_for_user() {
     .await
     .unwrap();
 
-    let entries = repo.fetch_today("7", date()).await.unwrap();
+    let entries = repo.fetch_today(date()).await.unwrap();
 
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].entry.text, "first");
@@ -435,7 +435,7 @@ async fn fetch_in_range_returns_entries_within_range_newest_first() {
         .unwrap();
 
     let entries = repo
-        .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
+        .fetch_in_range(ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
         .await
         .unwrap();
 
@@ -456,7 +456,7 @@ async fn fetch_in_range_treats_end_date_as_exclusive() {
         .unwrap();
 
     let entries = repo
-        .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
+        .fetch_in_range(ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
         .await
         .unwrap();
 
@@ -479,7 +479,7 @@ async fn fetch_in_range_respects_limit() {
         .unwrap();
 
     let entries = repo
-        .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 2)
+        .fetch_in_range(ymd(2026, 4, 28), ymd(2026, 4, 29), 2)
         .await
         .unwrap();
 
@@ -507,7 +507,7 @@ async fn fetch_in_range_returns_all_entries_in_single_user_journal() {
     .unwrap();
 
     let entries = repo
-        .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
+        .fetch_in_range(ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
         .await
         .unwrap();
 
@@ -525,7 +525,7 @@ async fn fetch_in_range_returns_empty_when_no_entries_in_range() {
         .unwrap();
 
     let entries = repo
-        .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
+        .fetch_in_range(ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
         .await
         .unwrap();
 
@@ -541,7 +541,7 @@ async fn fetch_in_range_returns_empty_for_empty_range() {
         .unwrap();
 
     let entries = repo
-        .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 28), 10)
+        .fetch_in_range(ymd(2026, 4, 28), ymd(2026, 4, 28), 10)
         .await
         .unwrap();
 
@@ -560,7 +560,7 @@ async fn fetch_in_range_breaks_timestamp_ties_by_id_desc() {
         .unwrap();
 
     let entries = repo
-        .fetch_in_range("7", ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
+        .fetch_in_range(ymd(2026, 4, 28), ymd(2026, 4, 29), 10)
         .await
         .unwrap();
 
@@ -583,7 +583,7 @@ async fn search_text_matches_substring_case_insensitively() {
         .await
         .unwrap();
 
-    let entries = repo.search_text("7", "ANXI", None, None, 10).await.unwrap();
+    let entries = repo.search_text("ANXI", None, None, 10).await.unwrap();
 
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].entry.text, "ANXIETY again today");
@@ -605,7 +605,7 @@ async fn search_text_returns_results_newest_first() {
         .unwrap();
 
     let entries = repo
-        .search_text("7", "match", None, None, 10)
+        .search_text("match", None, None, 10)
         .await
         .unwrap();
 
@@ -625,7 +625,7 @@ async fn search_text_respects_limit() {
             .unwrap();
     }
 
-    let entries = repo.search_text("7", "match", None, None, 2).await.unwrap();
+    let entries = repo.search_text("match", None, None, 2).await.unwrap();
 
     assert_eq!(entries.len(), 2);
 }
@@ -649,7 +649,7 @@ async fn search_text_returns_matches_from_the_single_user_journal() {
     .unwrap();
 
     let entries = repo
-        .search_text("7", "matches", None, None, 10)
+        .search_text("matches", None, None, 10)
         .await
         .unwrap();
 
@@ -674,7 +674,6 @@ async fn search_text_filters_by_date_range_with_exclusive_end() {
 
     let entries = repo
         .search_text(
-            "7",
             "match",
             Some(ymd(2026, 4, 28)),
             Some(ymd(2026, 4, 29)),
@@ -696,7 +695,7 @@ async fn search_text_returns_empty_when_no_match() {
         .unwrap();
 
     let entries = repo
-        .search_text("7", "anxiety", None, None, 10)
+        .search_text("anxiety", None, None, 10)
         .await
         .unwrap();
 
@@ -712,7 +711,7 @@ async fn search_text_ignores_caller_user_id() {
         .unwrap();
 
     let entries = repo
-        .search_text("unknown", "match", None, None, 10)
+        .search_text("match", None, None, 10)
         .await
         .unwrap();
 
@@ -799,7 +798,7 @@ async fn fetch_by_ids_returns_entries_matching_ids() {
     let third_id = stored_id(&repo, "3").await;
 
     let rows = repo
-        .fetch_by_ids("7", &[first_id.clone(), third_id.clone()])
+        .fetch_by_ids(&[first_id.clone(), third_id.clone()])
         .await
         .unwrap();
 
@@ -828,7 +827,7 @@ async fn fetch_by_ids_returns_all_matching_entries_in_single_user_journal() {
     let other_id = stored_id(&repo, "2").await;
 
     let rows = repo
-        .fetch_by_ids("7", &[my_id.clone(), other_id.clone()])
+        .fetch_by_ids(&[my_id.clone(), other_id.clone()])
         .await
         .unwrap();
 
@@ -842,7 +841,7 @@ async fn fetch_by_ids_returns_all_matching_entries_in_single_user_journal() {
 async fn fetch_by_ids_returns_empty_for_empty_id_list() {
     let repo = setup().await;
 
-    let rows = repo.fetch_by_ids("7", &[]).await.unwrap();
+    let rows = repo.fetch_by_ids(&[]).await.unwrap();
 
     assert!(rows.is_empty());
 }
@@ -852,7 +851,7 @@ async fn fetch_by_ids_returns_empty_when_no_ids_match() {
     let repo = setup().await;
 
     let rows = repo
-        .fetch_by_ids("7", &["nonexistent".to_string()])
+        .fetch_by_ids(&["nonexistent".to_string()])
         .await
         .unwrap();
 
@@ -874,7 +873,7 @@ async fn stats_returns_counts_and_latest_timestamp_for_user() {
     .await
     .unwrap();
 
-    let stats = repo.stats("7", date()).await.unwrap();
+    let stats = repo.stats(date()).await.unwrap();
 
     assert_eq!(stats.total_entries, 2);
     assert_eq!(stats.entries_today, 1);
@@ -888,7 +887,7 @@ async fn stats_returns_counts_and_latest_timestamp_for_user() {
 async fn stats_returns_zeroes_when_journal_has_no_entries() {
     let repo = setup().await;
 
-    let stats = repo.stats("7", date()).await.unwrap();
+    let stats = repo.stats(date()).await.unwrap();
 
     assert_eq!(stats.total_entries, 0);
     assert_eq!(stats.entries_today, 0);

@@ -91,7 +91,7 @@ where
 
         let loaded = self
             .repository
-            .fetch_by_ids(user_id, &ids)
+            .fetch_by_ids(&ids)
             .await
             .map_err(|e| DailyReviewSearchError::Repository(e.to_string()))?;
 
@@ -251,7 +251,7 @@ mod tests {
         let (repo, mut index) = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
         let review = repo
-            .upsert_completed("user-1", date, "review text", "model", "v1")
+            .upsert_completed(date, "review text", "model", "v1")
             .await
             .unwrap();
 
@@ -281,7 +281,7 @@ mod tests {
         let (repo, mut index) = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
         let review = repo
-            .upsert_completed("user-2", date, "other user review", "model", "v1")
+            .upsert_completed(date, "other user review", "model", "v1")
             .await
             .unwrap();
 
