@@ -5,7 +5,7 @@ pub mod prompt;
 pub mod repository;
 pub mod search;
 pub mod service;
-pub(crate) mod signals;
+pub mod signals;
 pub mod wiring;
 
 use chrono::{DateTime, NaiveDate, Utc};

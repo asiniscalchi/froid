@@ -76,14 +76,14 @@ pub enum WeeklyReviewSendOutcome {
 #[derive(Clone)]
 pub struct TelegramWeeklyReviewSender {
     bot: Bot,
-    allowed_user_id: Option<u64>,
+    allowed_user_ids: Option<Vec<u64>>,
 }
 
 impl TelegramWeeklyReviewSender {
-    pub fn new(bot_token: String, allowed_user_id: Option<u64>) -> Self {
+    pub fn new(bot_token: String, allowed_user_ids: Option<Vec<u64>>) -> Self {
         Self {
             bot: Bot::new(bot_token),
-            allowed_user_id,
+            allowed_user_ids,
         }
     }
 }
@@ -99,12 +99,12 @@ impl WeeklyReviewSender for TelegramWeeklyReviewSender {
             .parse::<i64>()
             .map_err(|_| format!("invalid Telegram chat id: {source_conversation_id}"))?;
 
-        if let Some(allowed_user_id) = self.allowed_user_id
-            && chat_id != allowed_user_id as i64
+        if let Some(ref allowed_user_ids) = self.allowed_user_ids
+            && (chat_id < 0 || !allowed_user_ids.contains(&(chat_id as u64)))
         {
             info!(
                 source_conversation_id,
-                allowed_user_id,
+                ?allowed_user_ids,
                 "skipping weekly review delivery outside configured Telegram user scope"
             );
             return Ok(WeeklyReviewSendOutcome::Skipped);

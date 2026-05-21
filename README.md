@@ -21,7 +21,7 @@ Create an `.env` file (see [Configuration](#configuration) for the full variable
 
 ```env
 TELEGRAM_BOT_TOKEN=your-token-here
-TELEGRAM_ALLOWED_USER_ID=123456789    # optional: restrict to one Telegram user
+TELEGRAM_ALLOWED_USER_IDS=123456789,987654321    # optional: comma-separated list of allowed Telegram user IDs
 OPENAI_API_KEY=your-key-here
 
 FROID_EMBEDDING_WORKER_ENABLED=true
@@ -64,7 +64,7 @@ All options can be set via environment variables or the equivalent `--flag` CLI 
 | Variable | Default | Description |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — | **Required.** Telegram bot credentials |
-| `TELEGRAM_ALLOWED_USER_ID` | _(all private chats)_ | Restrict incoming messages and review delivery to one Telegram user |
+| `TELEGRAM_ALLOWED_USER_IDS` | _(all private chats)_ | Comma-separated list of allowed Telegram user/chat IDs |
 | `OPENAI_API_KEY` | — | Required when any worker or the MCP semantic search tool is enabled |
 | `DATA_DIR` | `data` | Directory for persistent data |
 | `DATABASE_FILE` | `froid.sqlite3` | SQLite database filename (resolved relative to `DATA_DIR`) |
