@@ -4,6 +4,11 @@ use teloxide::{prelude::*, types::ChatId};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use crate::workers::{
+    ReconciliationWorker, config::ReconciliationWorkerConfig,
+    reconciliation::ReconciliationCycle,
+};
+
 use crate::{
     journal::{
         repository::JournalRepository,
@@ -112,7 +117,7 @@ impl DailyReviewSender for TelegramDailyReviewSender {
     }
 }
 
-pub struct DailyReviewDeliveryWorker<R, S> {
+pub struct DailyReviewDeliveryCycle<R, S> {
     journal_entries: JournalRepository,
     daily_reviews: DailyReviewRepository,
     review_runner: R,
@@ -120,7 +125,9 @@ pub struct DailyReviewDeliveryWorker<R, S> {
     config: DailyReviewDeliveryWorkerConfig,
 }
 
-impl<R, S> DailyReviewDeliveryWorker<R, S>
+pub type DailyReviewDeliveryWorker<R, S> = DailyReviewDeliveryCycle<R, S>;
+
+impl<R, S> DailyReviewDeliveryCycle<R, S>
 where
     R: DailyReviewRunner,
     S: DailyReviewSender,
@@ -209,7 +216,7 @@ where
             {
                 Ok(DailyReviewSendOutcome::Sent) => {
                     self.daily_reviews
-                        .mark_delivered(&target.user_id, review_date)
+                        .mark_delivered(review_date)
                         .await?;
                     result.delivered += 1;
                 }
@@ -218,7 +225,7 @@ where
                 }
                 Err(error) => {
                     self.daily_reviews
-                        .mark_delivery_failed(&target.user_id, review_date, &error)
+                        .mark_delivery_failed(review_date, &error)
                         .await?;
                     warn!(
                         user_id = %target.user_id,
@@ -248,45 +255,59 @@ where
             "daily review runner failed during delivery"
         );
         self.daily_reviews
-            .mark_delivery_failed(user_id, review_date, &error.to_string())
+            .mark_delivery_failed(review_date, &error.to_string())
             .await?;
         Ok(())
     }
 
-    pub async fn run_forever(self, shutdown: CancellationToken) {
+    pub async fn run_forever(self, shutdown: CancellationToken)
+    where
+        R: Send + Sync + 'static,
+        S: Send + Sync + 'static,
+    {
+        let worker_config = ReconciliationWorkerConfig {
+            enabled: self.config.enabled,
+            batch_size: 1,
+            interval: self.config.interval,
+        };
+        ReconciliationWorker::new(self, worker_config).run_forever(shutdown).await;
+    }
+}
+
+impl<R, S> ReconciliationCycle for DailyReviewDeliveryCycle<R, S>
+where
+    R: DailyReviewRunner + Send + Sync + 'static,
+    S: DailyReviewSender + Send + Sync + 'static,
+{
+    type Outcome = DailyReviewDeliveryResult;
+    type Error = DailyReviewDeliveryWorkerError;
+
+    fn worker_label(&self) -> &'static str {
+        "daily_review_delivery"
+    }
+
+    fn log_startup(&self, config: &ReconciliationWorkerConfig) {
         info!(
-            enabled = self.config.enabled,
-            interval_seconds = self.config.interval.as_secs(),
+            enabled = config.enabled,
+            interval_seconds = config.interval.as_secs(),
             "daily review delivery worker started"
         );
+    }
 
-        loop {
-            if shutdown.is_cancelled() {
-                return;
-            }
-
-            match self.run_once(Utc::now()).await {
-                Ok(result) => {
-                    if result.attempted > 0 && (result.delivered > 0 || result.failed > 0) {
-                        info!(
-                            attempted = result.attempted,
-                            delivered = result.delivered,
-                            skipped = result.skipped,
-                            failed = result.failed,
-                            "daily review delivery cycle completed"
-                        );
-                    }
-                }
-                Err(err) => {
-                    error!(error = %err, "daily review delivery cycle failed");
-                }
-            }
-
-            tokio::select! {
-                _ = tokio::time::sleep(self.config.interval) => {}
-                _ = shutdown.cancelled() => return,
-            }
+    fn log_cycle_complete(&self, outcome: &Self::Outcome) {
+        if outcome.attempted > 0 && (outcome.delivered > 0 || outcome.failed > 0) {
+            info!(
+                attempted = outcome.attempted,
+                delivered = outcome.delivered,
+                skipped = outcome.skipped,
+                failed = outcome.failed,
+                "daily review delivery cycle completed"
+            );
         }
+    }
+
+    async fn run_once(&self, _batch_size: u32) -> Result<Self::Outcome, Self::Error> {
+        self.run_once(Utc::now()).await
     }
 }
 
@@ -524,7 +545,7 @@ mod tests {
         assert!(sent[0].1.contains("generated review"));
 
         let review = daily_reviews
-            .find_by_user_and_date("7", date())
+            .find_by_user_and_date(date())
             .await
             .unwrap()
             .unwrap();
@@ -542,10 +563,10 @@ mod tests {
             .await
             .unwrap();
         daily_reviews
-            .upsert_completed("7", date(), "existing review", "model", "v1")
+            .upsert_completed(date(), "existing review", "model", "v1")
             .await
             .unwrap();
-        daily_reviews.mark_delivered("7", date()).await.unwrap();
+        daily_reviews.mark_delivered(date()).await.unwrap();
 
         let result = worker.run_once_for_date(date()).await.unwrap();
 
@@ -585,7 +606,7 @@ mod tests {
         assert_eq!(sender.sent().len(), 1);
 
         let review = daily_reviews
-            .find_by_user_and_date("7", date())
+            .find_by_user_and_date(date())
             .await
             .unwrap()
             .unwrap();
@@ -620,7 +641,7 @@ mod tests {
         assert_eq!(sender.sent().len(), 1);
 
         let review = daily_reviews
-            .find_by_user_and_date("7", date())
+            .find_by_user_and_date(date())
             .await
             .unwrap()
             .unwrap();
@@ -710,7 +731,7 @@ mod tests {
             .await
             .unwrap();
         daily_reviews
-            .upsert_completed("7", date(), "existing review", "model", "v1")
+            .upsert_completed(date(), "existing review", "model", "v1")
             .await
             .unwrap();
 
@@ -726,7 +747,7 @@ mod tests {
             }
         );
         let review = daily_reviews
-            .find_by_user_and_date("7", date())
+            .find_by_user_and_date(date())
             .await
             .unwrap()
             .unwrap();
@@ -765,7 +786,7 @@ mod tests {
         assert!(chat_ids.contains(&"42"));
         assert!(
             daily_reviews
-                .find_by_user_and_date("7", date())
+                .find_by_user_and_date(date())
                 .await
                 .unwrap()
                 .unwrap()
@@ -774,7 +795,7 @@ mod tests {
         );
         assert!(
             daily_reviews
-                .find_by_user_and_date("8", date())
+                .find_by_user_and_date(date())
                 .await
                 .unwrap()
                 .unwrap()
