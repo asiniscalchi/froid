@@ -11,3 +11,7 @@ pub mod service;
 pub mod status;
 pub mod store;
 pub mod week_review;
+
+#[cfg(test)]
+pub(crate) mod repository_tests;
+
