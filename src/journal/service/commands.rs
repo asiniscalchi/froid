@@ -203,7 +203,7 @@ impl JournalService {
         })
     }
 
-    async fn recent(&self, user_id: &str, limit: u32) -> Result<OutgoingMessage, sqlx::Error> {
+    async fn recent(&self, _user_id: &str, limit: u32) -> Result<OutgoingMessage, sqlx::Error> {
         let limit = limit.min(MAX_RECENT_LIMIT);
         let entries = self.repository.fetch_recent(limit).await?;
 
@@ -220,7 +220,7 @@ impl JournalService {
 
     async fn today(
         &self,
-        user_id: &str,
+        _user_id: &str,
         date: chrono::NaiveDate,
     ) -> Result<OutgoingMessage, sqlx::Error> {
         let entries = self.repository.fetch_today(date).await?;
@@ -238,7 +238,7 @@ impl JournalService {
 
     async fn stats(
         &self,
-        user_id: &str,
+        _user_id: &str,
         today: chrono::NaiveDate,
     ) -> Result<OutgoingMessage, sqlx::Error> {
         let stats = self.repository.stats(today).await?;

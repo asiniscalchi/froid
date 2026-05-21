@@ -540,7 +540,7 @@ mod tests {
         assert_eq!(candidates.len(), 1);
     }
 
-    async fn insert_daily_review_for(pool: &SqlitePool, user_id: &str, date: NaiveDate) -> i64 {
+    async fn insert_daily_review_for(pool: &SqlitePool, _user_id: &str, date: NaiveDate) -> i64 {
         let review_repo = DailyReviewRepository::new(pool.clone());
         review_repo
             .upsert_completed(date, "review text", "model", "v1")

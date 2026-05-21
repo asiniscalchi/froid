@@ -156,7 +156,7 @@ impl DailyReviewService {
 
     pub async fn fetch_review(
         &self,
-        user_id: &str,
+        _user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
         let review = self.daily_reviews.find_by_user_and_date(utc_date).await?;
@@ -170,7 +170,7 @@ impl DailyReviewService {
 
     async fn fetch_entries_with_extractions(
         &self,
-        user_id: &str,
+        _user_id: &str,
         date: NaiveDate,
     ) -> Result<Vec<JournalEntryWithExtraction>, DailyReviewServiceError> {
         let entries = self.journal_entries.fetch_today(date).await?;

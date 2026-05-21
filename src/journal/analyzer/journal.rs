@@ -63,7 +63,7 @@ fn map_storage_error(err: sqlx::Error) -> AnalyzerError {
 impl JournalReadService for DefaultJournalReadService {
     async fn get_recent(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: GetRecentRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_RECENT_LIMIT)?;
@@ -90,7 +90,7 @@ impl JournalReadService for DefaultJournalReadService {
 
     async fn search_text(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: SearchTextRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_TEXT_SEARCH_LIMIT)?;
@@ -141,7 +141,7 @@ impl JournalReadService for DefaultJournalReadService {
 
     async fn get_by_id(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         id: &str,
     ) -> Result<Option<JournalEntryView>, AnalyzerError> {
         let mut rows = self

@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use sqlx::{Row, SqlitePool};
 
-use super::entry::{JournalEntry, JournalStats, StoredJournalEntry};
+
 use super::repository::*;
 use crate::database;
 use crate::messages::{IncomingMessage, MessageSource};

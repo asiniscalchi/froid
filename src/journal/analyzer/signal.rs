@@ -64,7 +64,7 @@ fn normalize_label_contains(value: Option<String>) -> Result<Option<String>, Ana
 impl SignalReadService for DefaultSignalReadService {
     async fn search(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: SearchSignalsRequest,
     ) -> Result<Vec<SignalView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_SIGNAL_LIMIT)?;

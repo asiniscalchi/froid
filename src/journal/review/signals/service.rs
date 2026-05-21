@@ -220,7 +220,7 @@ impl DailyReviewSignalService {
 
     pub async fn fetch_signals(
         &self,
-        user_id: &str,
+        _user_id: &str,
         review_date: NaiveDate,
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalServiceError> {
         Ok(self.signals.find_by_user_and_date(review_date).await?)
@@ -228,7 +228,7 @@ impl DailyReviewSignalService {
 
     async fn fetch_entries_with_extractions(
         &self,
-        user_id: &str,
+        _user_id: &str,
         date: NaiveDate,
     ) -> Result<
         Vec<crate::journal::review::JournalEntryWithExtraction>,

@@ -68,7 +68,7 @@ fn map_weekly_error(err: WeeklyReviewRepositoryError) -> AnalyzerError {
 impl ReviewReadService for DefaultReviewReadService {
     async fn get_daily_reviews(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: GetReviewsRequest,
     ) -> Result<Vec<DailyReviewView>, AnalyzerError> {
         validate_range(request.from_date, request.to_date_exclusive)?;
@@ -91,7 +91,7 @@ impl ReviewReadService for DefaultReviewReadService {
 
     async fn get_weekly_reviews(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: GetReviewsRequest,
     ) -> Result<Vec<WeeklyReviewView>, AnalyzerError> {
         validate_range(request.from_date, request.to_date_exclusive)?;
@@ -115,7 +115,7 @@ impl ReviewReadService for DefaultReviewReadService {
 
     async fn get_daily_review(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         review_date: NaiveDate,
     ) -> Result<Option<DailyReviewView>, AnalyzerError> {
         let row = self
@@ -129,7 +129,7 @@ impl ReviewReadService for DefaultReviewReadService {
 
     async fn get_weekly_review(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         week_start: NaiveDate,
     ) -> Result<Option<WeeklyReviewView>, AnalyzerError> {
         let row = self

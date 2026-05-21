@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc, Weekday};
 use teloxide::{prelude::*, types::ChatId};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::workers::{
     ReconciliationWorker, config::ReconciliationWorkerConfig, reconciliation::ReconciliationCycle,
