@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import Prompts from './PromptsPanel'
 
@@ -139,6 +139,63 @@ describe('Prompts', () => {
         content: 'New body',
       })
       expect(await screen.findByRole('status')).toHaveTextContent(/saved/i)
+    })
+  })
+
+  describe('reset', () => {
+    it('sends DELETE after the user confirms the dialog', async () => {
+      const customizedList = [
+        { ...listResponse[0], is_customized: true, updated_at: '2026-05-21T09:00:00Z' },
+        listResponse[1],
+      ]
+      const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+        if (url === '/api/prompts' && (!init || init.method === undefined)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve(customizedList),
+          } as Response)
+        }
+        if (
+          url === '/api/prompts/daily_review' &&
+          (!init || init.method === undefined)
+        ) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve(
+                detailResponse({ is_customized: true, current_text: 'Custom' }),
+              ),
+          } as Response)
+        }
+        if (
+          url === '/api/prompts/daily_review' &&
+          init?.method === 'DELETE'
+        ) {
+          return Promise.resolve({ ok: true, status: 204 } as Response)
+        }
+        return Promise.reject(new Error(`unexpected ${url} ${init?.method}`))
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      render(<Prompts />)
+      await screen.findByTestId('prompt-editor')
+
+      await userEvent.click(
+        screen.getByRole('button', { name: /reset to default/i }),
+      )
+      const dialog = await screen.findByRole('dialog')
+      await userEvent.click(
+        within(dialog).getByRole('button', { name: /^reset$/i }),
+      )
+
+      await waitFor(() => {
+        const del = fetchMock.mock.calls.find(
+          ([, init]) => init?.method === 'DELETE',
+        )
+        expect(del).toBeDefined()
+      })
     })
   })
 })
