@@ -18,46 +18,46 @@ const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Unsupported message type";
 
 pub struct TelegramAdapter<H: MessageHandler> {
     bot_token: String,
-    allowed_user_id: Option<u64>,
+    allowed_user_ids: Option<Vec<u64>>,
     handler: H,
 }
 
 impl<H: MessageHandler> TelegramAdapter<H> {
-    pub fn new(bot_token: String, allowed_user_id: Option<u64>, handler: H) -> Self {
+    pub fn new(bot_token: String, allowed_user_ids: Option<Vec<u64>>, handler: H) -> Self {
         Self {
             bot_token,
-            allowed_user_id,
+            allowed_user_ids,
             handler,
         }
     }
 
     pub async fn run(self) {
         let bot = Bot::new(self.bot_token);
-        let allowed_user_id = self.allowed_user_id;
+        let allowed_user_ids = self.allowed_user_ids;
         let handler = self.handler;
 
-        match allowed_user_id {
-            Some(id) => {
+        match &allowed_user_ids {
+            Some(ids) => {
                 info!(
-                    allowed_user_id = id,
+                    allowed_user_ids = ?ids,
                     chat_scope = "private",
-                    "starting Telegram adapter"
+                    "starting Telegram adapter with whitelist"
                 );
             }
             None => {
                 info!(
-                    allowed_user_id = "all",
+                    allowed_user_ids = "all",
                     chat_scope = "private",
-                    "starting Telegram adapter"
+                    "starting Telegram adapter without whitelist"
                 );
             }
         }
 
         teloxide::repl(bot, move |bot: Bot, message: Message| {
             let handler = handler.clone();
-            let allowed_user_id = allowed_user_id;
+            let allowed_user_ids = allowed_user_ids.clone();
 
-            async move { handle_message(bot, message, allowed_user_id, handler).await }
+            async move { handle_message(bot, message, allowed_user_ids, handler).await }
         })
         .await;
     }
@@ -66,14 +66,14 @@ impl<H: MessageHandler> TelegramAdapter<H> {
 async fn handle_message<H: MessageHandler>(
     bot: Bot,
     message: Message,
-    allowed_user_id: Option<u64>,
+    allowed_user_ids: Option<Vec<u64>>,
     handler: H,
 ) -> ResponseResult<()> {
-    if !should_handle_message(&message, allowed_user_id) {
+    if !should_handle_message(&message, allowed_user_ids.as_deref()) {
         info!(
             chat_id = %message.chat.id,
             sender_user_id = message.from.as_ref().map(|user| user.id.0),
-            allowed_user_id,
+            ?allowed_user_ids,
             "ignored Telegram message outside configured private user scope"
         );
         return Ok(());
@@ -132,7 +132,7 @@ async fn handle_message<H: MessageHandler>(
     Ok(())
 }
 
-fn should_handle_message(message: &Message, allowed_user_id: Option<u64>) -> bool {
+fn should_handle_message(message: &Message, allowed_user_ids: Option<&[u64]>) -> bool {
     if !message.chat.is_private() {
         return false;
     }
@@ -141,7 +141,7 @@ fn should_handle_message(message: &Message, allowed_user_id: Option<u64>) -> boo
         return false;
     };
 
-    allowed_user_id.is_none_or(|id| sender.id.0 == id)
+    allowed_user_ids.map_or(true, |ids| ids.contains(&sender.id.0))
 }
 
 fn saved_reaction() -> ReactionType {
@@ -275,7 +275,7 @@ mod tests {
             "text": "hello froid"
         }));
 
-        assert!(should_handle_message(&message, Some(7)));
+        assert!(should_handle_message(&message, Some(&[7])));
     }
 
     #[test]
@@ -317,7 +317,7 @@ mod tests {
             "text": "hello froid"
         }));
 
-        assert!(!should_handle_message(&message, Some(7)));
+        assert!(!should_handle_message(&message, Some(&[7])));
     }
 
     #[test]
@@ -338,7 +338,7 @@ mod tests {
             "text": "hello froid"
         }));
 
-        assert!(!should_handle_message(&message, Some(7)));
+        assert!(!should_handle_message(&message, Some(&[7])));
         assert!(!should_handle_message(&message, None));
     }
 
@@ -355,7 +355,7 @@ mod tests {
             "text": "hello froid"
         }));
 
-        assert!(!should_handle_message(&message, Some(7)));
+        assert!(!should_handle_message(&message, Some(&[7])));
         assert!(!should_handle_message(&message, None));
     }
 

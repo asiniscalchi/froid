@@ -110,7 +110,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
 
     let adapter = TelegramAdapter::new(
         config.telegram_bot_token,
-        config.telegram_allowed_user_id,
+        config.telegram_allowed_user_ids,
         journal_registry,
     );
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
@@ -445,7 +445,7 @@ pub fn spawn_tenant_workers(
                 daily_review_service,
                 TelegramDailyReviewSender::new(
                     config.telegram_bot_token.clone(),
-                    config.telegram_allowed_user_id,
+                    config.telegram_allowed_user_ids.clone(),
                 ),
                 config.daily_review_delivery.clone(),
             );
@@ -471,7 +471,7 @@ pub fn spawn_tenant_workers(
                 weekly_review_service,
                 TelegramWeeklyReviewSender::new(
                     config.telegram_bot_token.clone(),
-                    config.telegram_allowed_user_id,
+                    config.telegram_allowed_user_ids.clone(),
                 ),
                 config.weekly_review_delivery.clone(),
             );

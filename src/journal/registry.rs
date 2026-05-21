@@ -30,8 +30,6 @@ pub struct JournalServiceRegistry {
     shutdown: CancellationToken,
 
     base_dir: PathBuf,
-    legacy_db_path: PathBuf,
-    allowed_user_id: Option<u64>,
 
     // Active connection caches
     services: Arc<RwLock<HashMap<String, JournalService>>>,
@@ -50,8 +48,6 @@ impl JournalServiceRegistry {
         shutdown: CancellationToken,
     ) -> Self {
         let base_dir = PathBuf::from("data").join("journals");
-        let legacy_db_path = PathBuf::from(&config.database_path);
-        let allowed_user_id = config.telegram_allowed_user_id;
 
         Self {
             config: Arc::new(config),
@@ -63,8 +59,6 @@ impl JournalServiceRegistry {
             delivery_configured,
             shutdown,
             base_dir,
-            legacy_db_path,
-            allowed_user_id,
             services: Arc::new(RwLock::new(HashMap::new())),
             spawned_workers: Arc::new(RwLock::new(HashSet::new())),
         }
@@ -93,15 +87,6 @@ impl JournalServiceRegistry {
             }
         }
 
-        // Also pre-register legacy database if allowed user is set and file exists
-        if let Some(allowed_user_id) = self.allowed_user_id {
-            if self.legacy_db_path.exists() {
-                let chat_id = allowed_user_id.to_string();
-                info!(chat_id, "discovered legacy database for allowed user; pre-registering");
-                let _ = self.get_or_create(&chat_id).await?;
-            }
-        }
-
         Ok(())
     }
 
@@ -124,16 +109,9 @@ impl JournalServiceRegistry {
 
         info!(chat_id, "initializing tenant database connection");
 
-        // Determine DB path: backward compatible legacy path or isolated path
-        let db_path = if let Some(allowed_id) = self.allowed_user_id 
-            && chat_id == allowed_id.to_string() 
-        {
-            self.legacy_db_path.clone()
-        } else {
-            // Ensure journals directory exists
-            tokio::fs::create_dir_all(&self.base_dir).await?;
-            self.base_dir.join(format!("user_{}.sqlite3", chat_id))
-        };
+        // Ensure journals directory exists
+        tokio::fs::create_dir_all(&self.base_dir).await?;
+        let db_path = self.base_dir.join(format!("user_{}.sqlite3", chat_id));
 
         let database_url = format!("sqlite:{}", db_path.display());
         let pool = database::connect_pool(&database_url).await?;

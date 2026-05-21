@@ -168,60 +168,46 @@ async fn test_multiuser_database_isolation_and_routing() {
 }
 
 #[tokio::test]
-async fn test_multiuser_legacy_compatibility() {
+async fn test_multiuser_whitelist_gatekeeping() {
+    use froid::workers::daily_review::{TelegramDailyReviewSender, DailyReviewSender, DailyReviewSendOutcome};
+    use froid::workers::weekly_review::{TelegramWeeklyReviewSender, WeeklyReviewSender, WeeklyReviewSendOutcome};
+
     let test_id = ulid::Ulid::new().to_string();
-    let temp_base_dir = std::env::temp_dir().join(format!("froid_test_legacy_{}", test_id));
+    let temp_base_dir = std::env::temp_dir().join(format!("froid_test_whitelist_{}", test_id));
     tokio::fs::create_dir_all(&temp_base_dir).await.unwrap();
 
-    let legacy_db_file = temp_base_dir.join("legacy_froid.sqlite3");
-
-    // Parse config with allowed user ID set to 99999
+    // Parse config with allowed user IDs set to 12345 and 67890
     let cli = Cli::try_parse_from([
         "froid",
         "--telegram-bot-token",
         "mock_token",
-        "--telegram-allowed-user-id",
-        "99999",
+        "--telegram-allowed-user-ids",
+        "12345,67890",
         "--data-dir",
         temp_base_dir.to_str().unwrap(),
-        "--database-file",
-        "legacy_froid.sqlite3",
     ])
     .unwrap();
 
     let config = cli.serve_config().unwrap();
+    assert_eq!(config.telegram_allowed_user_ids, Some(vec![12345, 67890]));
 
-    let registry = JournalServiceRegistry::new(
-        config,
-        None,
-        JournalEntryExtractionRuntimeConfig::from_env(),
-        DailyReviewRuntimeConfig::from_env(),
-        WeeklyReviewRuntimeConfig::from_env(),
-        DailyReviewSignalRuntimeConfig::from_env(),
-        false,
-        CancellationToken::new(),
-    )
-    .with_base_dir(temp_base_dir.clone());
+    // Construct daily review sender
+    let daily_sender = TelegramDailyReviewSender::new(
+        config.telegram_bot_token.clone(),
+        config.telegram_allowed_user_ids.clone(),
+    );
 
-    // When chat_id matches allowed_user_id "99999", it should route to the legacy database file path
-    let msg = IncomingMessage {
-        source: MessageSource::Telegram,
-        source_conversation_id: "99999".to_string(),
-        source_message_id: "msg_legacy".to_string(),
-        user_id: SINGLE_USER_ID.to_string(),
-        text: "This entry goes to the legacy file database.".to_string(),
-        received_at: chrono::Utc::now(),
-    };
+    // Delivery to non-whitelisted user "99999" must be Skipped (DailyReviewSendOutcome::Skipped)
+    let skipped_res = daily_sender.send_daily_review("99999", "test").await.unwrap();
+    assert_eq!(skipped_res, DailyReviewSendOutcome::Skipped);
 
-    let res = registry.process(&msg).await;
-    assert!(res.is_ok());
-
-    // Verify the entry was written to the legacy path
-    assert!(legacy_db_file.exists(), "Legacy database file should be created at {:?}", legacy_db_file);
-
-    // Verify it did NOT create the isolated tenant path
-    let isolated_path = temp_base_dir.join("user_99999.sqlite3");
-    assert!(!isolated_path.exists(), "Isolated database file user_99999.sqlite3 should NOT exist since allowed_user_id was mapped to legacy path");
+    // Let's also verify weekly review sender behaves the same
+    let weekly_sender = TelegramWeeklyReviewSender::new(
+        config.telegram_bot_token,
+        config.telegram_allowed_user_ids,
+    );
+    let skipped_weekly_res = weekly_sender.send_weekly_review("99999", "test").await.unwrap();
+    assert_eq!(skipped_weekly_res, WeeklyReviewSendOutcome::Skipped);
 
     // Clean up
     let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
