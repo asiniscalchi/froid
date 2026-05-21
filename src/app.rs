@@ -383,6 +383,7 @@ pub(crate) fn build_journal_service(
     Ok(journal_service)
 }
 
+#[allow(clippy::too_many_arguments, clippy::collapsible_if)]
 pub fn spawn_tenant_workers(
     pool: SqlitePool,
     config: Arc<ServeConfig>,

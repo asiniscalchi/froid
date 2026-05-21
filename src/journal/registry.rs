@@ -37,6 +37,7 @@ pub struct JournalServiceRegistry {
 }
 
 impl JournalServiceRegistry {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: ServeConfig,
         embedding_config: Option<EmbeddingConfig>,
