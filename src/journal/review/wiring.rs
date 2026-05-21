@@ -3,14 +3,17 @@ use std::env;
 use sqlx::SqlitePool;
 use tracing::warn;
 
-use crate::journal::{
-    extraction::repository::JournalEntryExtractionRepository,
-    repository::JournalRepository,
-    review::{
-        DailyReviewPromptConfig, ReviewConfig, RigOpenAiReviewGenerator,
-        repository::DailyReviewRepository, service::DailyReviewService,
+use crate::{
+    journal::{
+        extraction::repository::JournalEntryExtractionRepository,
+        repository::JournalRepository,
+        review::{
+            DailyReviewPromptConfig, ReviewConfig, RigOpenAiReviewGenerator,
+            repository::DailyReviewRepository, service::DailyReviewService,
+        },
+        service::JournalService,
     },
-    service::JournalService,
+    prompts::{PromptKey, PromptRepository, PromptSource},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +36,7 @@ impl DailyReviewRuntimeConfig {
 pub fn configure_daily_review(
     journal_service: JournalService,
     pool: SqlitePool,
+    prompt_repository: &PromptRepository,
     config: DailyReviewRuntimeConfig,
 ) -> Result<JournalService, Box<dyn std::error::Error>> {
     let prompt_version = config
@@ -42,7 +46,8 @@ pub fn configure_daily_review(
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    let Some(daily_review_service) = build_daily_review_service(pool, config)? else {
+    let Some(daily_review_service) = build_daily_review_service(pool, prompt_repository, config)?
+    else {
         return Ok(journal_service);
     };
 
@@ -53,6 +58,7 @@ pub fn configure_daily_review(
 
 pub fn build_daily_review_service(
     pool: SqlitePool,
+    prompt_repository: &PromptRepository,
     config: DailyReviewRuntimeConfig,
 ) -> Result<Option<DailyReviewService>, Box<dyn std::error::Error>> {
     let Some(openai_api_key) = config
@@ -64,11 +70,17 @@ pub fn build_daily_review_service(
     };
 
     let review_prompt = config.prompt.load()?;
+    let prompt_source = PromptSource::new(
+        prompt_repository.clone(),
+        PromptKey::DailyReview,
+        config.prompt.path.clone(),
+    );
     let review_generator = RigOpenAiReviewGenerator::from_optional_api_key(
         config.review,
         review_prompt,
         Some(openai_api_key),
-    )?;
+    )?
+    .with_prompt_source(prompt_source);
     let daily_review_service = DailyReviewService::new(
         DailyReviewRepository::new(pool.clone()),
         JournalRepository::new(pool.clone()),
@@ -103,9 +115,11 @@ mod tests {
     #[tokio::test]
     async fn missing_prompt_file_does_not_break_startup_without_review_api_key() {
         let pool = setup_pool().await;
+        let prompts = PromptRepository::new(pool.clone());
         let service = configure_daily_review(
             JournalService::new(JournalRepository::new(pool.clone())),
             pool,
+            &prompts,
             DailyReviewRuntimeConfig {
                 openai_api_key: None,
                 review: ReviewConfig::default(),
@@ -136,9 +150,11 @@ mod tests {
     #[tokio::test]
     async fn missing_prompt_file_fails_startup_when_review_api_key_is_configured() {
         let pool = setup_pool().await;
+        let prompts = PromptRepository::new(pool.clone());
         let error = configure_daily_review(
             JournalService::new(JournalRepository::new(pool.clone())),
             pool,
+            &prompts,
             DailyReviewRuntimeConfig {
                 openai_api_key: Some("test-api-key".to_string()),
                 review: ReviewConfig::default(),
@@ -160,9 +176,11 @@ mod tests {
     #[tokio::test]
     async fn default_prompt_file_allows_startup_when_review_api_key_is_configured() {
         let pool = setup_pool().await;
+        let prompts = PromptRepository::new(pool.clone());
         configure_daily_review(
             JournalService::new(JournalRepository::new(pool.clone())),
             pool,
+            &prompts,
             DailyReviewRuntimeConfig {
                 openai_api_key: Some("test-api-key".to_string()),
                 review: ReviewConfig::default(),
@@ -179,10 +197,12 @@ mod tests {
         let prompt_path = temp_prompt_path("configured-path");
         fs::write(&prompt_path, "Prompt text").unwrap();
         let pool = setup_pool().await;
+        let prompts = PromptRepository::new(pool.clone());
 
         let service = configure_daily_review(
             JournalService::new(JournalRepository::new(pool.clone())),
             pool,
+            &prompts,
             DailyReviewRuntimeConfig {
                 openai_api_key: Some("test-api-key".to_string()),
                 review: ReviewConfig::default(),
@@ -226,10 +246,12 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let pool = setup_pool().await;
+        let prompts = PromptRepository::new(pool.clone());
 
         let service = configure_daily_review(
             JournalService::new(JournalRepository::new(pool.clone())),
             pool,
+            &prompts,
             DailyReviewRuntimeConfig {
                 openai_api_key: Some("test-api-key".to_string()),
                 review: ReviewConfig::default(),

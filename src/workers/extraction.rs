@@ -122,8 +122,8 @@ mod tests {
             "test-extraction-model"
         }
 
-        fn prompt_version(&self) -> &str {
-            "entry_extraction_v1"
+        fn prompt_version(&self) -> String {
+            "entry_extraction_v1".to_string()
         }
 
         async fn extract_entry(

@@ -43,9 +43,7 @@ impl PromptKey {
     /// Default on-disk path for the bundled prompt file.
     pub fn default_path(self) -> PathBuf {
         let relative = match self {
-            PromptKey::DailyReview => {
-                crate::journal::review::prompt::DEFAULT_REVIEW_PROMPT_PATH
-            }
+            PromptKey::DailyReview => crate::journal::review::prompt::DEFAULT_REVIEW_PROMPT_PATH,
             PromptKey::SignalExtraction => {
                 crate::journal::review::signals::prompt::DEFAULT_SIGNAL_EXTRACTION_PROMPT_PATH
             }
@@ -59,7 +57,7 @@ impl PromptKey {
         PathBuf::from(relative)
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|key| key.as_str() == value)
     }
 }
@@ -90,13 +88,13 @@ mod tests {
     #[test]
     fn keys_round_trip_through_str() {
         for key in PromptKey::ALL {
-            assert_eq!(PromptKey::from_str(key.as_str()), Some(key));
+            assert_eq!(PromptKey::parse(key.as_str()), Some(key));
         }
     }
 
     #[test]
     fn unknown_key_returns_none() {
-        assert_eq!(PromptKey::from_str("nope"), None);
+        assert_eq!(PromptKey::parse("nope"), None);
     }
 
     #[test]

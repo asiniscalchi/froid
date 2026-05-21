@@ -1,4 +1,9 @@
-use std::{env, error::Error, fmt, sync::Arc};
+use std::{
+    env,
+    error::Error,
+    fmt,
+    sync::{Arc, RwLock},
+};
 
 use async_trait::async_trait;
 use rig::{
@@ -6,8 +11,9 @@ use rig::{
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::review::{
-    JournalEntryWithExtraction, signals::types::DailyReviewSignalsOutput,
+use crate::{
+    journal::review::{JournalEntryWithExtraction, signals::types::DailyReviewSignalsOutput},
+    prompts::{PromptSource, ResolvedPrompt},
 };
 
 use super::prompt::DailyReviewSignalPrompt;
@@ -66,7 +72,7 @@ impl Error for DailyReviewSignalGenerationError {}
 #[async_trait]
 pub trait DailyReviewSignalGenerator: Send + Sync {
     fn model(&self) -> &str;
-    fn prompt_version(&self) -> &str;
+    fn prompt_version(&self) -> String;
 
     async fn generate_signals(
         &self,
@@ -155,7 +161,8 @@ impl SignalProvider for RigOpenAiSignalProvider {
 #[derive(Clone)]
 pub struct RigOpenAiDailyReviewSignalGenerator {
     config: DailyReviewSignalConfig,
-    prompt: DailyReviewSignalPrompt,
+    prompt: Arc<RwLock<ResolvedPrompt>>,
+    prompt_source: Option<PromptSource>,
     provider: Arc<dyn SignalProvider>,
 }
 
@@ -172,9 +179,18 @@ impl RigOpenAiDailyReviewSignalGenerator {
 
         Ok(Self {
             config,
-            prompt,
+            prompt: Arc::new(RwLock::new(ResolvedPrompt {
+                version: prompt.version,
+                text: prompt.text,
+            })),
+            prompt_source: None,
             provider: Arc::new(provider),
         })
+    }
+
+    pub fn with_prompt_source(mut self, source: PromptSource) -> Self {
+        self.prompt_source = Some(source);
+        self
     }
 
     #[cfg(test)]
@@ -188,9 +204,25 @@ impl RigOpenAiDailyReviewSignalGenerator {
     {
         Self {
             config,
-            prompt,
+            prompt: Arc::new(RwLock::new(ResolvedPrompt {
+                version: prompt.version,
+                text: prompt.text,
+            })),
+            prompt_source: None,
             provider: Arc::new(provider),
         }
+    }
+
+    async fn refresh_prompt(&self) -> Result<(), DailyReviewSignalGenerationError> {
+        let Some(source) = self.prompt_source.as_ref() else {
+            return Ok(());
+        };
+        let resolved = source
+            .resolve()
+            .await
+            .map_err(|error| DailyReviewSignalGenerationError::new(error.to_string()))?;
+        *self.prompt.write().unwrap() = resolved;
+        Ok(())
     }
 }
 
@@ -200,8 +232,8 @@ impl DailyReviewSignalGenerator for RigOpenAiDailyReviewSignalGenerator {
         &self.config.model
     }
 
-    fn prompt_version(&self) -> &str {
-        &self.prompt.version
+    fn prompt_version(&self) -> String {
+        self.prompt.read().unwrap().version.clone()
     }
 
     async fn generate_signals(
@@ -209,9 +241,11 @@ impl DailyReviewSignalGenerator for RigOpenAiDailyReviewSignalGenerator {
         review_text: &str,
         entries: &[JournalEntryWithExtraction],
     ) -> Result<DailyReviewSignalsOutput, DailyReviewSignalGenerationError> {
+        self.refresh_prompt().await?;
         let prompt = build_signal_extraction_prompt(review_text, entries);
+        let instructions = self.prompt.read().unwrap().text.clone();
         self.provider
-            .complete_signal_extraction(&self.config.model, &self.prompt.text, &prompt)
+            .complete_signal_extraction(&self.config.model, &instructions, &prompt)
             .await
             .map_err(|error| DailyReviewSignalGenerationError::new(error.to_string()))
     }
@@ -308,8 +342,8 @@ pub mod fake {
             &self.model
         }
 
-        fn prompt_version(&self) -> &str {
-            &self.prompt_version
+        fn prompt_version(&self) -> String {
+            self.prompt_version.clone()
         }
 
         async fn generate_signals(

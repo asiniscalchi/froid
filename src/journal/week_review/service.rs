@@ -178,10 +178,10 @@ impl WeeklyReviewService {
         let input = WeeklyReviewInput { week_start, days };
 
         let model = self.generator.model();
-        let prompt_version = self.generator.prompt_version();
 
         match self.generator.generate_weekly_review(&input).await {
             Ok(review_text) => {
+                let prompt_version = self.generator.prompt_version();
                 let trimmed = review_text.trim();
                 if trimmed.is_empty() {
                     return self
@@ -189,7 +189,7 @@ impl WeeklyReviewService {
                             user_id,
                             week_start,
                             model,
-                            prompt_version,
+                            &prompt_version,
                             EMPTY_REVIEW_ERROR,
                         )
                         .await;
@@ -208,15 +208,16 @@ impl WeeklyReviewService {
                         week_start,
                         trimmed,
                         model,
-                        prompt_version,
+                        &prompt_version,
                         &inputs_snapshot,
                     )
                     .await?;
                 Ok(WeeklyReviewResult::Generated(review))
             }
             Err(error) => {
+                let prompt_version = self.generator.prompt_version();
                 let message = error.to_string();
-                self.store_failed(user_id, week_start, model, prompt_version, &message)
+                self.store_failed(user_id, week_start, model, &prompt_version, &message)
                     .await
             }
         }

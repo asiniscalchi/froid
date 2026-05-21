@@ -51,13 +51,13 @@ impl PromptSource {
             }
         })?;
 
-        if let Some(row) = customized {
-            if !row.content.trim().is_empty() {
-                return Ok(ResolvedPrompt {
-                    version: version_for(&self.default_path, true),
-                    text: row.content,
-                });
-            }
+        if let Some(row) = customized
+            && !row.content.trim().is_empty()
+        {
+            return Ok(ResolvedPrompt {
+                version: version_for(&self.default_path, true),
+                text: row.content,
+            });
         }
 
         load_default(self.key, &self.default_path)
@@ -182,10 +182,7 @@ mod tests {
 
         let resolved = source.resolve().await.unwrap();
 
-        let expected_version = format!(
-            "{}-custom",
-            path.file_stem().unwrap().to_string_lossy()
-        );
+        let expected_version = format!("{}-custom", path.file_stem().unwrap().to_string_lossy());
         assert_eq!(resolved.version, expected_version);
         assert_eq!(resolved.text, "Custom body.");
 

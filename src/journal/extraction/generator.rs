@@ -1,4 +1,9 @@
-use std::{env, error::Error, fmt, sync::Arc};
+use std::{
+    env,
+    error::Error,
+    fmt,
+    sync::{Arc, RwLock},
+};
 
 use async_trait::async_trait;
 use rig::{
@@ -6,7 +11,10 @@ use rig::{
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::extraction::{JournalEntryExtractionPrompt, JournalEntryExtractionResult};
+use crate::{
+    journal::extraction::{JournalEntryExtractionPrompt, JournalEntryExtractionResult},
+    prompts::{PromptSource, ResolvedPrompt},
+};
 
 pub const DEFAULT_JOURNAL_ENTRY_EXTRACTION_MODEL: &str = GPT_5_MINI;
 
@@ -62,7 +70,7 @@ impl Error for JournalEntryExtractionGenerationError {}
 #[async_trait]
 pub trait JournalEntryExtractionGenerator: Send + Sync {
     fn model(&self) -> &str;
-    fn prompt_version(&self) -> &str;
+    fn prompt_version(&self) -> String;
 
     async fn generate_entry_extraction(
         &self,
@@ -151,7 +159,8 @@ impl JournalEntryExtractionProvider for RigOpenAiJournalEntryExtractionProvider 
 #[derive(Clone)]
 pub struct RigOpenAiJournalEntryExtractionGenerator {
     config: JournalEntryExtractionConfig,
-    prompt: JournalEntryExtractionPrompt,
+    prompt: Arc<RwLock<ResolvedPrompt>>,
+    prompt_source: Option<PromptSource>,
     provider: Arc<dyn JournalEntryExtractionProvider>,
 }
 
@@ -168,9 +177,18 @@ impl RigOpenAiJournalEntryExtractionGenerator {
 
         Ok(Self {
             config,
-            prompt,
+            prompt: Arc::new(RwLock::new(ResolvedPrompt {
+                version: prompt.version,
+                text: prompt.text,
+            })),
+            prompt_source: None,
             provider: Arc::new(provider),
         })
+    }
+
+    pub fn with_prompt_source(mut self, source: PromptSource) -> Self {
+        self.prompt_source = Some(source);
+        self
     }
 
     #[cfg(test)]
@@ -184,9 +202,25 @@ impl RigOpenAiJournalEntryExtractionGenerator {
     {
         Self {
             config,
-            prompt,
+            prompt: Arc::new(RwLock::new(ResolvedPrompt {
+                version: prompt.version,
+                text: prompt.text,
+            })),
+            prompt_source: None,
             provider: Arc::new(provider),
         }
+    }
+
+    async fn refresh_prompt(&self) -> Result<(), JournalEntryExtractionGenerationError> {
+        let Some(source) = self.prompt_source.as_ref() else {
+            return Ok(());
+        };
+        let resolved = source
+            .resolve()
+            .await
+            .map_err(|error| JournalEntryExtractionGenerationError::new(error.to_string()))?;
+        *self.prompt.write().unwrap() = resolved;
+        Ok(())
     }
 }
 
@@ -196,17 +230,19 @@ impl JournalEntryExtractionGenerator for RigOpenAiJournalEntryExtractionGenerato
         &self.config.model
     }
 
-    fn prompt_version(&self) -> &str {
-        &self.prompt.version
+    fn prompt_version(&self) -> String {
+        self.prompt.read().unwrap().version.clone()
     }
 
     async fn generate_entry_extraction(
         &self,
         note: &str,
     ) -> Result<JournalEntryExtractionResult, JournalEntryExtractionGenerationError> {
+        self.refresh_prompt().await?;
         let prompt = build_entry_extraction_prompt(note);
+        let instructions = self.prompt.read().unwrap().text.clone();
         self.provider
-            .complete_entry_extraction(&self.config.model, &self.prompt.text, &prompt)
+            .complete_entry_extraction(&self.config.model, &instructions, &prompt)
             .await
             .map_err(|error| JournalEntryExtractionGenerationError::new(error.to_string()))
     }

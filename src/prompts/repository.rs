@@ -141,7 +141,10 @@ mod tests {
 
         let rows = repo.list_all().await.unwrap();
         let keys: Vec<_> = rows.iter().map(|r| r.prompt_key.as_str()).collect();
-        assert_eq!(keys, vec!["daily_review", "entry_extraction", "weekly_review"]);
+        assert_eq!(
+            keys,
+            vec!["daily_review", "entry_extraction", "weekly_review"]
+        );
     }
 
     #[tokio::test]

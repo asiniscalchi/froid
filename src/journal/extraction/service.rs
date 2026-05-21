@@ -33,7 +33,7 @@ impl From<JournalEntryExtractionRepositoryError> for JournalEntryExtractionServi
 #[async_trait]
 pub trait JournalEntryExtractionRunner: Send + Sync {
     fn model(&self) -> &str;
-    fn prompt_version(&self) -> &str;
+    fn prompt_version(&self) -> String;
 
     async fn extract_entry(
         &self,
@@ -66,7 +66,7 @@ where
         self.generator.model()
     }
 
-    fn prompt_version(&self) -> &str {
+    fn prompt_version(&self) -> String {
         self.generator.prompt_version()
     }
 
@@ -75,13 +75,10 @@ where
         journal_entry_id: &str,
         text: &str,
     ) -> Result<(), JournalEntryExtractionServiceError> {
+        let prompt_version = self.generator.prompt_version();
         let inserted = self
             .repository
-            .insert_pending_if_absent(
-                journal_entry_id,
-                self.generator.model(),
-                self.generator.prompt_version(),
-            )
+            .insert_pending_if_absent(journal_entry_id, self.generator.model(), &prompt_version)
             .await?;
 
         if !inserted {
@@ -105,12 +102,13 @@ where
 
                 match validate_extraction_json(&raw_json) {
                     Ok(valid_json) => {
+                        let completed_version = self.generator.prompt_version();
                         self.repository
                             .mark_completed(
                                 journal_entry_id,
                                 &valid_json,
                                 self.generator.model(),
-                                self.generator.prompt_version(),
+                                &completed_version,
                             )
                             .await?;
                         info!(
@@ -152,11 +150,12 @@ where
         journal_entry_id: &str,
         error: impl std::fmt::Display,
     ) -> Result<(), JournalEntryExtractionServiceError> {
+        let failed_version = self.generator.prompt_version();
         self.repository
             .mark_failed(
                 journal_entry_id,
                 self.generator.model(),
-                self.generator.prompt_version(),
+                &failed_version,
                 &error.to_string(),
             )
             .await?;
@@ -220,8 +219,8 @@ mod tests {
             "test-extraction-model"
         }
 
-        fn prompt_version(&self) -> &str {
-            "entry_extraction_v1"
+        fn prompt_version(&self) -> String {
+            "entry_extraction_v1".to_string()
         }
 
         async fn generate_entry_extraction(
