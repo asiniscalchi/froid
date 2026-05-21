@@ -47,7 +47,10 @@ impl JournalServiceRegistry {
         delivery_configured: bool,
         shutdown: CancellationToken,
     ) -> Self {
-        let base_dir = PathBuf::from("data").join("journals");
+        let data_dir = std::path::Path::new(&config.database_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("data"));
+        let base_dir = data_dir.join("journals");
 
         Self {
             config: Arc::new(config),

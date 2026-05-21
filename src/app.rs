@@ -65,9 +65,37 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         "starting service"
     );
 
-    // Legacy / Admin pool used by HTTP server (MCP & Dashboard)
-    let pool = database::connect_pool(&config.database_url).await?;
-    sqlx::migrate!().run(&pool).await?;
+    // Determine the database to use for the single-user HTTP server (MCP and Dashboard).
+    // In multiuser mode with whitelisted Telegram user IDs, the administrative user
+    // is the first ID in the whitelist, and we use their isolated database so they can
+    // query their live journal. Otherwise, we fallback to the default/legacy database.
+    let pool = if let Some(ref ids) = config.telegram_allowed_user_ids {
+        if let Some(first_id) = ids.first() {
+            let data_dir = std::path::Path::new(&config.database_path)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("data"));
+            let base_dir = data_dir.join("journals");
+            let db_path = base_dir.join(format!("user_{}.sqlite3", first_id));
+            let database_url = format!("sqlite:{}", db_path.display());
+            info!(
+                chat_id = %first_id,
+                path = %db_path.display(),
+                "HTTP server (MCP & Dashboard) running in multiuser mode; binding to first whitelisted user's database"
+            );
+            tokio::fs::create_dir_all(&base_dir).await?;
+            let pool = database::connect_pool(&database_url).await?;
+            sqlx::migrate!().run(&pool).await?;
+            pool
+        } else {
+            let pool = database::connect_pool(&config.database_url).await?;
+            sqlx::migrate!().run(&pool).await?;
+            pool
+        }
+    } else {
+        let pool = database::connect_pool(&config.database_url).await?;
+        sqlx::migrate!().run(&pool).await?;
+        pool
+    };
 
     let embedding_config = Some(EmbeddingConfig::from_env());
     let daily_review_config = DailyReviewRuntimeConfig::from_env();
