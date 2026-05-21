@@ -114,7 +114,7 @@ impl DailyReviewSignalService {
         self.generator.model()
     }
 
-    pub fn prompt_version(&self) -> &str {
+    pub fn prompt_version(&self) -> String {
         self.generator.prompt_version()
     }
 
@@ -141,12 +141,9 @@ impl DailyReviewSignalService {
             _ => return Ok(DailyReviewSignalResult::NoDailyReview),
         };
 
+        let pending_prompt_version = self.generator.prompt_version();
         self.daily_reviews
-            .mark_signals_pending(
-                review.id,
-                self.generator.model(),
-                self.generator.prompt_version(),
-            )
+            .mark_signals_pending(review.id, self.generator.model(), &pending_prompt_version)
             .await?;
 
         let entries = self
@@ -189,6 +186,7 @@ impl DailyReviewSignalService {
             }
         }
 
+        let completed_prompt_version = self.generator.prompt_version();
         let stored = self
             .signals
             .replace_in_transaction(
@@ -197,7 +195,7 @@ impl DailyReviewSignalService {
                 review_date,
                 &valid_candidates,
                 self.generator.model(),
-                self.generator.prompt_version(),
+                &completed_prompt_version,
             )
             .await;
 

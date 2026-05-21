@@ -41,6 +41,7 @@ use crate::{
             WeeklyReviewRuntimeConfig, build_weekly_review_service, configure_weekly_review,
         },
     },
+    prompts::{PromptKey, PromptRepository, PromptSource},
     version,
     workers::{
         ReconciliationWorker,
@@ -73,6 +74,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let weekly_review_config = WeeklyReviewRuntimeConfig::from_env();
     let entry_extraction_config = JournalEntryExtractionRuntimeConfig::from_env();
     let signal_runtime_config = DailyReviewSignalRuntimeConfig::from_env();
+    let prompt_repository = PromptRepository::new(pool.clone());
 
     let shutdown = CancellationToken::new();
     let mut workers: JoinSet<&'static str> = JoinSet::new();
@@ -96,6 +98,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &shutdown,
         &pool,
         &config,
+        &prompt_repository,
         &entry_extraction_config,
     )?;
     let delivery_configured = spawn_daily_review_delivery_worker(
@@ -103,6 +106,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &shutdown,
         &pool,
         &config,
+        &prompt_repository,
         daily_review_config.clone(),
     )?;
     spawn_weekly_review_delivery_worker(
@@ -110,6 +114,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &shutdown,
         &pool,
         &config,
+        &prompt_repository,
         weekly_review_config.clone(),
     )?;
     spawn_signal_worker(
@@ -117,6 +122,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &shutdown,
         &pool,
         &config,
+        &prompt_repository,
         signal_runtime_config,
     )?;
     spawn_http_server(
@@ -129,6 +135,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     .await?;
     let journal_service = build_journal_service(
         pool,
+        &prompt_repository,
         embedding_config,
         entry_extraction_config,
         daily_review_config,
@@ -192,7 +199,10 @@ async fn spawn_http_server(
     }
 
     if config.dashboard.enabled {
-        router = router.merge(dashboard::router(JournalRepository::new(pool.clone())));
+        router = router.merge(dashboard::router(
+            JournalRepository::new(pool.clone()),
+            PromptRepository::new(pool.clone()),
+        ));
     }
 
     let listener = tokio::net::TcpListener::bind(config.mcp_server.bind).await?;
@@ -368,6 +378,7 @@ fn spawn_extraction_worker(
     shutdown: &CancellationToken,
     pool: &SqlitePool,
     config: &ServeConfig,
+    prompt_repository: &PromptRepository,
     entry_extraction_config: &JournalEntryExtractionRuntimeConfig,
 ) -> Result<(), Box<dyn Error>> {
     if !config.extraction_worker.enabled {
@@ -384,11 +395,17 @@ fn spawn_extraction_worker(
     };
 
     let prompt = entry_extraction_config.prompt.load()?;
+    let prompt_source = PromptSource::new(
+        prompt_repository.clone(),
+        PromptKey::EntryExtraction,
+        entry_extraction_config.prompt.path.clone(),
+    );
     let generator = crate::journal::extraction::RigOpenAiJournalEntryExtractionGenerator::from_optional_api_key(
         entry_extraction_config.extraction.clone(),
         prompt,
         Some(openai_api_key.clone()),
-    )?;
+    )?
+    .with_prompt_source(prompt_source);
     let repository = JournalEntryExtractionRepository::new(pool.clone());
     let runner = JournalEntryExtractionService::new(repository.clone(), generator);
     let backfill = ExtractionBackfillService::new(repository, runner);
@@ -410,13 +427,15 @@ fn spawn_daily_review_delivery_worker(
     shutdown: &CancellationToken,
     pool: &SqlitePool,
     config: &ServeConfig,
+    prompt_repository: &PromptRepository,
     daily_review_config: DailyReviewRuntimeConfig,
 ) -> Result<bool, Box<dyn Error>> {
     if !config.daily_review_delivery.enabled {
         return Ok(false);
     }
 
-    let Some(daily_review_service) = build_daily_review_service(pool.clone(), daily_review_config)?
+    let Some(daily_review_service) =
+        build_daily_review_service(pool.clone(), prompt_repository, daily_review_config)?
     else {
         return Ok(false);
     };
@@ -445,6 +464,7 @@ fn spawn_weekly_review_delivery_worker(
     shutdown: &CancellationToken,
     pool: &SqlitePool,
     config: &ServeConfig,
+    prompt_repository: &PromptRepository,
     weekly_review_config: WeeklyReviewRuntimeConfig,
 ) -> Result<(), Box<dyn Error>> {
     if !config.weekly_review_delivery.enabled {
@@ -452,7 +472,7 @@ fn spawn_weekly_review_delivery_worker(
     }
 
     let Some(weekly_review_service) =
-        build_weekly_review_service(pool.clone(), weekly_review_config)?
+        build_weekly_review_service(pool.clone(), prompt_repository, weekly_review_config)?
     else {
         return Ok(());
     };
@@ -481,13 +501,15 @@ fn spawn_signal_worker(
     shutdown: &CancellationToken,
     pool: &SqlitePool,
     config: &ServeConfig,
+    prompt_repository: &PromptRepository,
     signal_config: DailyReviewSignalRuntimeConfig,
 ) -> Result<(), Box<dyn Error>> {
     if !config.signal_worker.enabled {
         return Ok(());
     }
 
-    let Some(service) = build_signal_service(pool.clone(), signal_config)? else {
+    let Some(service) = build_signal_service(pool.clone(), prompt_repository, signal_config)?
+    else {
         warn!("signal reconciliation worker is enabled but OPENAI_API_KEY is not configured");
         return Ok(());
     };
@@ -511,6 +533,7 @@ fn spawn_signal_worker(
 
 fn build_journal_service(
     pool: SqlitePool,
+    prompt_repository: &PromptRepository,
     embedding_config: Option<EmbeddingConfig>,
     entry_extraction_config: JournalEntryExtractionRuntimeConfig,
     daily_review_config: DailyReviewRuntimeConfig,
@@ -519,12 +542,26 @@ fn build_journal_service(
 ) -> Result<JournalService, Box<dyn Error>> {
     let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
 
-    journal_service =
-        configure_journal_entry_extraction(journal_service, pool.clone(), entry_extraction_config)?;
+    journal_service = configure_journal_entry_extraction(
+        journal_service,
+        pool.clone(),
+        prompt_repository,
+        entry_extraction_config,
+    )?;
 
-    journal_service = configure_daily_review(journal_service, pool.clone(), daily_review_config)?;
+    journal_service = configure_daily_review(
+        journal_service,
+        pool.clone(),
+        prompt_repository,
+        daily_review_config,
+    )?;
 
-    journal_service = configure_weekly_review(journal_service, pool.clone(), weekly_review_config)?;
+    journal_service = configure_weekly_review(
+        journal_service,
+        pool.clone(),
+        prompt_repository,
+        weekly_review_config,
+    )?;
 
     if delivery_configured {
         journal_service = journal_service.with_daily_review_delivery_configured();

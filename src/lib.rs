@@ -6,5 +6,6 @@ pub mod database;
 pub mod handler;
 pub mod journal;
 pub mod messages;
+pub mod prompts;
 pub mod version;
 pub mod workers;

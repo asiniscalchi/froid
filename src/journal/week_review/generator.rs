@@ -1,4 +1,9 @@
-use std::{env, error::Error, fmt, sync::Arc};
+use std::{
+    env,
+    error::Error,
+    fmt,
+    sync::{Arc, RwLock},
+};
 
 use async_trait::async_trait;
 use rig::{
@@ -7,7 +12,10 @@ use rig::{
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
 
-use crate::journal::review::signals::types::DailyReviewSignal;
+use crate::{
+    journal::review::signals::types::DailyReviewSignal,
+    prompts::{PromptSource, ResolvedPrompt},
+};
 
 use super::{DailyReviewSlice, WeeklyReviewInput, prompt::WeeklyReviewPrompt};
 
@@ -65,7 +73,7 @@ impl Error for WeeklyReviewGenerationError {}
 #[async_trait]
 pub trait WeeklyReviewGenerator: Send + Sync {
     fn model(&self) -> &str;
-    fn prompt_version(&self) -> &str;
+    fn prompt_version(&self) -> String;
 
     async fn generate_weekly_review(
         &self,
@@ -153,7 +161,8 @@ impl WeeklyReviewProvider for RigOpenAiWeeklyReviewProvider {
 #[derive(Clone)]
 pub struct RigOpenAiWeeklyReviewGenerator {
     config: WeeklyReviewConfig,
-    prompt: WeeklyReviewPrompt,
+    prompt: Arc<RwLock<ResolvedPrompt>>,
+    prompt_source: Option<PromptSource>,
     provider: Arc<dyn WeeklyReviewProvider>,
 }
 
@@ -170,9 +179,18 @@ impl RigOpenAiWeeklyReviewGenerator {
 
         Ok(Self {
             config,
-            prompt,
+            prompt: Arc::new(RwLock::new(ResolvedPrompt {
+                version: prompt.version,
+                text: prompt.text,
+            })),
+            prompt_source: None,
             provider: Arc::new(provider),
         })
+    }
+
+    pub fn with_prompt_source(mut self, source: PromptSource) -> Self {
+        self.prompt_source = Some(source);
+        self
     }
 
     #[cfg(test)]
@@ -186,9 +204,25 @@ impl RigOpenAiWeeklyReviewGenerator {
     {
         Self {
             config,
-            prompt,
+            prompt: Arc::new(RwLock::new(ResolvedPrompt {
+                version: prompt.version,
+                text: prompt.text,
+            })),
+            prompt_source: None,
             provider: Arc::new(provider),
         }
+    }
+
+    async fn refresh_prompt(&self) -> Result<(), WeeklyReviewGenerationError> {
+        let Some(source) = self.prompt_source.as_ref() else {
+            return Ok(());
+        };
+        let resolved = source
+            .resolve()
+            .await
+            .map_err(|error| WeeklyReviewGenerationError::new(error.to_string()))?;
+        *self.prompt.write().unwrap() = resolved;
+        Ok(())
     }
 }
 
@@ -198,17 +232,19 @@ impl WeeklyReviewGenerator for RigOpenAiWeeklyReviewGenerator {
         &self.config.model
     }
 
-    fn prompt_version(&self) -> &str {
-        &self.prompt.version
+    fn prompt_version(&self) -> String {
+        self.prompt.read().unwrap().version.clone()
     }
 
     async fn generate_weekly_review(
         &self,
         input: &WeeklyReviewInput,
     ) -> Result<String, WeeklyReviewGenerationError> {
+        self.refresh_prompt().await?;
         let prompt = build_weekly_review_prompt(input);
+        let instructions = self.prompt.read().unwrap().text.clone();
         self.provider
-            .complete_weekly_review(&self.config.model, &self.prompt.text, &prompt)
+            .complete_weekly_review(&self.config.model, &instructions, &prompt)
             .await
             .map_err(|error| WeeklyReviewGenerationError::new(error.to_string()))
     }
@@ -363,8 +399,8 @@ pub mod fake {
             &self.model
         }
 
-        fn prompt_version(&self) -> &str {
-            &self.prompt_version
+        fn prompt_version(&self) -> String {
+            self.prompt_version.clone()
         }
 
         async fn generate_weekly_review(

@@ -2,18 +2,21 @@ use std::env;
 
 use sqlx::SqlitePool;
 
-use crate::journal::{
-    extraction::repository::JournalEntryExtractionRepository,
-    repository::JournalRepository,
-    review::{
-        repository::DailyReviewRepository,
-        signals::{
-            generator::{DailyReviewSignalConfig, RigOpenAiDailyReviewSignalGenerator},
-            prompt::DailyReviewSignalPromptConfig,
-            repository::DailyReviewSignalRepository,
-            service::DailyReviewSignalService,
+use crate::{
+    journal::{
+        extraction::repository::JournalEntryExtractionRepository,
+        repository::JournalRepository,
+        review::{
+            repository::DailyReviewRepository,
+            signals::{
+                generator::{DailyReviewSignalConfig, RigOpenAiDailyReviewSignalGenerator},
+                prompt::DailyReviewSignalPromptConfig,
+                repository::DailyReviewSignalRepository,
+                service::DailyReviewSignalService,
+            },
         },
     },
+    prompts::{PromptKey, PromptRepository, PromptSource},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +38,7 @@ impl DailyReviewSignalRuntimeConfig {
 
 pub fn build_signal_service(
     pool: SqlitePool,
+    prompt_repository: &PromptRepository,
     config: DailyReviewSignalRuntimeConfig,
 ) -> Result<Option<DailyReviewSignalService>, Box<dyn std::error::Error>> {
     let Some(openai_api_key) = config
@@ -45,11 +49,17 @@ pub fn build_signal_service(
     };
 
     let prompt = config.prompt.load()?;
+    let prompt_source = PromptSource::new(
+        prompt_repository.clone(),
+        PromptKey::SignalExtraction,
+        config.prompt.path.clone(),
+    );
     let generator = RigOpenAiDailyReviewSignalGenerator::from_optional_api_key(
         config.signal,
         prompt,
         Some(openai_api_key),
-    )?;
+    )?
+    .with_prompt_source(prompt_source);
 
     let service = DailyReviewSignalService::new(
         DailyReviewRepository::new(pool.clone()),

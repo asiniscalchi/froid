@@ -121,7 +121,6 @@ impl DailyReviewService {
         }
 
         let model = self.generator.model();
-        let prompt_version = self.generator.prompt_version();
 
         match self
             .generator
@@ -129,6 +128,7 @@ impl DailyReviewService {
             .await
         {
             Ok(review_text) => {
+                let prompt_version = self.generator.prompt_version();
                 let review_text = review_text.trim();
                 if review_text.is_empty() {
                     return self
@@ -136,7 +136,7 @@ impl DailyReviewService {
                             user_id,
                             utc_date,
                             model,
-                            prompt_version,
+                            &prompt_version,
                             EMPTY_REVIEW_ERROR,
                         )
                         .await;
@@ -144,13 +144,14 @@ impl DailyReviewService {
 
                 let review = self
                     .daily_reviews
-                    .upsert_completed(user_id, utc_date, review_text, model, prompt_version)
+                    .upsert_completed(user_id, utc_date, review_text, model, &prompt_version)
                     .await?;
                 Ok(DailyReviewResult::Generated(review))
             }
             Err(error) => {
+                let prompt_version = self.generator.prompt_version();
                 let error_message = error.to_string();
-                self.store_failed_review(user_id, utc_date, model, prompt_version, &error_message)
+                self.store_failed_review(user_id, utc_date, model, &prompt_version, &error_message)
                     .await
             }
         }
@@ -678,8 +679,8 @@ mod tests {
             "pool-closing-model"
         }
 
-        fn prompt_version(&self) -> &str {
-            "pool-closing-prompt-v1"
+        fn prompt_version(&self) -> String {
+            "pool-closing-prompt-v1".to_string()
         }
 
         async fn generate_daily_review(
