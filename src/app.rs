@@ -200,12 +200,26 @@ async fn spawn_http_server(
         ));
     }
 
+    let auth_enabled = config.http_auth.token.is_some();
+    if let Some(token) = config.http_auth.token.clone() {
+        let token: Arc<str> = Arc::from(token);
+        router = router.layer(axum::middleware::from_fn_with_state(
+            token,
+            crate::auth::require_bearer,
+        ));
+    } else {
+        warn!(
+            "HTTP server (MCP & Dashboard) is running without authentication; set FROID_AUTH_TOKEN to require a bearer token"
+        );
+    }
+
     let listener = tokio::net::TcpListener::bind(config.mcp_server.bind).await?;
     let local_addr = listener.local_addr()?;
     info!(
         addr = %local_addr,
         mcp = config.mcp_server.enabled,
         dashboard = config.dashboard.enabled,
+        auth = auth_enabled,
         "HTTP server listening"
     );
 
