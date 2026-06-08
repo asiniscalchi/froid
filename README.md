@@ -39,7 +39,7 @@ docker run --env-file .env -v ./data:/app/data ghcr.io/asiniscalchi/froid:latest
 
 ## Exposing tools over MCP
 
-Set `FROID_MCP_ENABLED=true` to expose the analyzer's read-only tools over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. The MCP server runs alongside the Telegram bot in the same process. Froid has no MCP authentication, so restrict access at the network level — use the default loopback bind for local use, or a Docker internal network when running in Compose.
+Set `FROID_MCP_ENABLED=true` to expose the analyzer's read-only tools over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. The MCP server runs alongside the Telegram bot in the same process. Set `FROID_AUTH_TOKEN` to require an `Authorization: Bearer <token>` header on the HTTP listener (see [Authentication](#authentication)); when it is unset, the endpoints are unauthenticated, so restrict access at the network level — use the default loopback bind for local use, or a Docker internal network when running in Compose.
 
 ```bash
 FROID_MCP_ENABLED=true cargo run -- serve
@@ -49,11 +49,23 @@ Available tools: `journal_get`, `journal_get_recent`, `journal_search_text`, `jo
 
 ## Dashboard webapp
 
-Set `FROID_DASHBOARD_ENABLED=true` to serve a small React webapp at `http://127.0.0.1:8080/`. The dashboard shares the HTTP listener with the MCP endpoint (`FROID_MCP_BIND`, default `127.0.0.1:8080`) and can be enabled independently of MCP. Assets are embedded into the release binary, so the Docker image carries everything it needs. Like MCP, the dashboard has no built-in authentication — restrict access at the network level.
+Set `FROID_DASHBOARD_ENABLED=true` to serve a small React webapp at `http://127.0.0.1:8080/`. The dashboard shares the HTTP listener with the MCP endpoint (`FROID_MCP_BIND`, default `127.0.0.1:8080`) and can be enabled independently of MCP. Assets are embedded into the release binary, so the Docker image carries everything it needs. The dashboard is protected by the same `FROID_AUTH_TOKEN` bearer check as MCP (see [Authentication](#authentication)); when no token is set, restrict access at the network level.
 
 ```bash
 FROID_DASHBOARD_ENABLED=true cargo run -- serve
 ```
+
+## Authentication
+
+The HTTP listener shared by the MCP endpoint and the dashboard supports a single bearer token. Set `FROID_AUTH_TOKEN` to any secret string and every HTTP request must then carry a matching header:
+
+```
+Authorization: Bearer <your-token>
+```
+
+Requests without it receive `401 Unauthorized`. The same token guards both `/mcp` and the dashboard. MCP clients and scripts send the header natively; a browser opening the dashboard needs the header injected (e.g. via a reverse proxy or a header-setting extension).
+
+When `FROID_AUTH_TOKEN` is unset, the endpoints are unauthenticated and Froid logs a warning at startup — in that case restrict access at the network level (loopback bind or a Docker internal network).
 
 ## Configuration
 
@@ -101,6 +113,7 @@ All workers are disabled by default and require `OPENAI_API_KEY`.
 |---|---|---|
 | `FROID_MCP_ENABLED` | `false` | Enable the MCP Streamable HTTP server |
 | `FROID_MCP_BIND` | `127.0.0.1:8080` | Bind address (e.g. `0.0.0.0:8080` for Docker Compose) |
+| `FROID_AUTH_TOKEN` | _(none)_ | Bearer token required on the HTTP listener (MCP and dashboard); unset means no authentication |
 
 ### Models
 
