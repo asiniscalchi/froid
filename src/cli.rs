@@ -166,6 +166,9 @@ pub struct Cli {
 
     #[arg(long, env = "FROID_DASHBOARD_ENABLED", global = true)]
     dashboard_enabled: Option<bool>,
+
+    #[arg(long, env = "FROID_AUTH_TOKEN", global = true, hide_env_values = true)]
+    auth_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +180,13 @@ pub struct McpServerConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardConfig {
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpAuthConfig {
+    /// Bearer token required on the shared HTTP listener (MCP and dashboard).
+    /// When `None`, the HTTP endpoints are unauthenticated.
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +203,7 @@ pub struct ServeConfig {
     pub signal_worker: ReconciliationWorkerConfig,
     pub mcp_server: McpServerConfig,
     pub dashboard: DashboardConfig,
+    pub http_auth: HttpAuthConfig,
 }
 
 impl Cli {
@@ -273,6 +284,19 @@ impl Cli {
             enabled: self.dashboard_enabled.unwrap_or(false),
         };
 
+        let http_auth = match self.auth_token.as_deref() {
+            Some(token) if token.trim().is_empty() => {
+                return Err(clap::Error::raw(
+                    clap::error::ErrorKind::ValueValidation,
+                    "FROID_AUTH_TOKEN environment variable or --auth-token must not be empty when set",
+                ));
+            }
+            Some(token) => HttpAuthConfig {
+                token: Some(token.to_string()),
+            },
+            None => HttpAuthConfig { token: None },
+        };
+
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
             telegram_allowed_user_ids: self.telegram_allowed_user_ids.clone(),
@@ -286,6 +310,7 @@ impl Cli {
             signal_worker,
             mcp_server,
             dashboard,
+            http_auth,
         })
     }
 }
@@ -323,6 +348,7 @@ mod tests {
             mcp_enabled: None,
             mcp_bind: "127.0.0.1:8080".parse().unwrap(),
             dashboard_enabled: None,
+            auth_token: None,
         }
     }
 
@@ -669,6 +695,41 @@ mod tests {
         let config = cli_with_token("token").serve_config().unwrap();
 
         assert!(!config.dashboard.enabled);
+    }
+
+    #[test]
+    fn serve_config_http_auth_token_none_by_default() {
+        let config = cli_with_token("token").serve_config().unwrap();
+
+        assert_eq!(config.http_auth.token, None);
+    }
+
+    #[test]
+    fn serve_config_http_auth_token_set_from_flag() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--auth-token",
+            "secret-bearer",
+        ]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.http_auth.token.as_deref(), Some("secret-bearer"));
+    }
+
+    #[test]
+    fn serve_config_rejects_empty_auth_token() {
+        let error = Cli {
+            auth_token: Some("  ".to_string()),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("FROID_AUTH_TOKEN"));
     }
 
     #[test]
