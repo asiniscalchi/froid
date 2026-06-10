@@ -39,7 +39,6 @@ use crate::{
         registry::JournalServiceRegistry,
         repository::JournalRepository,
     },
-    prompts::PromptRepository,
 };
 
 type BoxError = Box<dyn Error + Send + Sync>;
@@ -53,8 +52,11 @@ pub struct TenantRouterConfig {
 }
 
 /// Build the protected routes (`/mcp`, `/api`) bound to one database.
+/// `capture_conversation_id` is the conversation web-captured entries are
+/// filed under (the owning user's chat id).
 pub fn build_tenant_router(
     pool: &SqlitePool,
+    capture_conversation_id: &str,
     config: &TenantRouterConfig,
 ) -> Result<Router, BoxError> {
     let mut router = Router::new();
@@ -94,10 +96,7 @@ pub fn build_tenant_router(
     }
 
     if config.dashboard_enabled {
-        router = router.merge(dashboard::api_router(
-            JournalRepository::new(pool.clone()),
-            PromptRepository::new(pool.clone()),
-        ));
+        router = router.merge(dashboard::api_router(pool, capture_conversation_id));
     }
 
     Ok(router)
@@ -137,7 +136,7 @@ impl TenantRouters {
             return Ok(router.clone());
         }
 
-        let router = build_tenant_router(&pool, &self.config)?;
+        let router = build_tenant_router(&pool, chat_id, &self.config)?;
         guard.insert(chat_id.to_string(), router.clone());
         Ok(router)
     }

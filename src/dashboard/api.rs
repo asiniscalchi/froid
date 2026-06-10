@@ -1,27 +1,59 @@
+use std::sync::Arc;
+
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Days, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 use tracing::error;
 
 use crate::{
     journal::repository::{BulkImportError, JournalEntryRecord, JournalRepository},
+    journal::review::repository::{DailyReviewRepository, DailyReviewRepositoryError},
+    journal::week_review::repository::{WeeklyReviewRepository, WeeklyReviewRepositoryError},
+    messages::{IncomingMessage, MessageSource},
     prompts::{PromptKey, PromptRepository, load_default, registry::version_for},
 };
 
 pub const EXPORT_FORMAT_VERSION: u32 = 2;
 pub const MIN_SUPPORTED_IMPORT_VERSION: u32 = 1;
 
-pub fn router(journal: JournalRepository, prompts: PromptRepository) -> Router {
+const DEFAULT_ENTRIES_LIMIT: u32 = 50;
+const MAX_ENTRIES_LIMIT: u32 = 200;
+/// Default review range when `from` is omitted: the last 30 days.
+const DEFAULT_REVIEW_RANGE_DAYS: u64 = 30;
+
+pub fn router(pool: &SqlitePool, capture_conversation_id: &str) -> Router {
+    let journal = JournalRepository::new(pool.clone());
+
     let messages = Router::new()
         .route("/messages/export", get(export_messages))
         .route("/messages/import", post(import_messages))
+        .with_state(journal.clone());
+
+    let capture = Router::new()
+        .route("/messages", post(capture_message))
+        .with_state(CaptureState {
+            journal: journal.clone(),
+            conversation_id: Arc::from(capture_conversation_id),
+        });
+
+    let entries = Router::new()
+        .route("/entries", get(list_entries))
         .with_state(journal);
+
+    let daily_reviews = Router::new()
+        .route("/reviews/daily", get(list_daily_reviews))
+        .with_state(DailyReviewRepository::new(pool.clone()));
+
+    let weekly_reviews = Router::new()
+        .route("/reviews/weekly", get(list_weekly_reviews))
+        .with_state(WeeklyReviewRepository::new(pool.clone()));
 
     let prompts = Router::new()
         .route("/prompts", get(list_prompts))
@@ -29,9 +61,15 @@ pub fn router(journal: JournalRepository, prompts: PromptRepository) -> Router {
             "/prompts/{key}",
             get(get_prompt).put(update_prompt).delete(reset_prompt),
         )
-        .with_state(prompts);
+        .with_state(PromptRepository::new(pool.clone()));
 
-    Router::new().merge(messages).merge(prompts)
+    Router::new()
+        .merge(messages)
+        .merge(capture)
+        .merge(entries)
+        .merge(daily_reviews)
+        .merge(weekly_reviews)
+        .merge(prompts)
 }
 
 #[derive(Serialize)]
@@ -64,6 +102,19 @@ enum DashboardError {
         source_message_id: String,
     },
     ImportRepository(sqlx::Error),
+    EmptyCapture,
+    CaptureRepository(sqlx::Error),
+    CaptureConflict,
+    InvalidLimit {
+        max: u32,
+    },
+    EntriesRepository(sqlx::Error),
+    InvalidRange {
+        from: NaiveDate,
+        to: NaiveDate,
+    },
+    DailyReviews(DailyReviewRepositoryError),
+    WeeklyReviews(WeeklyReviewRepositoryError),
 }
 
 impl IntoResponse for DashboardError {
@@ -125,8 +176,220 @@ impl IntoResponse for DashboardError {
                 )
                     .into_response()
             }
+            Self::EmptyCapture => {
+                (StatusCode::BAD_REQUEST, "text must not be empty").into_response()
+            }
+            Self::CaptureRepository(err) => {
+                error!(error = %err, "failed to store captured journal entry");
+                (StatusCode::INTERNAL_SERVER_ERROR, "failed to store entry").into_response()
+            }
+            Self::CaptureConflict => {
+                error!("captured journal entry collided with an existing message id");
+                (StatusCode::INTERNAL_SERVER_ERROR, "failed to store entry").into_response()
+            }
+            Self::InvalidLimit { max } => (
+                StatusCode::BAD_REQUEST,
+                format!("limit must be between 1 and {max}"),
+            )
+                .into_response(),
+            Self::EntriesRepository(err) => {
+                error!(error = %err, "failed to fetch journal entries");
+                (StatusCode::INTERNAL_SERVER_ERROR, "failed to load entries").into_response()
+            }
+            Self::InvalidRange { from, to } => (
+                StatusCode::BAD_REQUEST,
+                format!("from ({from}) must be strictly before to ({to})"),
+            )
+                .into_response(),
+            Self::DailyReviews(err) => {
+                error!(error = %err, "failed to fetch daily reviews");
+                (StatusCode::INTERNAL_SERVER_ERROR, "failed to load reviews").into_response()
+            }
+            Self::WeeklyReviews(err) => {
+                error!(error = %err, "failed to fetch weekly reviews");
+                (StatusCode::INTERNAL_SERVER_ERROR, "failed to load reviews").into_response()
+            }
         }
     }
+}
+
+#[derive(Clone)]
+struct CaptureState {
+    journal: JournalRepository,
+    conversation_id: Arc<str>,
+}
+
+#[derive(Deserialize)]
+struct CaptureRequest {
+    text: String,
+}
+
+#[derive(Serialize)]
+struct EntryView {
+    id: String,
+    text: String,
+    received_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct EntriesResponse {
+    entries: Vec<EntryView>,
+}
+
+#[derive(Deserialize)]
+struct EntriesQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct ReviewRangeQuery {
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+}
+
+#[derive(Serialize)]
+struct DailyReviewView {
+    review_date: NaiveDate,
+    review_text: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct DailyReviewsResponse {
+    reviews: Vec<DailyReviewView>,
+}
+
+#[derive(Serialize)]
+struct WeeklyReviewView {
+    week_start: NaiveDate,
+    week_end: NaiveDate,
+    review_text: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct WeeklyReviewsResponse {
+    reviews: Vec<WeeklyReviewView>,
+}
+
+async fn capture_message(
+    State(state): State<CaptureState>,
+    Json(request): Json<CaptureRequest>,
+) -> Result<impl IntoResponse, DashboardError> {
+    let text = request.text.trim();
+    if text.is_empty() {
+        return Err(DashboardError::EmptyCapture);
+    }
+
+    let message = IncomingMessage {
+        source: MessageSource::Web,
+        source_conversation_id: state.conversation_id.to_string(),
+        source_message_id: format!("web-{}", ulid::Ulid::new()),
+        user_id: state.conversation_id.to_string(),
+        text: text.to_string(),
+        received_at: Utc::now(),
+    };
+
+    let id = state
+        .journal
+        .store(&message)
+        .await
+        .map_err(DashboardError::CaptureRepository)?
+        .ok_or(DashboardError::CaptureConflict)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(EntryView {
+            id,
+            text: message.text,
+            received_at: message.received_at,
+        }),
+    ))
+}
+
+async fn list_entries(
+    State(repo): State<JournalRepository>,
+    Query(query): Query<EntriesQuery>,
+) -> Result<Json<EntriesResponse>, DashboardError> {
+    let limit = query.limit.unwrap_or(DEFAULT_ENTRIES_LIMIT);
+    if limit == 0 || limit > MAX_ENTRIES_LIMIT {
+        return Err(DashboardError::InvalidLimit {
+            max: MAX_ENTRIES_LIMIT,
+        });
+    }
+
+    let entries = repo
+        .fetch_recent(limit)
+        .await
+        .map_err(DashboardError::EntriesRepository)?
+        .into_iter()
+        .map(|stored| EntryView {
+            id: stored.id,
+            text: stored.entry.text,
+            received_at: stored.entry.received_at,
+        })
+        .collect();
+
+    Ok(Json(EntriesResponse { entries }))
+}
+
+/// Resolve an optional `from`/`to` pair to a concrete half-open range,
+/// defaulting to the last [`DEFAULT_REVIEW_RANGE_DAYS`] days up to tomorrow.
+fn resolve_review_range(
+    query: &ReviewRangeQuery,
+) -> Result<(NaiveDate, NaiveDate), DashboardError> {
+    let today = Utc::now().date_naive();
+    let to = query.to.unwrap_or_else(|| today + Days::new(1));
+    let from = query
+        .from
+        .unwrap_or_else(|| to - Days::new(DEFAULT_REVIEW_RANGE_DAYS));
+    if from >= to {
+        return Err(DashboardError::InvalidRange { from, to });
+    }
+    Ok((from, to))
+}
+
+async fn list_daily_reviews(
+    State(repo): State<DailyReviewRepository>,
+    Query(query): Query<ReviewRangeQuery>,
+) -> Result<Json<DailyReviewsResponse>, DashboardError> {
+    let (from, to) = resolve_review_range(&query)?;
+
+    let reviews = repo
+        .fetch_completed_in_range(from, to)
+        .await
+        .map_err(DashboardError::DailyReviews)?
+        .into_iter()
+        .map(|review| DailyReviewView {
+            review_date: review.review_date,
+            review_text: review.review_text.unwrap_or_default(),
+            created_at: review.created_at,
+        })
+        .collect();
+
+    Ok(Json(DailyReviewsResponse { reviews }))
+}
+
+async fn list_weekly_reviews(
+    State(repo): State<WeeklyReviewRepository>,
+    Query(query): Query<ReviewRangeQuery>,
+) -> Result<Json<WeeklyReviewsResponse>, DashboardError> {
+    let (from, to) = resolve_review_range(&query)?;
+
+    let reviews = repo
+        .fetch_completed_in_range(from, to)
+        .await
+        .map_err(DashboardError::WeeklyReviews)?
+        .into_iter()
+        .map(|review| WeeklyReviewView {
+            week_start: review.week_start_date,
+            week_end: review.week_start_date + Days::new(6),
+            review_text: review.review_text.unwrap_or_default(),
+            created_at: review.created_at,
+        })
+        .collect();
+
+    Ok(Json(WeeklyReviewsResponse { reviews }))
 }
 
 async fn export_messages(
@@ -465,22 +728,27 @@ mod tests {
     use sqlx::SqlitePool;
     use tower::ServiceExt;
 
-    async fn setup() -> (Router, JournalRepository) {
+    const TEST_CAPTURE_CONVERSATION_ID: &str = "42";
+
+    async fn setup_with_pool() -> (Router, SqlitePool) {
         database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
-        let journal = JournalRepository::new(pool.clone());
-        let prompts = PromptRepository::new(pool);
-        (router(journal.clone(), prompts), journal)
+        (router(&pool, TEST_CAPTURE_CONVERSATION_ID), pool)
+    }
+
+    async fn setup() -> (Router, JournalRepository) {
+        let (router, pool) = setup_with_pool().await;
+        (router, JournalRepository::new(pool))
     }
 
     async fn setup_with_prompts() -> (Router, PromptRepository) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
-        let journal = JournalRepository::new(pool.clone());
-        let prompts = PromptRepository::new(pool);
-        (router(journal, prompts.clone()), prompts)
+        let (router, pool) = setup_with_pool().await;
+        (router, PromptRepository::new(pool))
+    }
+
+    fn at(hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 4, 28, hour, 0, 0).unwrap()
     }
 
     fn incoming(message_id: &str, text: &str, received_at: DateTime<Utc>) -> IncomingMessage {
@@ -492,6 +760,195 @@ mod tests {
             text: text.to_string(),
             received_at,
         }
+    }
+
+    async fn get_json(router: &Router, uri: &str) -> (StatusCode, Value) {
+        let response = router
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        (status, value)
+    }
+
+    async fn post_json(router: &Router, uri: &str, payload: Value) -> (StatusCode, Value) {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn capture_stores_entry_under_capture_conversation() {
+        let (router, repo) = setup().await;
+
+        let (status, body) =
+            post_json(&router, "/messages", json!({"text": "  captured note  "})).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["text"], "captured note");
+        assert!(body["id"].is_string());
+
+        let records = repo.fetch_all_for_export().await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].source, "web");
+        assert_eq!(
+            records[0].source_conversation_id,
+            TEST_CAPTURE_CONVERSATION_ID
+        );
+        assert_eq!(records[0].text, "captured note");
+    }
+
+    #[tokio::test]
+    async fn capture_rejects_blank_text() {
+        let (router, repo) = setup().await;
+
+        let (status, _) = post_json(&router, "/messages", json!({"text": "   "})).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(repo.fetch_all_for_export().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn entries_returns_recent_entries_with_default_limit() {
+        let (router, repo) = setup().await;
+        repo.store(&incoming("m1", "first note", at(10)))
+            .await
+            .unwrap();
+        repo.store(&incoming("m2", "second note", at(11)))
+            .await
+            .unwrap();
+
+        let (status, body) = get_json(&router, "/entries").await;
+
+        assert_eq!(status, StatusCode::OK);
+        let entries = body["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        // Most recent first, as fetch_recent orders by recency.
+        assert_eq!(entries[0]["text"], "second note");
+        assert_eq!(entries[1]["text"], "first note");
+    }
+
+    #[tokio::test]
+    async fn entries_respects_explicit_limit() {
+        let (router, repo) = setup().await;
+        repo.store(&incoming("m1", "first note", at(10)))
+            .await
+            .unwrap();
+        repo.store(&incoming("m2", "second note", at(11)))
+            .await
+            .unwrap();
+
+        let (status, body) = get_json(&router, "/entries?limit=1").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["entries"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn entries_rejects_invalid_limit() {
+        let (router, _) = setup().await;
+
+        let (status, _) = get_json(&router, "/entries?limit=0").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, _) = get_json(&router, "/entries?limit=10000").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn daily_reviews_returns_completed_reviews_in_range() {
+        let (router, pool) = setup_with_pool().await;
+        let reviews = crate::journal::review::repository::DailyReviewRepository::new(pool);
+        reviews
+            .upsert_completed(
+                chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+                "a calm day",
+                "model",
+                "v1",
+            )
+            .await
+            .unwrap();
+
+        let (status, body) =
+            get_json(&router, "/reviews/daily?from=2026-06-01&to=2026-06-08").await;
+
+        assert_eq!(status, StatusCode::OK);
+        let reviews = body["reviews"].as_array().unwrap();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0]["review_date"], "2026-06-01");
+        assert_eq!(reviews[0]["review_text"], "a calm day");
+    }
+
+    #[tokio::test]
+    async fn daily_reviews_excludes_reviews_outside_range() {
+        let (router, pool) = setup_with_pool().await;
+        let reviews = crate::journal::review::repository::DailyReviewRepository::new(pool);
+        reviews
+            .upsert_completed(
+                chrono::NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+                "out of range",
+                "model",
+                "v1",
+            )
+            .await
+            .unwrap();
+
+        let (status, body) =
+            get_json(&router, "/reviews/daily?from=2026-06-01&to=2026-06-08").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["reviews"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn daily_reviews_rejects_inverted_range() {
+        let (router, _) = setup().await;
+
+        let (status, _) = get_json(&router, "/reviews/daily?from=2026-06-08&to=2026-06-01").await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn weekly_reviews_returns_completed_reviews_with_week_end() {
+        let (router, pool) = setup_with_pool().await;
+        let reviews = crate::journal::week_review::repository::WeeklyReviewRepository::new(pool);
+        reviews
+            .upsert_completed(
+                chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+                "a steady week",
+                "model",
+                "v1",
+                "{}",
+            )
+            .await
+            .unwrap();
+
+        let (status, body) =
+            get_json(&router, "/reviews/weekly?from=2026-06-01&to=2026-06-15").await;
+
+        assert_eq!(status, StatusCode::OK);
+        let reviews = body["reviews"].as_array().unwrap();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0]["week_start"], "2026-06-01");
+        assert_eq!(reviews[0]["week_end"], "2026-06-07");
+        assert_eq!(reviews[0]["review_text"], "a steady week");
     }
 
     #[tokio::test]

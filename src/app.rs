@@ -148,7 +148,7 @@ async fn spawn_http_server(
         // Single tenant: in multiuser mode with a whitelist, the
         // administrative user is the first ID in the whitelist and we serve
         // their isolated database. Otherwise, the default/legacy database.
-        let pool = if let Some(first_id) = config
+        let (pool, capture_conversation_id) = if let Some(first_id) = config
             .telegram_allowed_user_ids
             .as_ref()
             .and_then(|ids| ids.first())
@@ -157,18 +157,21 @@ async fn spawn_http_server(
                 chat_id = %first_id,
                 "HTTP server (MCP & Dashboard) running in multiuser mode; binding to first whitelisted user's database"
             );
-            registry
-                .pool(&first_id.to_string())
+            let chat_id = first_id.to_string();
+            let pool = registry
+                .pool(&chat_id)
                 .await
-                .map_err(|e| -> Box<dyn Error> { e })?
+                .map_err(|e| -> Box<dyn Error> { e })?;
+            (pool, chat_id)
         } else {
             let pool = database::connect_pool(&config.database_url).await?;
             sqlx::migrate!().run(&pool).await?;
-            pool
+            (pool, crate::messages::SINGLE_USER_ID.to_string())
         };
 
-        let tenant_router = http::build_tenant_router(&pool, &router_config)
-            .map_err(|e| -> Box<dyn Error> { e })?;
+        let tenant_router =
+            http::build_tenant_router(&pool, &capture_conversation_id, &router_config)
+                .map_err(|e| -> Box<dyn Error> { e })?;
         let token: Option<Arc<str>> = config.http_auth.token.clone().map(Arc::from);
         let auth_mode = if token.is_some() {
             "single-token"

@@ -159,6 +159,7 @@ async fn single_tenant_app_protects_api_and_serves_spa_publicly() {
 
     let tenant_router = build_tenant_router(
         &pool,
+        "default",
         &TenantRouterConfig {
             mcp_enabled: false,
             dashboard_enabled: true,

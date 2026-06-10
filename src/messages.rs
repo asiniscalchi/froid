@@ -5,12 +5,14 @@ pub const SINGLE_USER_ID: &str = "default";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageSource {
     Telegram,
+    Web,
 }
 
 impl std::fmt::Display for MessageSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MessageSource::Telegram => write!(f, "telegram"),
+            MessageSource::Web => write!(f, "web"),
         }
     }
 }

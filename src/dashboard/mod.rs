@@ -6,8 +6,6 @@ use axum::{
 };
 use rust_embed::RustEmbed;
 
-use crate::{journal::repository::JournalRepository, prompts::PromptRepository};
-
 mod api;
 
 #[derive(RustEmbed)]
@@ -15,9 +13,12 @@ mod api;
 struct Assets;
 
 /// Data endpoints under `/api`. These carry journal content and must sit
-/// behind the bearer-auth layer.
-pub fn api_router(journal: JournalRepository, prompts: PromptRepository) -> Router {
-    Router::new().nest("/api", api::router(journal, prompts))
+/// behind the bearer-auth layer. `capture_conversation_id` is the
+/// conversation entries captured via `POST /api/messages` are filed under —
+/// the owning user's chat id, so captured entries flow through the same
+/// review pipeline as Telegram messages.
+pub fn api_router(pool: &sqlx::SqlitePool, capture_conversation_id: &str) -> Router {
+    Router::new().nest("/api", api::router(pool, capture_conversation_id))
 }
 
 /// Static SPA shell (embedded assets + index.html fallback). Contains no user
@@ -62,11 +63,7 @@ mod tests {
         database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
-        api_router(
-            JournalRepository::new(pool.clone()),
-            PromptRepository::new(pool),
-        )
-        .merge(spa_router())
+        api_router(&pool, "42").merge(spa_router())
     }
 
     #[tokio::test]
