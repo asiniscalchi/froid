@@ -57,15 +57,21 @@ FROID_DASHBOARD_ENABLED=true cargo run -- serve
 
 ## Authentication
 
-The HTTP listener shared by the MCP endpoint and the dashboard supports a single bearer token. Set `FROID_AUTH_TOKEN` to any secret string and every HTTP request must then carry a matching header:
+The HTTP listener shared by the MCP endpoint and the dashboard supports two modes.
+
+**Single token** — set `FROID_AUTH_TOKEN` to any secret string and every request to `/mcp` and `/api` must carry a matching header:
 
 ```
 Authorization: Bearer <your-token>
 ```
 
-Requests without it receive `401 Unauthorized`. The same token guards both `/mcp` and the dashboard. MCP clients and scripts send the header natively; a browser opening the dashboard needs the header injected (e.g. via a reverse proxy or a header-setting extension).
+All requests are served from one database: in multiuser mode, the isolated database of the first whitelisted Telegram user; otherwise the default database.
 
-When `FROID_AUTH_TOKEN` is unset, the endpoints are unauthenticated and Froid logs a warning at startup — in that case restrict access at the network level (loopback bind or a Docker internal network).
+**Per-user tokens** — set `FROID_AUTH_TOKENS` to comma-separated `<chat_id>:<token>` pairs (e.g. `123456789:alice-secret,987654321:bob-secret`). Each token authenticates one user, and `/mcp` and `/api` requests are served from that user's isolated journal database. This gives every user of a shared instance their own MCP endpoint and dashboard view. The two variables are mutually exclusive.
+
+Requests without a valid token receive `401 Unauthorized`. The static dashboard shell (HTML/JS assets, which contain no journal data) and the `/health` probe are intentionally served without authentication; all data flows through the protected `/api` and `/mcp` routes.
+
+When neither variable is set, the endpoints are unauthenticated and Froid logs a warning at startup — in that case restrict access at the network level (loopback bind or a Docker internal network).
 
 ## Health endpoint
 
@@ -131,7 +137,8 @@ All workers are disabled by default and require `OPENAI_API_KEY`.
 |---|---|---|
 | `FROID_MCP_ENABLED` | `false` | Enable the MCP Streamable HTTP server |
 | `FROID_MCP_BIND` | `127.0.0.1:8080` | Bind address (e.g. `0.0.0.0:8080` for Docker Compose) |
-| `FROID_AUTH_TOKEN` | _(none)_ | Bearer token required on the HTTP listener (MCP and dashboard); unset means no authentication |
+| `FROID_AUTH_TOKEN` | _(none)_ | Single shared bearer token for the HTTP listener (MCP and dashboard); unset means no authentication |
+| `FROID_AUTH_TOKENS` | _(none)_ | Per-user bearer tokens as comma-separated `<chat_id>:<token>` pairs; each token serves its user's isolated database. Mutually exclusive with `FROID_AUTH_TOKEN` |
 
 ### Models
 
