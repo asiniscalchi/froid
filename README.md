@@ -144,6 +144,7 @@ Override the OpenAI model used by each pipeline stage. Accepts any model name re
 | `FROID_REVIEW_MODEL` | `gpt-5-mini` | Model used for daily review generation |
 | `FROID_SIGNAL_EXTRACTION_MODEL` | `gpt-5-mini` | Model used for daily review signal extraction |
 | `FROID_WEEK_REVIEW_MODEL` | `gpt-5-mini` | Model used for weekly review generation |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for all LLM and embedding requests. Point it at any OpenAI-compatible endpoint (Ollama, OpenRouter, a self-hosted gateway) to keep journal data off openai.com; pair it with the model variables above |
 
 ### Prompts
 
