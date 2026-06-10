@@ -7,16 +7,12 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-};
-
 use crate::{
-    adapters::{mcp::AnalyzerMcpServer, telegram::TelegramAdapter},
+    adapters::telegram::TelegramAdapter,
+    auth::UserTokens,
     cli::ServeConfig,
-    dashboard, database,
+    database, http,
     journal::{
-        analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_mcp_components},
         embedding::{
             EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
         },
@@ -65,38 +61,6 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         "starting service"
     );
 
-    // Determine the database to use for the single-user HTTP server (MCP and Dashboard).
-    // In multiuser mode with whitelisted Telegram user IDs, the administrative user
-    // is the first ID in the whitelist, and we use their isolated database so they can
-    // query their live journal. Otherwise, we fallback to the default/legacy database.
-    let pool = if let Some(ref ids) = config.telegram_allowed_user_ids {
-        if let Some(first_id) = ids.first() {
-            let data_dir = std::path::Path::new(&config.database_path)
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("data"));
-            let base_dir = data_dir.join("journals");
-            let db_path = base_dir.join(format!("user_{}.sqlite3", first_id));
-            let database_url = format!("sqlite:{}", db_path.display());
-            info!(
-                chat_id = %first_id,
-                path = %db_path.display(),
-                "HTTP server (MCP & Dashboard) running in multiuser mode; binding to first whitelisted user's database"
-            );
-            tokio::fs::create_dir_all(&base_dir).await?;
-            let pool = database::connect_pool(&database_url).await?;
-            sqlx::migrate!().run(&pool).await?;
-            pool
-        } else {
-            let pool = database::connect_pool(&config.database_url).await?;
-            sqlx::migrate!().run(&pool).await?;
-            pool
-        }
-    } else {
-        let pool = database::connect_pool(&config.database_url).await?;
-        sqlx::migrate!().run(&pool).await?;
-        pool
-    };
-
     let embedding_config = Some(EmbeddingConfig::from_env());
     let daily_review_config = DailyReviewRuntimeConfig::from_env();
     let weekly_review_config = WeeklyReviewRuntimeConfig::from_env();
@@ -106,23 +70,13 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let shutdown = CancellationToken::new();
     let mut workers: JoinSet<&'static str> = JoinSet::new();
 
-    // Spawn the global HTTP server (MCP and Dashboard) on the primary/legacy pool
-    spawn_http_server(
-        &mut workers,
-        &shutdown,
-        &pool,
-        &config,
-        embedding_config.as_ref(),
-    )
-    .await?;
-
     let delivery_configured = config.daily_review_delivery.enabled;
 
     // Initialize the multiuser journal service registry
     let journal_registry = crate::journal::registry::JournalServiceRegistry::new(
         crate::journal::registry::JournalServiceRegistryConfig {
             config: config.clone(),
-            embedding_config,
+            embedding_config: embedding_config.clone(),
             entry_extraction_config,
             daily_review_config,
             weekly_review_config,
@@ -131,6 +85,16 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
             shutdown: shutdown.clone(),
         },
     );
+
+    // Spawn the global HTTP server (MCP and Dashboard)
+    spawn_http_server(
+        &mut workers,
+        &shutdown,
+        &config,
+        embedding_config.as_ref(),
+        &journal_registry,
+    )
+    .await?;
 
     // Discover and auto-load existing tenant databases on disk
     journal_registry
@@ -149,72 +113,76 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
 async fn spawn_http_server(
     workers: &mut JoinSet<&'static str>,
     shutdown: &CancellationToken,
-    pool: &SqlitePool,
     config: &ServeConfig,
     embedding_config: Option<&EmbeddingConfig>,
+    registry: &crate::journal::registry::JournalServiceRegistry,
 ) -> Result<(), Box<dyn Error>> {
     if !config.mcp_server.enabled && !config.dashboard.enabled {
         return Ok(());
     }
 
-    let mut router = axum::Router::new();
+    if config.mcp_server.enabled && embedding_config.is_none() {
+        warn!(
+            "MCP server is enabled but embedding configuration is missing; skipping (semantic search requires it)"
+        );
+        return Ok(());
+    }
 
-    if config.mcp_server.enabled {
-        let Some(cfg) = embedding_config else {
-            warn!(
-                "MCP server is enabled but embedding configuration is missing; skipping (semantic search requires it)"
+    let router_config = http::TenantRouterConfig {
+        mcp_enabled: config.mcp_server.enabled,
+        dashboard_enabled: config.dashboard.enabled,
+        embedding_config: embedding_config.cloned(),
+        shutdown: shutdown.clone(),
+    };
+
+    let (router, auth_mode) = if !config.http_auth.user_tokens.is_empty() {
+        // Per-user tokens: every /mcp and /api request is served from the
+        // database of the user owning the presented token.
+        let tokens = Arc::new(UserTokens::new(config.http_auth.user_tokens.clone()));
+        let tenants = http::TenantRouters::new(registry.clone(), router_config);
+        (
+            http::build_per_user_app(tenants, tokens, config.dashboard.enabled),
+            "per-user",
+        )
+    } else {
+        // Single tenant: in multiuser mode with a whitelist, the
+        // administrative user is the first ID in the whitelist and we serve
+        // their isolated database. Otherwise, the default/legacy database.
+        let pool = if let Some(first_id) = config
+            .telegram_allowed_user_ids
+            .as_ref()
+            .and_then(|ids| ids.first())
+        {
+            info!(
+                chat_id = %first_id,
+                "HTTP server (MCP & Dashboard) running in multiuser mode; binding to first whitelisted user's database"
             );
-            return Ok(());
+            registry
+                .pool(&first_id.to_string())
+                .await
+                .map_err(|e| -> Box<dyn Error> { e })?
+        } else {
+            let pool = database::connect_pool(&config.database_url).await?;
+            sqlx::migrate!().run(&pool).await?;
+            pool
         };
 
-        let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
-        let semantic = Arc::new(DefaultSemanticJournalSearcher::new(
-            SqliteEmbeddingRepository::new(pool.clone()),
-            embedder,
-            JournalRepository::new(pool.clone()),
-        ));
-
-        let components = build_analyzer_mcp_components(pool.clone(), semantic);
-        let user = UserContext::new(crate::messages::SINGLE_USER_ID);
-        let server = AnalyzerMcpServer::new(components, user);
-
-        let service = StreamableHttpService::new(
-            {
-                let server = server.clone();
-                move || Ok(server.clone())
-            },
-            Arc::new(LocalSessionManager::default()),
-            StreamableHttpServerConfig::default()
-                .disable_allowed_hosts()
-                .with_stateful_mode(false)
-                .with_cancellation_token(shutdown.child_token()),
-        );
-
-        router = router.nest_service("/mcp", service);
-    }
-
-    if config.dashboard.enabled {
-        router = router.merge(dashboard::router(
-            JournalRepository::new(pool.clone()),
-            PromptRepository::new(pool.clone()),
-        ));
-    }
-
-    let auth_enabled = config.http_auth.token.is_some();
-    if let Some(token) = config.http_auth.token.clone() {
-        let token: Arc<str> = Arc::from(token);
-        router = router.layer(axum::middleware::from_fn_with_state(
-            token,
-            crate::auth::require_bearer,
-        ));
-    } else {
-        warn!(
-            "HTTP server (MCP & Dashboard) is running without authentication; set FROID_AUTH_TOKEN to require a bearer token"
-        );
-    }
-
-    // Merged after the auth layer so the probe never requires credentials.
-    router = router.merge(crate::health::router());
+        let tenant_router = http::build_tenant_router(&pool, &router_config)
+            .map_err(|e| -> Box<dyn Error> { e })?;
+        let token: Option<Arc<str>> = config.http_auth.token.clone().map(Arc::from);
+        let auth_mode = if token.is_some() {
+            "single-token"
+        } else {
+            warn!(
+                "HTTP server (MCP & Dashboard) is running without authentication; set FROID_AUTH_TOKEN or FROID_AUTH_TOKENS to require a bearer token"
+            );
+            "none"
+        };
+        (
+            http::build_single_tenant_app(tenant_router, token, config.dashboard.enabled),
+            auth_mode,
+        )
+    };
 
     let listener = tokio::net::TcpListener::bind(config.mcp_server.bind).await?;
     let local_addr = listener.local_addr()?;
@@ -222,7 +190,7 @@ async fn spawn_http_server(
         addr = %local_addr,
         mcp = config.mcp_server.enabled,
         dashboard = config.dashboard.enabled,
-        auth = auth_enabled,
+        auth = auth_mode,
         "HTTP server listening"
     );
 

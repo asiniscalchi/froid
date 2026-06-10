@@ -43,6 +43,7 @@ pub struct JournalServiceRegistry {
     base_dir: PathBuf,
 
     // Active connection caches
+    pools: Arc<RwLock<HashMap<String, sqlx::SqlitePool>>>,
     services: Arc<RwLock<HashMap<String, JournalService>>>,
     spawned_workers: Arc<RwLock<HashSet<String>>>,
 }
@@ -64,6 +65,7 @@ impl JournalServiceRegistry {
             delivery_configured: config.delivery_configured,
             shutdown: config.shutdown,
             base_dir,
+            pools: Arc::new(RwLock::new(HashMap::new())),
             services: Arc::new(RwLock::new(HashMap::new())),
             spawned_workers: Arc::new(RwLock::new(HashSet::new())),
         }
@@ -100,24 +102,23 @@ impl JournalServiceRegistry {
         Ok(())
     }
 
-    /// Retrieve or dynamically create a `JournalService` for the given Telegram `chat_id`
-    pub async fn get_or_create(
+    /// Retrieve or create the connection pool for the given tenant's isolated
+    /// database, running migrations on first open.
+    pub async fn pool(
         &self,
         chat_id: &str,
-    ) -> Result<JournalService, Box<dyn std::error::Error + Send + Sync>> {
-        // First check read lock for cached instance
+    ) -> Result<sqlx::SqlitePool, Box<dyn std::error::Error + Send + Sync>> {
         {
-            let guard = self.services.read().await;
-            if let Some(service) = guard.get(chat_id) {
-                return Ok(service.clone());
+            let guard = self.pools.read().await;
+            if let Some(pool) = guard.get(chat_id) {
+                return Ok(pool.clone());
             }
         }
 
-        // Cache miss: lock write lock to load/create
-        let mut guard = self.services.write().await;
+        let mut guard = self.pools.write().await;
         // Double-check to avoid race condition
-        if let Some(service) = guard.get(chat_id) {
-            return Ok(service.clone());
+        if let Some(pool) = guard.get(chat_id) {
+            return Ok(pool.clone());
         }
 
         info!(chat_id, "initializing tenant database connection");
@@ -131,6 +132,32 @@ impl JournalServiceRegistry {
 
         // Run migrations on this isolated database
         sqlx::migrate!().run(&pool).await?;
+
+        guard.insert(chat_id.to_string(), pool.clone());
+        Ok(pool)
+    }
+
+    /// Retrieve or dynamically create a `JournalService` for the given Telegram `chat_id`
+    pub async fn get_or_create(
+        &self,
+        chat_id: &str,
+    ) -> Result<JournalService, Box<dyn std::error::Error + Send + Sync>> {
+        // First check read lock for cached instance
+        {
+            let guard = self.services.read().await;
+            if let Some(service) = guard.get(chat_id) {
+                return Ok(service.clone());
+            }
+        }
+
+        let pool = self.pool(chat_id).await?;
+
+        // Cache miss: lock write lock to load/create
+        let mut guard = self.services.write().await;
+        // Double-check to avoid race condition
+        if let Some(service) = guard.get(chat_id) {
+            return Ok(service.clone());
+        }
 
         // Build prompt repository for this isolated database
         let prompt_repository = PromptRepository::new(pool.clone());

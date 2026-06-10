@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use clap::Parser;
 
 use crate::{
+    auth::UserToken,
     journal::{
         review::DailyReviewDeliveryWorkerConfig, week_review::WeeklyReviewDeliveryWorkerConfig,
     },
@@ -169,6 +170,15 @@ pub struct Cli {
 
     #[arg(long, env = "FROID_AUTH_TOKEN", global = true, hide_env_values = true)]
     auth_token: Option<String>,
+
+    #[arg(
+        long,
+        env = "FROID_AUTH_TOKENS",
+        global = true,
+        hide_env_values = true,
+        value_delimiter = ','
+    )]
+    auth_tokens: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +197,10 @@ pub struct HttpAuthConfig {
     /// Bearer token required on the shared HTTP listener (MCP and dashboard).
     /// When `None`, the HTTP endpoints are unauthenticated.
     pub token: Option<String>,
+    /// Per-user bearer tokens (`chat_id:token` pairs). When non-empty, each
+    /// request is served from the database of the user owning the token.
+    /// Mutually exclusive with `token`.
+    pub user_tokens: Vec<UserToken>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,6 +218,45 @@ pub struct ServeConfig {
     pub mcp_server: McpServerConfig,
     pub dashboard: DashboardConfig,
     pub http_auth: HttpAuthConfig,
+}
+
+/// Parse `chat_id:token` pairs from `FROID_AUTH_TOKENS`. The chat id is
+/// everything before the first colon; the token is the (possibly
+/// colon-containing) remainder.
+fn parse_user_tokens(pairs: &[String]) -> Result<Vec<UserToken>, clap::Error> {
+    let invalid =
+        |message: String| clap::Error::raw(clap::error::ErrorKind::ValueValidation, message);
+
+    let mut tokens: Vec<UserToken> = Vec::with_capacity(pairs.len());
+    for pair in pairs {
+        let Some((chat_id, token)) = pair.split_once(':') else {
+            return Err(invalid(format!(
+                "FROID_AUTH_TOKENS entries must look like <chat_id>:<token>; got {pair:?}"
+            )));
+        };
+        let (chat_id, token) = (chat_id.trim(), token.trim());
+        if chat_id.is_empty() || token.is_empty() {
+            return Err(invalid(format!(
+                "FROID_AUTH_TOKENS entries must have a non-empty chat id and token; got {pair:?}"
+            )));
+        }
+        if tokens.iter().any(|existing| existing.chat_id == chat_id) {
+            return Err(invalid(format!(
+                "FROID_AUTH_TOKENS lists chat id {chat_id} more than once"
+            )));
+        }
+        if tokens.iter().any(|existing| existing.token == token) {
+            return Err(invalid(
+                "FROID_AUTH_TOKENS lists the same token for multiple chat ids".to_string(),
+            ));
+        }
+        tokens.push(UserToken {
+            chat_id: chat_id.to_string(),
+            token: token.to_string(),
+        });
+    }
+
+    Ok(tokens)
 }
 
 impl Cli {
@@ -284,18 +337,27 @@ impl Cli {
             enabled: self.dashboard_enabled.unwrap_or(false),
         };
 
-        let http_auth = match self.auth_token.as_deref() {
+        let token = match self.auth_token.as_deref() {
             Some(token) if token.trim().is_empty() => {
                 return Err(clap::Error::raw(
                     clap::error::ErrorKind::ValueValidation,
                     "FROID_AUTH_TOKEN environment variable or --auth-token must not be empty when set",
                 ));
             }
-            Some(token) => HttpAuthConfig {
-                token: Some(token.to_string()),
-            },
-            None => HttpAuthConfig { token: None },
+            Some(token) => Some(token.to_string()),
+            None => None,
         };
+
+        let user_tokens = parse_user_tokens(self.auth_tokens.as_deref().unwrap_or_default())?;
+
+        if token.is_some() && !user_tokens.is_empty() {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                "FROID_AUTH_TOKEN and FROID_AUTH_TOKENS are mutually exclusive; configure one of them",
+            ));
+        }
+
+        let http_auth = HttpAuthConfig { token, user_tokens };
 
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
@@ -349,6 +411,7 @@ mod tests {
             mcp_bind: "127.0.0.1:8080".parse().unwrap(),
             dashboard_enabled: None,
             auth_token: None,
+            auth_tokens: None,
         }
     }
 
@@ -730,6 +793,110 @@ mod tests {
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
         assert!(error.to_string().contains("FROID_AUTH_TOKEN"));
+    }
+
+    #[test]
+    fn serve_config_parses_per_user_tokens() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--auth-tokens",
+            "111:alice-secret,222:bob-secret",
+        ]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.http_auth.token, None);
+        assert_eq!(
+            config.http_auth.user_tokens,
+            vec![
+                UserToken {
+                    chat_id: "111".to_string(),
+                    token: "alice-secret".to_string(),
+                },
+                UserToken {
+                    chat_id: "222".to_string(),
+                    token: "bob-secret".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn serve_config_user_token_keeps_colons_in_token() {
+        let cli = Cli {
+            auth_tokens: Some(vec!["111:secret:with:colons".to_string()]),
+            ..cli_with_token("token")
+        };
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.http_auth.user_tokens[0].token, "secret:with:colons");
+    }
+
+    #[test]
+    fn serve_config_rejects_user_token_without_separator() {
+        let error = Cli {
+            auth_tokens: Some(vec!["just-a-token".to_string()]),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("<chat_id>:<token>"));
+    }
+
+    #[test]
+    fn serve_config_rejects_empty_user_token_parts() {
+        for pair in [":secret", "111:", " : "] {
+            let error = Cli {
+                auth_tokens: Some(vec![pair.to_string()]),
+                ..cli_with_token("token")
+            }
+            .serve_config()
+            .unwrap_err();
+
+            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        }
+    }
+
+    #[test]
+    fn serve_config_rejects_duplicate_chat_id_in_user_tokens() {
+        let error = Cli {
+            auth_tokens: Some(vec!["111:a".to_string(), "111:b".to_string()]),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert!(error.to_string().contains("more than once"));
+    }
+
+    #[test]
+    fn serve_config_rejects_duplicate_token_in_user_tokens() {
+        let error = Cli {
+            auth_tokens: Some(vec!["111:same".to_string(), "222:same".to_string()]),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert!(error.to_string().contains("same token"));
+    }
+
+    #[test]
+    fn serve_config_rejects_single_and_per_user_tokens_together() {
+        let error = Cli {
+            auth_token: Some("single".to_string()),
+            auth_tokens: Some(vec!["111:per-user".to_string()]),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert!(error.to_string().contains("mutually exclusive"));
     }
 
     #[test]

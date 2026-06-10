@@ -6,6 +6,7 @@ pub mod dashboard;
 pub mod database;
 pub mod handler;
 pub mod health;
+pub mod http;
 pub mod journal;
 pub mod messages;
 mod openai;

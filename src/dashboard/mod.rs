@@ -14,10 +14,17 @@ mod api;
 #[folder = "web/dist/"]
 struct Assets;
 
-pub fn router(journal: JournalRepository, prompts: PromptRepository) -> Router {
-    Router::new()
-        .nest("/api", api::router(journal, prompts))
-        .fallback(spa_handler)
+/// Data endpoints under `/api`. These carry journal content and must sit
+/// behind the bearer-auth layer.
+pub fn api_router(journal: JournalRepository, prompts: PromptRepository) -> Router {
+    Router::new().nest("/api", api::router(journal, prompts))
+}
+
+/// Static SPA shell (embedded assets + index.html fallback). Contains no user
+/// data, so it is served without authentication — the webapp itself prompts
+/// for the bearer token and sends it on every `/api` call.
+pub fn spa_router() -> Router {
+    Router::new().fallback(spa_handler)
 }
 
 async fn spa_handler(uri: Uri) -> Response {
@@ -55,10 +62,11 @@ mod tests {
         database::register_sqlite_vec_extension();
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
-        router(
+        api_router(
             JournalRepository::new(pool.clone()),
             PromptRepository::new(pool),
         )
+        .merge(spa_router())
     }
 
     #[tokio::test]
