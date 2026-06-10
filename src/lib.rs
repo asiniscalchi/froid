@@ -5,6 +5,7 @@ pub mod cli;
 pub mod dashboard;
 pub mod database;
 pub mod handler;
+pub mod health;
 pub mod journal;
 pub mod messages;
 pub mod prompts;

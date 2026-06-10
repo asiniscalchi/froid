@@ -213,6 +213,9 @@ async fn spawn_http_server(
         );
     }
 
+    // Merged after the auth layer so the probe never requires credentials.
+    router = router.merge(crate::health::router());
+
     let listener = tokio::net::TcpListener::bind(config.mcp_server.bind).await?;
     let local_addr = listener.local_addr()?;
     info!(
