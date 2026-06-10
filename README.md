@@ -67,6 +67,24 @@ Requests without it receive `401 Unauthorized`. The same token guards both `/mcp
 
 When `FROID_AUTH_TOKEN` is unset, the endpoints are unauthenticated and Froid logs a warning at startup — in that case restrict access at the network level (loopback bind or a Docker internal network).
 
+## Health endpoint
+
+Whenever the HTTP listener is running (MCP or dashboard enabled), `GET /health` answers `200 OK` with the service name and version. It is intentionally exempt from the bearer-token check so supervisors, load balancers, and container healthchecks can probe it without credentials:
+
+```bash
+curl http://127.0.0.1:8080/health
+# {"name":"froid","status":"ok","version":"..."}
+```
+
+## Backups
+
+All persistent state lives in `DATA_DIR` (default `data/`): the legacy database file plus one isolated SQLite database per user under `journals/user_<chat_id>.sqlite3`. To back up:
+
+- **Cold backup** — stop the service and copy the whole data directory. SQLite databases are plain files; this is always safe.
+- **Hot backup** — while the service is running, use SQLite's online backup instead of copying files directly (WAL side-files make raw copies of a live database unreliable): `sqlite3 data/journals/user_<chat_id>.sqlite3 ".backup 'backup.sqlite3'"` for each database.
+
+Restoring is the reverse: stop the service and put the files back in place.
+
 ## Configuration
 
 All options can be set via environment variables or the equivalent `--flag` CLI argument. Copy `.env.example` as a starting point.
