@@ -72,15 +72,17 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
 
     let delivery_configured = config.daily_review_delivery.enabled;
 
+    let config = Arc::new(config);
+
     // Initialize the multiuser journal service registry
     let journal_registry = crate::journal::registry::JournalServiceRegistry::new(
         crate::journal::registry::JournalServiceRegistryConfig {
-            config: config.clone(),
+            config: (*config).clone(),
             embedding_config: embedding_config.clone(),
-            entry_extraction_config,
-            daily_review_config,
-            weekly_review_config,
-            signal_runtime_config,
+            entry_extraction_config: entry_extraction_config.clone(),
+            daily_review_config: daily_review_config.clone(),
+            weekly_review_config: weekly_review_config.clone(),
+            signal_runtime_config: signal_runtime_config.clone(),
             delivery_configured,
             shutdown: shutdown.clone(),
         },
@@ -102,9 +104,24 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         .await
         .map_err(|e| -> Box<dyn std::error::Error> { e })?;
 
+    // Spawn the global sweep workers that service every tenant database
+    spawn_global_workers(
+        &mut workers,
+        GlobalWorkersConfig {
+            registry: journal_registry.clone(),
+            config: config.clone(),
+            embedding_config,
+            entry_extraction_config,
+            daily_review_config,
+            weekly_review_config,
+            signal_runtime_config,
+            shutdown: shutdown.clone(),
+        },
+    );
+
     let adapter = TelegramAdapter::new(
-        config.telegram_bot_token,
-        config.telegram_allowed_user_ids,
+        config.telegram_bot_token.clone(),
+        config.telegram_allowed_user_ids.clone(),
         journal_registry,
     );
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
@@ -373,10 +390,9 @@ pub(crate) fn build_journal_service(
     Ok(journal_service)
 }
 
-pub struct JournalTenantWorkersConfig {
-    pub pool: SqlitePool,
+pub struct GlobalWorkersConfig {
+    pub registry: crate::journal::registry::JournalServiceRegistry,
     pub config: Arc<ServeConfig>,
-    pub prompt_repository: PromptRepository,
     pub embedding_config: Option<EmbeddingConfig>,
     pub entry_extraction_config: JournalEntryExtractionRuntimeConfig,
     pub daily_review_config: DailyReviewRuntimeConfig,
@@ -385,11 +401,36 @@ pub struct JournalTenantWorkersConfig {
     pub shutdown: CancellationToken,
 }
 
-pub fn spawn_tenant_workers(config: JournalTenantWorkersConfig) {
-    let JournalTenantWorkersConfig {
-        pool,
+/// Spawn one sweep worker into the supervised JoinSet. Each pass it visits
+/// every tenant database known to the registry.
+fn spawn_sweep<C, F>(
+    workers: &mut JoinSet<&'static str>,
+    label: &'static str,
+    registry: crate::journal::registry::JournalServiceRegistry,
+    build: F,
+    worker_config: ReconciliationWorkerConfig,
+    shutdown: CancellationToken,
+) where
+    C: crate::workers::ReconciliationCycle + Sync,
+    F: Fn(&str, SqlitePool) -> Option<C> + Send + Sync + 'static,
+{
+    let worker = ReconciliationWorker::new(
+        crate::workers::TenantSweepCycle::new(label, registry, build),
+        worker_config,
+    );
+    workers.spawn(async move {
+        worker.run_forever(shutdown).await;
+        label
+    });
+}
+
+/// Spawn the global background workers. One worker per domain sweeps all
+/// tenant databases, so the number of polling loops stays constant no matter
+/// how many users the instance serves.
+pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalWorkersConfig) {
+    let GlobalWorkersConfig {
+        registry,
         config,
-        prompt_repository,
         embedding_config,
         entry_extraction_config,
         daily_review_config,
@@ -403,16 +444,20 @@ pub fn spawn_tenant_workers(config: JournalTenantWorkersConfig) {
         && let Some(cfg) = &embedding_config
         && let Ok(embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
     {
-        let index = SqliteEmbeddingRepository::new(pool.clone());
-        let backfill_service = EmbeddingBackfillService::new(index, embedder);
-        let worker = ReconciliationWorker::new(
-            EmbeddingCycle::new(backfill_service),
+        spawn_sweep(
+            workers,
+            "embedding-sweep",
+            registry.clone(),
+            move |_chat_id, pool| {
+                let index = SqliteEmbeddingRepository::new(pool);
+                Some(EmbeddingCycle::new(EmbeddingBackfillService::new(
+                    index,
+                    embedder.clone(),
+                )))
+            },
             config.embedding_worker.clone(),
+            shutdown.clone(),
         );
-        let token = shutdown.clone();
-        tokio::spawn(async move {
-            worker.run_forever(token).await;
-        });
     }
 
     // 2. Daily Review Embedding Worker
@@ -420,122 +465,159 @@ pub fn spawn_tenant_workers(config: JournalTenantWorkersConfig) {
         && let Some(cfg) = &embedding_config
         && let Ok(embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
     {
-        let index =
-            crate::journal::review::embedding_repository::SqliteDailyReviewEmbeddingRepository::new(
-                pool.clone(),
-            );
-        let backfill_service = EmbeddingBackfillService::new(index, embedder);
-        let worker = ReconciliationWorker::new(
-            EmbeddingCycle::new(backfill_service),
+        spawn_sweep(
+            workers,
+            "daily-review-embedding-sweep",
+            registry.clone(),
+            move |_chat_id, pool| {
+                let index =
+                    crate::journal::review::embedding_repository::SqliteDailyReviewEmbeddingRepository::new(
+                        pool,
+                    );
+                Some(EmbeddingCycle::new(EmbeddingBackfillService::new(
+                    index,
+                    embedder.clone(),
+                )))
+            },
             config.daily_review_embedding_worker.clone(),
+            shutdown.clone(),
         );
-        let token = shutdown.clone();
-        tokio::spawn(async move {
-            worker.run_forever(token).await;
-        });
     }
 
     // 3. Extraction Worker
     if config.extraction_worker.enabled
-        && let Some(openai_api_key) = &entry_extraction_config.openai_api_key
-        && !openai_api_key.trim().is_empty()
-        && let Ok(prompt) = entry_extraction_config.prompt.load()
-        && let Ok(generator) = crate::journal::extraction::RigOpenAiJournalEntryExtractionGenerator::from_optional_api_key(
-            entry_extraction_config.extraction.clone(),
-            prompt,
-            Some(openai_api_key.clone()),
-        )
+        && entry_extraction_config
+            .openai_api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty())
     {
-        let prompt_source = PromptSource::new(
-            prompt_repository.clone(),
-            PromptKey::EntryExtraction,
-            entry_extraction_config.prompt.path.clone(),
-        );
-        let generator = generator.with_prompt_source(prompt_source);
-        let repository = JournalEntryExtractionRepository::new(pool.clone());
-        let runner = JournalEntryExtractionService::new(repository.clone(), generator);
-        let backfill = ExtractionBackfillService::new(repository, runner);
-        let worker = ReconciliationWorker::new(
-            ExtractionCycle::new(backfill),
+        let extraction_config = entry_extraction_config.clone();
+        spawn_sweep(
+            workers,
+            "extraction-sweep",
+            registry.clone(),
+            move |_chat_id, pool| {
+                let prompt = extraction_config.prompt.load().ok()?;
+                let generator =
+                    crate::journal::extraction::RigOpenAiJournalEntryExtractionGenerator::from_optional_api_key(
+                        extraction_config.extraction.clone(),
+                        prompt,
+                        extraction_config.openai_api_key.clone(),
+                    )
+                    .ok()?;
+                let prompt_source = PromptSource::new(
+                    PromptRepository::new(pool.clone()),
+                    PromptKey::EntryExtraction,
+                    extraction_config.prompt.path.clone(),
+                );
+                let generator = generator.with_prompt_source(prompt_source);
+                let repository = JournalEntryExtractionRepository::new(pool);
+                let runner = JournalEntryExtractionService::new(repository.clone(), generator);
+                Some(ExtractionCycle::new(ExtractionBackfillService::new(
+                    repository, runner,
+                )))
+            },
             config.extraction_worker.clone(),
+            shutdown.clone(),
         );
-        let token = shutdown.clone();
-        tokio::spawn(async move {
-            worker.run_forever(token).await;
-        });
     }
 
     // 4. Daily Review Delivery Worker
-    if config.daily_review_delivery.enabled
-        && let Ok(Some(daily_review_service)) =
-            build_daily_review_service(pool.clone(), &prompt_repository, daily_review_config)
-    {
-        let cycle = DailyReviewDeliveryWorker::new(
-            JournalRepository::new(pool.clone()),
-            crate::journal::review::repository::DailyReviewRepository::new(pool.clone()),
-            daily_review_service,
-            TelegramDailyReviewSender::new(
-                config.telegram_bot_token.clone(),
-                config.telegram_allowed_user_ids.clone(),
-            ),
-            config.daily_review_delivery.clone(),
+    if config.daily_review_delivery.enabled {
+        let serve_config = config.clone();
+        spawn_sweep(
+            workers,
+            "daily-review-delivery-sweep",
+            registry.clone(),
+            move |_chat_id, pool| {
+                let prompt_repository = PromptRepository::new(pool.clone());
+                let daily_review_service = build_daily_review_service(
+                    pool.clone(),
+                    &prompt_repository,
+                    daily_review_config.clone(),
+                )
+                .ok()
+                .flatten()?;
+                Some(DailyReviewDeliveryWorker::new(
+                    JournalRepository::new(pool.clone()),
+                    crate::journal::review::repository::DailyReviewRepository::new(pool),
+                    daily_review_service,
+                    TelegramDailyReviewSender::new(
+                        serve_config.telegram_bot_token.clone(),
+                        serve_config.telegram_allowed_user_ids.clone(),
+                    ),
+                    serve_config.daily_review_delivery.clone(),
+                ))
+            },
+            ReconciliationWorkerConfig {
+                enabled: config.daily_review_delivery.enabled,
+                batch_size: 1,
+                interval: config.daily_review_delivery.interval,
+            },
+            shutdown.clone(),
         );
-        let worker_config = ReconciliationWorkerConfig {
-            enabled: config.daily_review_delivery.enabled,
-            batch_size: 1,
-            interval: config.daily_review_delivery.interval,
-        };
-        let worker = ReconciliationWorker::new(cycle, worker_config);
-        let token = shutdown.clone();
-        tokio::spawn(async move {
-            worker.run_forever(token).await;
-        });
     }
 
     // 5. Weekly Review Delivery Worker
-    if config.weekly_review_delivery.enabled
-        && let Ok(Some(weekly_review_service)) =
-            build_weekly_review_service(pool.clone(), &prompt_repository, weekly_review_config)
-    {
-        let cycle = WeeklyReviewDeliveryWorker::new(
-            JournalRepository::new(pool.clone()),
-            crate::journal::week_review::repository::WeeklyReviewRepository::new(pool.clone()),
-            weekly_review_service,
-            TelegramWeeklyReviewSender::new(
-                config.telegram_bot_token.clone(),
-                config.telegram_allowed_user_ids.clone(),
-            ),
-            config.weekly_review_delivery.clone(),
+    if config.weekly_review_delivery.enabled {
+        let serve_config = config.clone();
+        spawn_sweep(
+            workers,
+            "weekly-review-delivery-sweep",
+            registry.clone(),
+            move |_chat_id, pool| {
+                let prompt_repository = PromptRepository::new(pool.clone());
+                let weekly_review_service = build_weekly_review_service(
+                    pool.clone(),
+                    &prompt_repository,
+                    weekly_review_config.clone(),
+                )
+                .ok()
+                .flatten()?;
+                Some(WeeklyReviewDeliveryWorker::new(
+                    JournalRepository::new(pool.clone()),
+                    crate::journal::week_review::repository::WeeklyReviewRepository::new(pool),
+                    weekly_review_service,
+                    TelegramWeeklyReviewSender::new(
+                        serve_config.telegram_bot_token.clone(),
+                        serve_config.telegram_allowed_user_ids.clone(),
+                    ),
+                    serve_config.weekly_review_delivery.clone(),
+                ))
+            },
+            ReconciliationWorkerConfig {
+                enabled: config.weekly_review_delivery.enabled,
+                batch_size: 1,
+                interval: config.weekly_review_delivery.interval,
+            },
+            shutdown.clone(),
         );
-        let worker_config = ReconciliationWorkerConfig {
-            enabled: config.weekly_review_delivery.enabled,
-            batch_size: 1,
-            interval: config.weekly_review_delivery.interval,
-        };
-        let worker = ReconciliationWorker::new(cycle, worker_config);
-        let token = shutdown.clone();
-        tokio::spawn(async move {
-            worker.run_forever(token).await;
-        });
     }
 
     // 6. Signal Worker
-    if config.signal_worker.enabled
-        && let Ok(Some(service)) =
-            build_signal_service(pool.clone(), &prompt_repository, signal_runtime_config)
-    {
-        let backfill = DailyReviewSignalBackfillService::new(
-            DailyReviewSignalRepository::new(pool.clone()),
-            service,
-        );
-        let worker = ReconciliationWorker::new(
-            DailyReviewSignalCycle::new(backfill),
+    if config.signal_worker.enabled {
+        spawn_sweep(
+            workers,
+            "signal-sweep",
+            registry.clone(),
+            move |_chat_id, pool| {
+                let prompt_repository = PromptRepository::new(pool.clone());
+                let service = build_signal_service(
+                    pool.clone(),
+                    &prompt_repository,
+                    signal_runtime_config.clone(),
+                )
+                .ok()
+                .flatten()?;
+                let backfill = DailyReviewSignalBackfillService::new(
+                    DailyReviewSignalRepository::new(pool),
+                    service,
+                );
+                Some(DailyReviewSignalCycle::new(backfill))
+            },
             config.signal_worker.clone(),
+            shutdown.clone(),
         );
-        let token = shutdown.clone();
-        tokio::spawn(async move {
-            worker.run_forever(token).await;
-        });
     }
 }
 
