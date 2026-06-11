@@ -58,12 +58,22 @@ mod tests {
 
     #[tokio::test]
     async fn health_bypasses_bearer_auth_when_merged_after_layer() {
-        // Mirror the listener assembly in `app::spawn_http_server`: protected
-        // routes first, auth layer, then the health router merged on top.
-        let token: Arc<str> = Arc::from("secret");
+        // Mirror the listener assembly in `http::build_per_user_app`:
+        // protected routes first, auth layer, then the health router merged
+        // on top.
+        crate::database::register_sqlite_vec_extension();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let resolver = Arc::new(crate::auth::TokenResolver::new(
+            crate::tokens::UserTokenStore::new(pool),
+        ));
+
         let app = Router::new()
             .route("/protected", get(|| async { "ok" }))
-            .layer(from_fn_with_state(token, crate::auth::require_bearer))
+            .layer(from_fn_with_state(
+                resolver,
+                crate::auth::require_user_bearer,
+            ))
             .merge(router());
 
         let health = response_for(app.clone(), "/health").await;

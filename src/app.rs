@@ -9,7 +9,6 @@ use tracing::{error, info, warn};
 
 use crate::{
     adapters::telegram::TelegramAdapter,
-    auth::UserTokens,
     cli::ServeConfig,
     database, http,
     journal::{
@@ -88,6 +87,16 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         },
     );
 
+    // Central store for tokens issued via the Telegram /token command. It
+    // lives in the default database so one lookup resolves any token.
+    let issued_tokens = if config.http_auth.enabled {
+        let pool = database::connect_pool(&config.database_url).await?;
+        sqlx::migrate!().run(&pool).await?;
+        Some(crate::tokens::UserTokenStore::new(pool))
+    } else {
+        None
+    };
+
     // Spawn the global HTTP server (MCP and Dashboard)
     spawn_http_server(
         &mut workers,
@@ -95,6 +104,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &config,
         embedding_config.as_ref(),
         &journal_registry,
+        issued_tokens.clone(),
     )
     .await?;
 
@@ -123,7 +133,8 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         config.telegram_bot_token.clone(),
         config.telegram_allowed_user_ids.clone(),
         journal_registry,
-    );
+    )
+    .with_token_issuer(issued_tokens.map(crate::tokens::TokenIssuer::new));
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
 }
 
@@ -133,6 +144,7 @@ async fn spawn_http_server(
     config: &ServeConfig,
     embedding_config: Option<&EmbeddingConfig>,
     registry: &crate::journal::registry::JournalServiceRegistry,
+    issued_tokens: Option<crate::tokens::UserTokenStore>,
 ) -> Result<(), Box<dyn Error>> {
     if !config.mcp_server.enabled && !config.dashboard.enabled {
         return Ok(());
@@ -152,19 +164,24 @@ async fn spawn_http_server(
         shutdown: shutdown.clone(),
     };
 
-    let (router, auth_mode) = if !config.http_auth.user_tokens.is_empty() {
-        // Per-user tokens: every /mcp and /api request is served from the
-        // database of the user owning the presented token.
-        let tokens = Arc::new(UserTokens::new(config.http_auth.user_tokens.clone()));
+    let (router, auth_mode) = if let Some(issued_tokens) = issued_tokens {
+        // Auth enabled: every /mcp and /api request must carry a bearer token
+        // minted via the Telegram /token command, and is served from the
+        // database of the user who minted it.
+        let resolver = Arc::new(crate::auth::TokenResolver::new(issued_tokens));
         let tenants = http::TenantRouters::new(registry.clone(), router_config);
         (
-            http::build_per_user_app(tenants, tokens, config.dashboard.enabled),
+            http::build_per_user_app(tenants, resolver, config.dashboard.enabled),
             "per-user",
         )
     } else {
-        // Single tenant: in multiuser mode with a whitelist, the
-        // administrative user is the first ID in the whitelist and we serve
-        // their isolated database. Otherwise, the default/legacy database.
+        // Auth disabled: unauthenticated single tenant. In multiuser mode
+        // with a whitelist, the administrative user is the first ID in the
+        // whitelist and we serve their isolated database. Otherwise, the
+        // default/legacy database.
+        warn!(
+            "HTTP server (MCP & Dashboard) is running without authentication; set FROID_AUTH_ENABLED=true to require bearer tokens minted via the Telegram /token command"
+        );
         let (pool, capture_conversation_id) = if let Some(first_id) = config
             .telegram_allowed_user_ids
             .as_ref()
@@ -189,18 +206,9 @@ async fn spawn_http_server(
         let tenant_router =
             http::build_tenant_router(&pool, &capture_conversation_id, &router_config)
                 .map_err(|e| -> Box<dyn Error> { e })?;
-        let token: Option<Arc<str>> = config.http_auth.token.clone().map(Arc::from);
-        let auth_mode = if token.is_some() {
-            "single-token"
-        } else {
-            warn!(
-                "HTTP server (MCP & Dashboard) is running without authentication; set FROID_AUTH_TOKEN or FROID_AUTH_TOKENS to require a bearer token"
-            );
-            "none"
-        };
         (
-            http::build_single_tenant_app(tenant_router, token, config.dashboard.enabled),
-            auth_mode,
+            http::build_single_tenant_app(tenant_router, config.dashboard.enabled),
+            "none",
         )
     };
 

@@ -31,7 +31,7 @@ use tracing::error;
 
 use crate::{
     adapters::mcp::AnalyzerMcpServer,
-    auth::{AuthenticatedTenant, UserTokens, require_bearer, require_user_bearer},
+    auth::{AuthenticatedTenant, TokenResolver, require_user_bearer},
     dashboard,
     journal::{
         analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_mcp_components},
@@ -168,7 +168,7 @@ async fn forward_to_tenant(State(tenants): State<TenantRouters>, request: Reques
 /// the authenticated user's database; `/health` and the SPA shell are public.
 pub fn build_per_user_app(
     tenants: TenantRouters,
-    tokens: Arc<UserTokens>,
+    resolver: Arc<TokenResolver>,
     dashboard_enabled: bool,
 ) -> Router {
     let mut router = Router::new()
@@ -177,7 +177,7 @@ pub fn build_per_user_app(
         .route("/api/{*path}", any(forward_to_tenant))
         .with_state(tenants)
         .layer(axum::middleware::from_fn_with_state(
-            tokens,
+            resolver,
             require_user_bearer,
         ))
         .merge(crate::health::router());
@@ -188,19 +188,11 @@ pub fn build_per_user_app(
     router
 }
 
-/// Full listener app for the single-tenant layouts: the tenant router sits
-/// behind the optional shared token; `/health` and the SPA shell are public.
-pub fn build_single_tenant_app(
-    tenant_router: Router,
-    token: Option<Arc<str>>,
-    dashboard_enabled: bool,
-) -> Router {
-    let mut router = tenant_router;
-
-    if let Some(token) = token {
-        router = router.layer(axum::middleware::from_fn_with_state(token, require_bearer));
-    }
-    router = router.merge(crate::health::router());
+/// Full listener app for the unauthenticated single-tenant layout (no auth
+/// configured): everything is served from one database and access is expected
+/// to be restricted at the network level.
+pub fn build_single_tenant_app(tenant_router: Router, dashboard_enabled: bool) -> Router {
+    let mut router = tenant_router.merge(crate::health::router());
 
     if dashboard_enabled {
         router = router.merge(dashboard::spa_router());
