@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -31,20 +31,17 @@ pub struct JournalServiceRegistryConfig {
 
 #[derive(Clone)]
 pub struct JournalServiceRegistry {
-    config: Arc<ServeConfig>,
     embedding_config: Option<EmbeddingConfig>,
     entry_extraction_config: JournalEntryExtractionRuntimeConfig,
     daily_review_config: DailyReviewRuntimeConfig,
     weekly_review_config: WeeklyReviewRuntimeConfig,
-    signal_runtime_config: DailyReviewSignalRuntimeConfig,
     delivery_configured: bool,
-    shutdown: CancellationToken,
 
     base_dir: PathBuf,
 
     // Active connection caches
+    pools: Arc<RwLock<HashMap<String, sqlx::SqlitePool>>>,
     services: Arc<RwLock<HashMap<String, JournalService>>>,
-    spawned_workers: Arc<RwLock<HashSet<String>>>,
 }
 
 impl JournalServiceRegistry {
@@ -55,17 +52,14 @@ impl JournalServiceRegistry {
         let base_dir = data_dir.join("journals");
 
         Self {
-            config: Arc::new(config.config),
             embedding_config: config.embedding_config,
             entry_extraction_config: config.entry_extraction_config,
             daily_review_config: config.daily_review_config,
             weekly_review_config: config.weekly_review_config,
-            signal_runtime_config: config.signal_runtime_config,
             delivery_configured: config.delivery_configured,
-            shutdown: config.shutdown,
             base_dir,
+            pools: Arc::new(RwLock::new(HashMap::new())),
             services: Arc::new(RwLock::new(HashMap::new())),
-            spawned_workers: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -100,24 +94,23 @@ impl JournalServiceRegistry {
         Ok(())
     }
 
-    /// Retrieve or dynamically create a `JournalService` for the given Telegram `chat_id`
-    pub async fn get_or_create(
+    /// Retrieve or create the connection pool for the given tenant's isolated
+    /// database, running migrations on first open.
+    pub async fn pool(
         &self,
         chat_id: &str,
-    ) -> Result<JournalService, Box<dyn std::error::Error + Send + Sync>> {
-        // First check read lock for cached instance
+    ) -> Result<sqlx::SqlitePool, Box<dyn std::error::Error + Send + Sync>> {
         {
-            let guard = self.services.read().await;
-            if let Some(service) = guard.get(chat_id) {
-                return Ok(service.clone());
+            let guard = self.pools.read().await;
+            if let Some(pool) = guard.get(chat_id) {
+                return Ok(pool.clone());
             }
         }
 
-        // Cache miss: lock write lock to load/create
-        let mut guard = self.services.write().await;
+        let mut guard = self.pools.write().await;
         // Double-check to avoid race condition
-        if let Some(service) = guard.get(chat_id) {
-            return Ok(service.clone());
+        if let Some(pool) = guard.get(chat_id) {
+            return Ok(pool.clone());
         }
 
         info!(chat_id, "initializing tenant database connection");
@@ -131,6 +124,43 @@ impl JournalServiceRegistry {
 
         // Run migrations on this isolated database
         sqlx::migrate!().run(&pool).await?;
+
+        guard.insert(chat_id.to_string(), pool.clone());
+        Ok(pool)
+    }
+
+    /// Snapshot of all currently registered tenants and their pools, used by
+    /// the global sweep workers to visit every tenant database.
+    pub async fn tenants(&self) -> Vec<(String, sqlx::SqlitePool)> {
+        self.pools
+            .read()
+            .await
+            .iter()
+            .map(|(chat_id, pool)| (chat_id.clone(), pool.clone()))
+            .collect()
+    }
+
+    /// Retrieve or dynamically create a `JournalService` for the given Telegram `chat_id`
+    pub async fn get_or_create(
+        &self,
+        chat_id: &str,
+    ) -> Result<JournalService, Box<dyn std::error::Error + Send + Sync>> {
+        // First check read lock for cached instance
+        {
+            let guard = self.services.read().await;
+            if let Some(service) = guard.get(chat_id) {
+                return Ok(service.clone());
+            }
+        }
+
+        let pool = self.pool(chat_id).await?;
+
+        // Cache miss: lock write lock to load/create
+        let mut guard = self.services.write().await;
+        // Double-check to avoid race condition
+        if let Some(service) = guard.get(chat_id) {
+            return Ok(service.clone());
+        }
 
         // Build prompt repository for this isolated database
         let prompt_repository = PromptRepository::new(pool.clone());
@@ -146,24 +176,6 @@ impl JournalServiceRegistry {
             self.delivery_configured,
         )
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
-
-        // Spawn background workers for this tenant pool if not already spawned
-        let mut spawned = self.spawned_workers.write().await;
-        if !spawned.contains(chat_id) {
-            info!(chat_id, "spawning background workers for tenant");
-            crate::app::spawn_tenant_workers(crate::app::JournalTenantWorkersConfig {
-                pool,
-                config: self.config.clone(),
-                prompt_repository,
-                embedding_config: self.embedding_config.clone(),
-                entry_extraction_config: self.entry_extraction_config.clone(),
-                daily_review_config: self.daily_review_config.clone(),
-                weekly_review_config: self.weekly_review_config.clone(),
-                signal_runtime_config: self.signal_runtime_config.clone(),
-                shutdown: self.shutdown.clone(),
-            });
-            spawned.insert(chat_id.to_string());
-        }
 
         guard.insert(chat_id.to_string(), service.clone());
         Ok(service)

@@ -138,7 +138,7 @@ struct RigOpenAiReviewProvider {
 
 impl RigOpenAiReviewProvider {
     fn new(api_key: &str) -> Result<Self, RigOpenAiReviewGeneratorError> {
-        let client = OpenAiClient::new(api_key)
+        let client = crate::openai::client_from_env(api_key)
             .map_err(|error| RigOpenAiReviewGeneratorError::Client(error.to_string()))?;
         Ok(Self { client })
     }

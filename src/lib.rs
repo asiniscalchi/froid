@@ -1,11 +1,16 @@
 pub mod adapters;
 pub mod app;
+pub mod auth;
 pub mod cli;
 pub mod dashboard;
 pub mod database;
 pub mod handler;
+pub mod health;
+pub mod http;
 pub mod journal;
 pub mod messages;
+mod openai;
 pub mod prompts;
+pub mod users;
 pub mod version;
 pub mod workers;

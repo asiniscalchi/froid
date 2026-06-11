@@ -1,3 +1,5 @@
+import { apiFetch } from '@/lib/http'
+
 export type PromptListItem = {
   key: string
   label: string
@@ -18,7 +20,7 @@ export type PromptDetail = {
 }
 
 export async function listPrompts(): Promise<PromptListItem[]> {
-  const response = await fetch('/api/prompts')
+  const response = await apiFetch('/api/prompts')
   if (!response.ok) {
     throw new Error(`Failed to load prompts (${response.status})`)
   }
@@ -26,7 +28,7 @@ export async function listPrompts(): Promise<PromptListItem[]> {
 }
 
 export async function getPrompt(key: string): Promise<PromptDetail> {
-  const response = await fetch(`/api/prompts/${encodeURIComponent(key)}`)
+  const response = await apiFetch(`/api/prompts/${encodeURIComponent(key)}`)
   if (!response.ok) {
     throw new Error(`Failed to load prompt (${response.status})`)
   }
@@ -37,7 +39,7 @@ export async function savePrompt(
   key: string,
   content: string,
 ): Promise<PromptDetail> {
-  const response = await fetch(`/api/prompts/${encodeURIComponent(key)}`, {
+  const response = await apiFetch(`/api/prompts/${encodeURIComponent(key)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
@@ -56,7 +58,7 @@ export async function savePrompt(
 }
 
 export async function resetPrompt(key: string): Promise<void> {
-  const response = await fetch(`/api/prompts/${encodeURIComponent(key)}`, {
+  const response = await apiFetch(`/api/prompts/${encodeURIComponent(key)}`, {
     method: 'DELETE',
   })
   if (!response.ok) {

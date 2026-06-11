@@ -1,11 +1,7 @@
 use std::{env, error::Error, fmt};
 
 use async_trait::async_trait;
-use rig::{
-    client::EmbeddingsClient,
-    embeddings::EmbeddingModel,
-    providers::openai::{self, Client as OpenAiClient},
-};
+use rig::{client::EmbeddingsClient, embeddings::EmbeddingModel, providers::openai};
 
 use super::{Embedder, EmbedderError, Embedding, EmbeddingConfig, SUPPORTED_EMBEDDING_DIMENSIONS};
 
@@ -53,7 +49,7 @@ pub struct RigOpenAiProvider {
 
 impl RigOpenAiProvider {
     fn new(config: &EmbeddingConfig, api_key: &str) -> Result<Self, RigOpenAiEmbedderError> {
-        let client = OpenAiClient::new(api_key)
+        let client = crate::openai::client_from_env(api_key)
             .map_err(|error| RigOpenAiEmbedderError::Client(error.to_string()))?;
         let embedding_model =
             client.embedding_model_with_ndims(&config.model, SUPPORTED_EMBEDDING_DIMENSIONS);

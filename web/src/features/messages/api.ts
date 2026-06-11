@@ -1,7 +1,9 @@
+import { apiFetch } from '@/lib/http'
+
 export type ImportResult = { imported: number }
 
 export async function exportMessages(): Promise<Blob> {
-  const response = await fetch('/api/messages/export')
+  const response = await apiFetch('/api/messages/export')
   if (!response.ok) {
     throw new Error(`Export failed (${response.status})`)
   }
@@ -10,7 +12,7 @@ export async function exportMessages(): Promise<Blob> {
 
 export async function importMessages(file: File): Promise<ImportResult> {
   const text = await file.text()
-  const response = await fetch('/api/messages/import', {
+  const response = await apiFetch('/api/messages/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: text,

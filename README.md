@@ -39,7 +39,7 @@ docker run --env-file .env -v ./data:/app/data ghcr.io/asiniscalchi/froid:latest
 
 ## Exposing tools over MCP
 
-Set `FROID_MCP_ENABLED=true` to expose the analyzer's read-only tools over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. The MCP server runs alongside the Telegram bot in the same process. Froid has no MCP authentication, so restrict access at the network level — use the default loopback bind for local use, or a Docker internal network when running in Compose.
+Set `FROID_MCP_ENABLED=true` to expose the analyzer's read-only tools over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. The MCP server runs alongside the Telegram bot in the same process. Set `FROID_AUTH_TOKEN` to require an `Authorization: Bearer <token>` header on the HTTP listener (see [Authentication](#authentication)); when it is unset, the endpoints are unauthenticated, so restrict access at the network level — use the default loopback bind for local use, or a Docker internal network when running in Compose.
 
 ```bash
 FROID_MCP_ENABLED=true cargo run -- serve
@@ -49,11 +49,58 @@ Available tools: `journal_get`, `journal_get_recent`, `journal_search_text`, `jo
 
 ## Dashboard webapp
 
-Set `FROID_DASHBOARD_ENABLED=true` to serve a small React webapp at `http://127.0.0.1:8080/`. The dashboard shares the HTTP listener with the MCP endpoint (`FROID_MCP_BIND`, default `127.0.0.1:8080`) and can be enabled independently of MCP. Assets are embedded into the release binary, so the Docker image carries everything it needs. Like MCP, the dashboard has no built-in authentication — restrict access at the network level.
+Set `FROID_DASHBOARD_ENABLED=true` to serve a small React webapp at `http://127.0.0.1:8080/`. Besides message export/import and prompt editing, the dashboard API exposes journal data directly: `GET /api/entries` (recent entries), `POST /api/messages` (capture a new entry from the browser; it flows through the same extraction/embedding/review pipeline as Telegram messages), and `GET /api/reviews/daily` / `GET /api/reviews/weekly` (completed reviews, optional `from`/`to` date filters). The dashboard shares the HTTP listener with the MCP endpoint (`FROID_MCP_BIND`, default `127.0.0.1:8080`) and can be enabled independently of MCP. Assets are embedded into the release binary, so the Docker image carries everything it needs. The dashboard is protected by the same `FROID_AUTH_TOKEN` bearer check as MCP (see [Authentication](#authentication)); when no token is set, restrict access at the network level.
 
 ```bash
 FROID_DASHBOARD_ENABLED=true cargo run -- serve
 ```
+
+## Authentication
+
+The HTTP listener shared by the MCP endpoint and the dashboard supports two modes.
+
+**Single token** — set `FROID_AUTH_TOKEN` to any secret string and every request to `/mcp` and `/api` must carry a matching header:
+
+```
+Authorization: Bearer <your-token>
+```
+
+All requests are served from one database: in multiuser mode, the isolated database of the first whitelisted Telegram user; otherwise the default database.
+
+**Per-user tokens** — set `FROID_AUTH_TOKENS` to comma-separated `<chat_id>:<token>` pairs (e.g. `123456789:alice-secret,987654321:bob-secret`). Each token authenticates one user, and `/mcp` and `/api` requests are served from that user's isolated journal database. This gives every user of a shared instance their own MCP endpoint and dashboard view. The two variables are mutually exclusive.
+
+Requests without a valid token receive `401 Unauthorized`. The static dashboard shell (HTML/JS assets, which contain no journal data) and the `/health` probe are intentionally served without authentication; all data flows through the protected `/api` and `/mcp` routes.
+
+When neither variable is set, the endpoints are unauthenticated and Froid logs a warning at startup — in that case restrict access at the network level (loopback bind or a Docker internal network).
+
+## Health endpoint
+
+Whenever the HTTP listener is running (MCP or dashboard enabled), `GET /health` answers `200 OK` with the service name and version. It is intentionally exempt from the bearer-token check so supervisors, load balancers, and container healthchecks can probe it without credentials:
+
+```bash
+curl http://127.0.0.1:8080/health
+# {"name":"froid","status":"ok","version":"..."}
+```
+
+## Backups
+
+All persistent state lives in `DATA_DIR` (default `data/`): the legacy database file plus one isolated SQLite database per user under `journals/user_<chat_id>.sqlite3`. To back up:
+
+- **Cold backup** — stop the service and copy the whole data directory. SQLite databases are plain files; this is always safe.
+- **Hot backup** — while the service is running, use SQLite's online backup instead of copying files directly (WAL side-files make raw copies of a live database unreliable): `sqlite3 data/journals/user_<chat_id>.sqlite3 ".backup 'backup.sqlite3'"` for each database.
+
+Restoring is the reverse: stop the service and put the files back in place.
+
+## Managing users
+
+Each user's journal lives in its own SQLite database under `DATA_DIR/journals/user_<chat_id>.sqlite3`. The `users` subcommands operate directly on those files, so run them while the server is stopped:
+
+```bash
+froid users list                  # chat id, size, last modified, path
+froid users delete <chat_id> --yes
+```
+
+`users delete` permanently removes the user's entire journal (database plus WAL side-files) and refuses to run without `--yes`. Combined with the export endpoint this covers data-portability and right-to-erasure requests.
 
 ## Configuration
 
@@ -101,6 +148,8 @@ All workers are disabled by default and require `OPENAI_API_KEY`.
 |---|---|---|
 | `FROID_MCP_ENABLED` | `false` | Enable the MCP Streamable HTTP server |
 | `FROID_MCP_BIND` | `127.0.0.1:8080` | Bind address (e.g. `0.0.0.0:8080` for Docker Compose) |
+| `FROID_AUTH_TOKEN` | _(none)_ | Single shared bearer token for the HTTP listener (MCP and dashboard); unset means no authentication |
+| `FROID_AUTH_TOKENS` | _(none)_ | Per-user bearer tokens as comma-separated `<chat_id>:<token>` pairs; each token serves its user's isolated database. Mutually exclusive with `FROID_AUTH_TOKEN` |
 
 ### Models
 
@@ -113,6 +162,7 @@ Override the OpenAI model used by each pipeline stage. Accepts any model name re
 | `FROID_REVIEW_MODEL` | `gpt-5-mini` | Model used for daily review generation |
 | `FROID_SIGNAL_EXTRACTION_MODEL` | `gpt-5-mini` | Model used for daily review signal extraction |
 | `FROID_WEEK_REVIEW_MODEL` | `gpt-5-mini` | Model used for weekly review generation |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for all LLM and embedding requests. Point it at any OpenAI-compatible endpoint (Ollama, OpenRouter, a self-hosted gateway) to keep journal data off openai.com; pair it with the model variables above |
 
 ### Prompts
 

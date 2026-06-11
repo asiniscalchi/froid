@@ -1,5 +1,9 @@
 use clap::Parser;
-use froid::{app, cli::Cli, version};
+use froid::{
+    app,
+    cli::{Cli, Command},
+    users, version,
+};
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -14,6 +18,10 @@ async fn main() {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let cli = Cli::parse();
+
+    if let Some(Command::Users { command }) = cli.subcommand() {
+        return users::run(&cli.journals_dir(), command);
+    }
 
     init_tracing();
     info!(version = version::VERSION, "starting froid");

@@ -130,7 +130,7 @@ struct RigOpenAiJournalEntryExtractionProvider {
 
 impl RigOpenAiJournalEntryExtractionProvider {
     fn new(api_key: &str) -> Result<Self, RigOpenAiJournalEntryExtractionGeneratorError> {
-        let client = OpenAiClient::new(api_key).map_err(|error| {
+        let client = crate::openai::client_from_env(api_key).map_err(|error| {
             RigOpenAiJournalEntryExtractionGeneratorError::Client(error.to_string())
         })?;
         Ok(Self { client })

@@ -1,8 +1,10 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use crate::{
+    auth::UserToken,
     journal::{
         review::DailyReviewDeliveryWorkerConfig, week_review::WeeklyReviewDeliveryWorkerConfig,
     },
@@ -13,6 +15,9 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(version = version::VERSION, about)]
 pub struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     #[arg(
         long,
         env = "TELEGRAM_BOT_TOKEN",
@@ -166,6 +171,43 @@ pub struct Cli {
 
     #[arg(long, env = "FROID_DASHBOARD_ENABLED", global = true)]
     dashboard_enabled: Option<bool>,
+
+    #[arg(long, env = "FROID_AUTH_TOKEN", global = true, hide_env_values = true)]
+    auth_token: Option<String>,
+
+    #[arg(
+        long,
+        env = "FROID_AUTH_TOKENS",
+        global = true,
+        hide_env_values = true,
+        value_delimiter = ','
+    )]
+    auth_tokens: Option<Vec<String>>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Run the Telegram bot, background workers, and HTTP listener (default)
+    Serve,
+    /// Manage per-user journal databases (run while the server is stopped)
+    Users {
+        #[command(subcommand)]
+        command: UsersCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UsersCommand {
+    /// List the per-user journal databases on disk
+    List,
+    /// Permanently delete a user's journal database (their entire journal)
+    Delete {
+        /// Telegram chat id of the user to delete
+        chat_id: String,
+        /// Confirm the irreversible deletion
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +219,17 @@ pub struct McpServerConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardConfig {
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpAuthConfig {
+    /// Bearer token required on the shared HTTP listener (MCP and dashboard).
+    /// When `None`, the HTTP endpoints are unauthenticated.
+    pub token: Option<String>,
+    /// Per-user bearer tokens (`chat_id:token` pairs). When non-empty, each
+    /// request is served from the database of the user owning the token.
+    /// Mutually exclusive with `token`.
+    pub user_tokens: Vec<UserToken>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,9 +246,63 @@ pub struct ServeConfig {
     pub signal_worker: ReconciliationWorkerConfig,
     pub mcp_server: McpServerConfig,
     pub dashboard: DashboardConfig,
+    pub http_auth: HttpAuthConfig,
+}
+
+/// Parse `chat_id:token` pairs from `FROID_AUTH_TOKENS`. The chat id is
+/// everything before the first colon; the token is the (possibly
+/// colon-containing) remainder.
+fn parse_user_tokens(pairs: &[String]) -> Result<Vec<UserToken>, clap::Error> {
+    let invalid =
+        |message: String| clap::Error::raw(clap::error::ErrorKind::ValueValidation, message);
+
+    let mut tokens: Vec<UserToken> = Vec::with_capacity(pairs.len());
+    for pair in pairs {
+        let Some((chat_id, token)) = pair.split_once(':') else {
+            return Err(invalid(format!(
+                "FROID_AUTH_TOKENS entries must look like <chat_id>:<token>; got {pair:?}"
+            )));
+        };
+        let (chat_id, token) = (chat_id.trim(), token.trim());
+        if chat_id.is_empty() || token.is_empty() {
+            return Err(invalid(format!(
+                "FROID_AUTH_TOKENS entries must have a non-empty chat id and token; got {pair:?}"
+            )));
+        }
+        if tokens.iter().any(|existing| existing.chat_id == chat_id) {
+            return Err(invalid(format!(
+                "FROID_AUTH_TOKENS lists chat id {chat_id} more than once"
+            )));
+        }
+        if tokens.iter().any(|existing| existing.token == token) {
+            return Err(invalid(
+                "FROID_AUTH_TOKENS lists the same token for multiple chat ids".to_string(),
+            ));
+        }
+        tokens.push(UserToken {
+            chat_id: chat_id.to_string(),
+            token: token.to_string(),
+        });
+    }
+
+    Ok(tokens)
 }
 
 impl Cli {
+    pub fn subcommand(&self) -> Option<&Command> {
+        self.command.as_ref()
+    }
+
+    /// Directory holding the per-user journal databases, mirroring the layout
+    /// used by the journal service registry (`<data dir>/journals`).
+    pub fn journals_dir(&self) -> PathBuf {
+        let database_path = format!("{}/{}", self.data_dir, self.database_file);
+        let data_dir = std::path::Path::new(&database_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("data"));
+        data_dir.join("journals")
+    }
+
     pub fn serve_config(&self) -> Result<ServeConfig, clap::Error> {
         let Some(telegram_bot_token) = self.telegram_bot_token.as_ref() else {
             return Err(clap::Error::raw(
@@ -273,6 +380,28 @@ impl Cli {
             enabled: self.dashboard_enabled.unwrap_or(false),
         };
 
+        let token = match self.auth_token.as_deref() {
+            Some(token) if token.trim().is_empty() => {
+                return Err(clap::Error::raw(
+                    clap::error::ErrorKind::ValueValidation,
+                    "FROID_AUTH_TOKEN environment variable or --auth-token must not be empty when set",
+                ));
+            }
+            Some(token) => Some(token.to_string()),
+            None => None,
+        };
+
+        let user_tokens = parse_user_tokens(self.auth_tokens.as_deref().unwrap_or_default())?;
+
+        if token.is_some() && !user_tokens.is_empty() {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                "FROID_AUTH_TOKEN and FROID_AUTH_TOKENS are mutually exclusive; configure one of them",
+            ));
+        }
+
+        let http_auth = HttpAuthConfig { token, user_tokens };
+
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
             telegram_allowed_user_ids: self.telegram_allowed_user_ids.clone(),
@@ -286,6 +415,7 @@ impl Cli {
             signal_worker,
             mcp_server,
             dashboard,
+            http_auth,
         })
     }
 }
@@ -298,6 +428,7 @@ mod tests {
 
     fn default_cli() -> Cli {
         Cli {
+            command: None,
             telegram_bot_token: None,
             telegram_allowed_user_ids: None,
             data_dir: "data".to_string(),
@@ -323,6 +454,8 @@ mod tests {
             mcp_enabled: None,
             mcp_bind: "127.0.0.1:8080".parse().unwrap(),
             dashboard_enabled: None,
+            auth_token: None,
+            auth_tokens: None,
         }
     }
 
@@ -406,6 +539,68 @@ mod tests {
     #[test]
     fn command_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn parses_serve_subcommand() {
+        let cli = Cli::parse_from(["froid", "serve", "--telegram-bot-token", "token"]);
+
+        assert!(matches!(cli.subcommand(), Some(super::Command::Serve)));
+        assert!(cli.serve_config().is_ok());
+    }
+
+    #[test]
+    fn defaults_to_serve_when_no_subcommand_given() {
+        let cli = Cli::parse_from(["froid", "--telegram-bot-token", "token"]);
+
+        assert!(cli.subcommand().is_none());
+        assert!(cli.serve_config().is_ok());
+    }
+
+    #[test]
+    fn parses_users_list_subcommand() {
+        let cli = Cli::parse_from(["froid", "users", "list"]);
+
+        assert!(matches!(
+            cli.subcommand(),
+            Some(super::Command::Users {
+                command: UsersCommand::List
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_users_delete_subcommand() {
+        let cli = Cli::parse_from(["froid", "users", "delete", "111", "--yes"]);
+
+        let Some(super::Command::Users {
+            command: UsersCommand::Delete { chat_id, yes },
+        }) = cli.subcommand()
+        else {
+            panic!("expected users delete command");
+        };
+        assert_eq!(chat_id, "111");
+        assert!(yes);
+    }
+
+    #[test]
+    fn users_delete_defaults_to_unconfirmed() {
+        let cli = Cli::parse_from(["froid", "users", "delete", "111"]);
+
+        let Some(super::Command::Users {
+            command: UsersCommand::Delete { yes, .. },
+        }) = cli.subcommand()
+        else {
+            panic!("expected users delete command");
+        };
+        assert!(!yes);
+    }
+
+    #[test]
+    fn journals_dir_derives_from_data_dir() {
+        let cli = Cli::parse_from(["froid", "--data-dir", "custom"]);
+
+        assert_eq!(cli.journals_dir(), PathBuf::from("custom/journals"));
     }
 
     #[test]
@@ -669,6 +864,145 @@ mod tests {
         let config = cli_with_token("token").serve_config().unwrap();
 
         assert!(!config.dashboard.enabled);
+    }
+
+    #[test]
+    fn serve_config_http_auth_token_none_by_default() {
+        let config = cli_with_token("token").serve_config().unwrap();
+
+        assert_eq!(config.http_auth.token, None);
+    }
+
+    #[test]
+    fn serve_config_http_auth_token_set_from_flag() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--auth-token",
+            "secret-bearer",
+        ]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.http_auth.token.as_deref(), Some("secret-bearer"));
+    }
+
+    #[test]
+    fn serve_config_rejects_empty_auth_token() {
+        let error = Cli {
+            auth_token: Some("  ".to_string()),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("FROID_AUTH_TOKEN"));
+    }
+
+    #[test]
+    fn serve_config_parses_per_user_tokens() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--auth-tokens",
+            "111:alice-secret,222:bob-secret",
+        ]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.http_auth.token, None);
+        assert_eq!(
+            config.http_auth.user_tokens,
+            vec![
+                UserToken {
+                    chat_id: "111".to_string(),
+                    token: "alice-secret".to_string(),
+                },
+                UserToken {
+                    chat_id: "222".to_string(),
+                    token: "bob-secret".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn serve_config_user_token_keeps_colons_in_token() {
+        let cli = Cli {
+            auth_tokens: Some(vec!["111:secret:with:colons".to_string()]),
+            ..cli_with_token("token")
+        };
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.http_auth.user_tokens[0].token, "secret:with:colons");
+    }
+
+    #[test]
+    fn serve_config_rejects_user_token_without_separator() {
+        let error = Cli {
+            auth_tokens: Some(vec!["just-a-token".to_string()]),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("<chat_id>:<token>"));
+    }
+
+    #[test]
+    fn serve_config_rejects_empty_user_token_parts() {
+        for pair in [":secret", "111:", " : "] {
+            let error = Cli {
+                auth_tokens: Some(vec![pair.to_string()]),
+                ..cli_with_token("token")
+            }
+            .serve_config()
+            .unwrap_err();
+
+            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        }
+    }
+
+    #[test]
+    fn serve_config_rejects_duplicate_chat_id_in_user_tokens() {
+        let error = Cli {
+            auth_tokens: Some(vec!["111:a".to_string(), "111:b".to_string()]),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert!(error.to_string().contains("more than once"));
+    }
+
+    #[test]
+    fn serve_config_rejects_duplicate_token_in_user_tokens() {
+        let error = Cli {
+            auth_tokens: Some(vec!["111:same".to_string(), "222:same".to_string()]),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert!(error.to_string().contains("same token"));
+    }
+
+    #[test]
+    fn serve_config_rejects_single_and_per_user_tokens_together() {
+        let error = Cli {
+            auth_token: Some("single".to_string()),
+            auth_tokens: Some(vec!["111:per-user".to_string()]),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert!(error.to_string().contains("mutually exclusive"));
     }
 
     #[test]
