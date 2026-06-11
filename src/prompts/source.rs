@@ -1,6 +1,5 @@
 use std::{
-    error::Error,
-    fmt, fs,
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -86,44 +85,25 @@ pub fn load_default(key: PromptKey, path: &Path) -> Result<ResolvedPrompt, Promp
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PromptSourceError {
+    #[error("failed to read customized prompt '{key}': {message}")]
     Database {
         key: &'static str,
         message: String,
     },
+    #[error("failed to load default prompt '{key}' from {}: {message}", path.display())]
     ReadFailed {
         key: &'static str,
         path: PathBuf,
         message: String,
     },
+    #[error("default prompt '{key}' file is empty: {}", path.display())]
     Empty {
         key: &'static str,
         path: PathBuf,
     },
 }
-
-impl fmt::Display for PromptSourceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Database { key, message } => {
-                write!(f, "failed to read customized prompt '{key}': {message}")
-            }
-            Self::ReadFailed { key, path, message } => write!(
-                f,
-                "failed to load default prompt '{key}' from {}: {message}",
-                path.display()
-            ),
-            Self::Empty { key, path } => write!(
-                f,
-                "default prompt '{key}' file is empty: {}",
-                path.display()
-            ),
-        }
-    }
-}
-
-impl Error for PromptSourceError {}
 
 #[cfg(test)]
 mod tests {

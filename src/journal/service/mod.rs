@@ -211,22 +211,13 @@ async fn run_capture_followups(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 enum CaptureEmbeddingError {
+    #[error("failed to embed journal entry: {0}")]
     Embedder(EmbedderError),
+    #[error("failed to store journal entry embedding: {0}")]
     Index(EmbeddingRepositoryError),
 }
-
-impl std::fmt::Display for CaptureEmbeddingError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Embedder(error) => write!(f, "failed to embed journal entry: {error}"),
-            Self::Index(error) => write!(f, "failed to store journal entry embedding: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for CaptureEmbeddingError {}
 
 #[async_trait]
 trait CaptureEmbeddingService: Send + Sync {
