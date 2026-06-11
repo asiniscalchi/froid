@@ -1,14 +1,13 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, path::PathBuf};
 
-use thiserror::Error;
+use crate::prompts::file::{self, PromptFile, PromptFileError};
 
 pub const DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_PATH: &str = "prompts/entry_extraction_v1.md";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JournalEntryExtractionPrompt {
-    pub version: String,
-    pub text: String,
-}
+const PROMPT_KIND: &str = "journal entry extraction";
+
+pub type JournalEntryExtractionPrompt = PromptFile;
+pub type JournalEntryExtractionPromptError = PromptFileError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntryExtractionPromptConfig {
@@ -30,42 +29,33 @@ impl JournalEntryExtractionPromptConfig {
 
     pub(crate) fn from_values(path: Option<String>) -> Self {
         Self {
-            path: path
-                .filter(|value| !value.trim().is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| Self::default().path),
+            path: file::resolve_path(path, DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_PATH),
         }
     }
 
     pub fn load(&self) -> Result<JournalEntryExtractionPrompt, JournalEntryExtractionPromptError> {
-        let text = fs::read_to_string(&self.path).map_err(|source| {
-            JournalEntryExtractionPromptError::ReadFailed {
-                path: self.path.clone(),
-                message: source.to_string(),
-            }
-        })?;
-
-        if text.trim().is_empty() {
-            return Err(JournalEntryExtractionPromptError::Empty {
-                path: self.path.clone(),
-            });
-        }
-
-        let version = self
-            .path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-
-        Ok(JournalEntryExtractionPrompt { version, text })
+        file::load(PROMPT_KIND, &self.path)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum JournalEntryExtractionPromptError {
-    #[error("failed to load journal entry extraction prompt from {}: {message}", path.display())]
-    ReadFailed { path: PathBuf, message: String },
-    #[error("journal entry extraction prompt file is empty: {}", path.display())]
-    Empty { path: PathBuf },
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_config_uses_default_path() {
+        let config = JournalEntryExtractionPromptConfig::from_values(None);
+
+        assert_eq!(
+            config.path,
+            PathBuf::from(DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_PATH)
+        );
+    }
+
+    #[test]
+    fn prompt_config_accepts_path_override() {
+        let config = JournalEntryExtractionPromptConfig::from_values(Some("custom.md".to_string()));
+
+        assert_eq!(config.path, PathBuf::from("custom.md"));
+    }
 }

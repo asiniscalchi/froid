@@ -1,3 +1,4 @@
+pub mod file;
 pub mod registry;
 pub mod repository;
 pub mod source;
