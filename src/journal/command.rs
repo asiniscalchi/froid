@@ -17,7 +17,6 @@ pub struct JournalCommandRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JournalCommand {
     Start,
-    Help,
     Last,
     Undo,
     Recent { requested_limit: u32 },
@@ -29,5 +28,4 @@ pub enum JournalCommand {
     WeekReviewLast,
     Search { query: String },
     SearchUsage,
-    Unknown { command: String },
 }

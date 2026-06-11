@@ -7,10 +7,10 @@ use crate::{
         responses::{
             daily_review_not_available_for_date_response, daily_review_unavailable_response,
             deleted_last_entry_response, format_daily_review_for_date, format_entries,
-            format_last_entry, format_weekly_review_for_week, help_response, no_entries_response,
+            format_last_entry, format_weekly_review_for_week, no_entries_response,
             no_entries_today_response, no_entry_to_delete_response, no_last_entry_response,
             recent_usage_response, search_usage_response, start_response, stats_response,
-            status_response, unknown_command_response, weekly_review_not_available_response,
+            status_response, weekly_review_not_available_response,
             weekly_review_unavailable_response,
         },
         review::DailyReview,
@@ -45,9 +45,6 @@ impl JournalService {
             JournalCommand::Start => Ok(OutgoingMessage {
                 text: start_response(),
             }),
-            JournalCommand::Help => Ok(OutgoingMessage {
-                text: help_response(),
-            }),
             JournalCommand::Last => self.last(request).await,
             JournalCommand::Undo => self.undo(request).await,
             JournalCommand::Recent { requested_limit } => {
@@ -79,9 +76,6 @@ impl JournalService {
             }
             JournalCommand::SearchUsage => Ok(OutgoingMessage {
                 text: search_usage_response(),
-            }),
-            JournalCommand::Unknown { command } => Ok(OutgoingMessage {
-                text: unknown_command_response(command),
             }),
         }
     }
