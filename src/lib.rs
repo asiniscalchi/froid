@@ -3,6 +3,7 @@ pub mod app;
 pub mod auth;
 pub mod cli;
 pub mod database;
+mod errors;
 pub mod handler;
 pub mod health;
 pub mod http;

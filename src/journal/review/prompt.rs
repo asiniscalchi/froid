@@ -1,4 +1,6 @@
-use std::{env, error::Error, fmt, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf};
+
+use thiserror::Error;
 
 pub const DEFAULT_REVIEW_PROMPT_PATH: &str = "prompts/daily_review_with_entry_extractions_v1.md";
 
@@ -60,30 +62,13 @@ impl DailyReviewPromptConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DailyReviewPromptError {
+    #[error("failed to load daily review prompt from {}: {message}", path.display())]
     ReadFailed { path: PathBuf, message: String },
+    #[error("daily review prompt file is empty: {}", path.display())]
     Empty { path: PathBuf },
 }
-
-impl fmt::Display for DailyReviewPromptError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ReadFailed { path, message } => {
-                write!(
-                    f,
-                    "failed to load daily review prompt from {}: {message}",
-                    path.display()
-                )
-            }
-            Self::Empty { path } => {
-                write!(f, "daily review prompt file is empty: {}", path.display())
-            }
-        }
-    }
-}
-
-impl Error for DailyReviewPromptError {}
 
 #[cfg(test)]
 mod tests {

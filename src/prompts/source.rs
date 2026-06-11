@@ -88,10 +88,7 @@ pub fn load_default(key: PromptKey, path: &Path) -> Result<ResolvedPrompt, Promp
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PromptSourceError {
     #[error("failed to read customized prompt '{key}': {message}")]
-    Database {
-        key: &'static str,
-        message: String,
-    },
+    Database { key: &'static str, message: String },
     #[error("failed to load default prompt '{key}' from {}: {message}", path.display())]
     ReadFailed {
         key: &'static str,
@@ -99,10 +96,7 @@ pub enum PromptSourceError {
         message: String,
     },
     #[error("default prompt '{key}' file is empty: {}", path.display())]
-    Empty {
-        key: &'static str,
-        path: PathBuf,
-    },
+    Empty { key: &'static str, path: PathBuf },
 }
 
 #[cfg(test)]

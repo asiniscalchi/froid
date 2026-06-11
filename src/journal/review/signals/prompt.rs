@@ -1,4 +1,6 @@
-use std::{env, error::Error, fmt, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf};
+
+use thiserror::Error;
 
 pub const DEFAULT_SIGNAL_EXTRACTION_PROMPT_PATH: &str =
     "prompts/daily_review_signal_extraction_v1.md";
@@ -61,30 +63,13 @@ impl DailyReviewSignalPromptConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DailyReviewSignalPromptError {
+    #[error("failed to load signal extraction prompt from {}: {message}", path.display())]
     ReadFailed { path: PathBuf, message: String },
+    #[error("signal extraction prompt file is empty: {}", path.display())]
     Empty { path: PathBuf },
 }
-
-impl fmt::Display for DailyReviewSignalPromptError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ReadFailed { path, message } => write!(
-                f,
-                "failed to load signal extraction prompt from {}: {message}",
-                path.display()
-            ),
-            Self::Empty { path } => write!(
-                f,
-                "signal extraction prompt file is empty: {}",
-                path.display()
-            ),
-        }
-    }
-}
-
-impl Error for DailyReviewSignalPromptError {}
 
 #[cfg(test)]
 mod tests {

@@ -1,7 +1,5 @@
 use std::{
     env,
-    error::Error,
-    fmt,
     sync::{Arc, RwLock},
 };
 
@@ -10,6 +8,7 @@ use rig::{
     client::CompletionClient,
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
+use thiserror::Error;
 
 use crate::{
     journal::review::{JournalEntryWithExtraction, signals::types::DailyReviewSignalsOutput},
@@ -48,7 +47,8 @@ impl DailyReviewSignalConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
 pub struct DailyReviewSignalGenerationError {
     message: String,
 }
@@ -60,14 +60,6 @@ impl DailyReviewSignalGenerationError {
         }
     }
 }
-
-impl fmt::Display for DailyReviewSignalGenerationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl Error for DailyReviewSignalGenerationError {}
 
 #[async_trait]
 pub trait DailyReviewSignalGenerator: Send + Sync {
@@ -81,40 +73,19 @@ pub trait DailyReviewSignalGenerator: Send + Sync {
     ) -> Result<DailyReviewSignalsOutput, DailyReviewSignalGenerationError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RigOpenAiDailyReviewSignalGeneratorError {
+    #[error("OPENAI_API_KEY is required")]
     MissingOpenAiApiKey,
+    #[error("failed to construct OpenAI signal extraction generator: {0}")]
     Client(String),
 }
 
-impl fmt::Display for RigOpenAiDailyReviewSignalGeneratorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingOpenAiApiKey => write!(f, "OPENAI_API_KEY is required"),
-            Self::Client(message) => write!(
-                f,
-                "failed to construct OpenAI signal extraction generator: {message}"
-            ),
-        }
-    }
-}
-
-impl Error for RigOpenAiDailyReviewSignalGeneratorError {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SignalProviderError {
+    #[error("{0}")]
     Request(String),
 }
-
-impl fmt::Display for SignalProviderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Request(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl Error for SignalProviderError {}
 
 #[async_trait]
 pub(crate) trait SignalProvider: Send + Sync {
