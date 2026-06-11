@@ -1,8 +1,9 @@
-use std::{error::Error, fmt};
+use thiserror::Error;
 
 use super::types::{DailyReviewSignalCandidate, SignalType};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
 pub struct DailyReviewSignalValidationError {
     message: String,
 }
@@ -14,14 +15,6 @@ impl DailyReviewSignalValidationError {
         }
     }
 }
-
-impl fmt::Display for DailyReviewSignalValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl Error for DailyReviewSignalValidationError {}
 
 pub fn validate_signal(
     signal: &DailyReviewSignalCandidate,

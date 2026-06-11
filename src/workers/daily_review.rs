@@ -9,6 +9,7 @@ use crate::workers::{
 };
 
 use crate::{
+    errors::from_error_string,
     journal::{
         repository::JournalRepository,
         responses::format_daily_review_for_date,
@@ -29,32 +30,17 @@ pub struct DailyReviewDeliveryResult {
     pub failed: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DailyReviewDeliveryWorkerError {
+    #[error("{0}")]
     Storage(String),
 }
 
-impl std::fmt::Display for DailyReviewDeliveryWorkerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Storage(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl std::error::Error for DailyReviewDeliveryWorkerError {}
-
-impl From<sqlx::Error> for DailyReviewDeliveryWorkerError {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
-
-impl From<DailyReviewRepositoryError> for DailyReviewDeliveryWorkerError {
-    fn from(error: DailyReviewRepositoryError) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
+from_error_string!(
+    DailyReviewDeliveryWorkerError::Storage,
+    sqlx::Error,
+    DailyReviewRepositoryError,
+);
 
 #[async_trait]
 pub trait DailyReviewSender: Send + Sync {

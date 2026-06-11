@@ -1,6 +1,5 @@
-use std::{error::Error, fmt};
-
 use serde_json::Value;
+use thiserror::Error;
 
 const REQUIRED_TOP_LEVEL_FIELDS: [&str; 6] = [
     "summary",
@@ -11,7 +10,8 @@ const REQUIRED_TOP_LEVEL_FIELDS: [&str; 6] = [
     "possible_patterns",
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
 pub struct JournalEntryExtractionValidationError {
     message: String,
 }
@@ -23,14 +23,6 @@ impl JournalEntryExtractionValidationError {
         }
     }
 }
-
-impl fmt::Display for JournalEntryExtractionValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl Error for JournalEntryExtractionValidationError {}
 
 pub fn validate_extraction_json(
     raw: &str,

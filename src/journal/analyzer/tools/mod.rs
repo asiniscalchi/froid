@@ -9,37 +9,23 @@ pub mod journal;
 pub mod review;
 pub mod signal;
 
-use std::{collections::HashMap, error::Error, fmt, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
+
+use thiserror::Error;
 
 use async_trait::async_trait;
 use serde_json::Value;
 
 use super::types::{AnalyzerError, UserContext};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ToolError {
+    #[error("invalid input: {0}")]
     InvalidInput(String),
-    Analyzer(AnalyzerError),
+    #[error("{0}")]
+    Analyzer(#[source] AnalyzerError),
+    #[error("unknown tool: {0}")]
     UnknownTool(String),
-}
-
-impl fmt::Display for ToolError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidInput(message) => write!(f, "invalid input: {message}"),
-            Self::Analyzer(err) => write!(f, "{err}"),
-            Self::UnknownTool(name) => write!(f, "unknown tool: {name}"),
-        }
-    }
-}
-
-impl Error for ToolError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Analyzer(err) => Some(err),
-            _ => None,
-        }
-    }
 }
 
 impl From<AnalyzerError> for ToolError {
