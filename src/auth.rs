@@ -1,4 +1,4 @@
-//! Bearer-token authentication for the shared HTTP listener (MCP and dashboard).
+//! Bearer-token authentication for the MCP listener.
 //!
 //! Authentication is always on. Tokens are minted by users themselves
 //! through the Telegram `/token` command and stored hashed in the central

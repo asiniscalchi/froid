@@ -56,7 +56,6 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         database_path = %config.database_path,
         mcp_enabled = config.mcp_server.enabled,
         mcp_bind = %config.mcp_server.bind,
-        dashboard_enabled = config.dashboard.enabled,
         "starting service"
     );
 
@@ -130,9 +129,12 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let adapter = TelegramAdapter::new(
         config.telegram_bot_token.clone(),
         config.telegram_allowed_user_ids.clone(),
-        journal_registry,
+        journal_registry.clone(),
     )
-    .with_token_issuer(crate::tokens::TokenIssuer::new(issued_tokens));
+    .with_token_issuer(crate::tokens::TokenIssuer::new(issued_tokens))
+    .with_transfer(crate::journal::transfer::TransferService::new(
+        journal_registry,
+    ));
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
 }
 
@@ -144,11 +146,11 @@ async fn spawn_http_server(
     registry: &crate::journal::registry::JournalServiceRegistry,
     issued_tokens: crate::tokens::UserTokenStore,
 ) -> Result<(), Box<dyn Error>> {
-    if !config.mcp_server.enabled && !config.dashboard.enabled {
+    if !config.mcp_server.enabled {
         return Ok(());
     }
 
-    if config.mcp_server.enabled && embedding_config.is_none() {
+    if embedding_config.is_none() {
         warn!(
             "MCP server is enabled but embedding configuration is missing; skipping (semantic search requires it)"
         );
@@ -156,26 +158,22 @@ async fn spawn_http_server(
     }
 
     let router_config = http::TenantRouterConfig {
-        mcp_enabled: config.mcp_server.enabled,
-        dashboard_enabled: config.dashboard.enabled,
         embedding_config: embedding_config.cloned(),
         shutdown: shutdown.clone(),
     };
 
-    // Every /mcp and /api request must carry a bearer token minted via the
-    // Telegram /token command, and is served from the database of the user
-    // who minted it.
+    // Every /mcp request must carry a bearer token minted via the Telegram
+    // /token command, and is served from the database of the user who
+    // minted it.
     let resolver = Arc::new(crate::auth::TokenResolver::new(issued_tokens));
     let tenants = http::TenantRouters::new(registry.clone(), router_config);
-    let router = http::build_per_user_app(tenants, resolver, config.dashboard.enabled);
+    let router = http::build_per_user_app(tenants, resolver);
 
     let listener = tokio::net::TcpListener::bind(config.mcp_server.bind).await?;
     let local_addr = listener.local_addr()?;
     info!(
         addr = %local_addr,
-        mcp = config.mcp_server.enabled,
-        dashboard = config.dashboard.enabled,
-        "HTTP server listening; bearer tokens are minted via the Telegram /token command"
+        "MCP server listening; bearer tokens are minted via the Telegram /token command"
     );
 
     let token = shutdown.clone();

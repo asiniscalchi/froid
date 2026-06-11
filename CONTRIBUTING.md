@@ -4,7 +4,6 @@
 
 - Rust (edition 2024, see `Cargo.toml` for the exact toolchain)
 - SQLite 3 development libraries
-- Node.js 20+ and npm (required only to build the dashboard webapp in `web/`)
 - A Telegram bot token (required to run the server)
 - An OpenAI API key (required only when embedding or extraction workers are enabled)
 
@@ -26,19 +25,6 @@ cargo run -- serve
 
 Database migrations are applied automatically on startup via `sqlx::migrate!()`.
 
-## Dashboard webapp (`web/`)
-
-The dashboard is a Vite + React + TypeScript app with Tailwind v4 and shadcn/ui. Assets are embedded into the release Rust binary via `rust-embed`; debug builds read from `web/dist/` on disk.
-
-```bash
-cd web
-npm install
-npm run dev      # local dev server with HMR
-npm run build    # produces web/dist/ consumed by cargo build
-```
-
-`web/dist/` is gitignored except for a committed `index.html` placeholder used as a fallback when assets have not been built. Running `npm run build` locally overwrites that placeholder; revert with `git restore web/dist/index.html` before committing.
-
 ## Local CI Checks
 
 Run these before pushing. They mirror the CI pipeline exactly:
@@ -48,14 +34,6 @@ cargo fmt --all --check
 cargo check --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
-```
-
-For changes under `web/`, also run from that directory:
-
-```bash
-npm run lint
-npm test
-npm run build
 ```
 
 All checks must pass with no errors or warnings before a branch is ready for review.
@@ -84,7 +62,6 @@ src/
 ├── handler.rs           # MessageHandler trait
 ├── messages.rs          # IncomingMessage / OutgoingMessage types
 ├── version.rs           # Version populated by build.rs
-├── dashboard.rs        # Axum router serving the embedded web/ assets
 ├── adapters/
 │   ├── telegram.rs      # Telegram adapter (teloxide)
 │   └── mcp.rs           # MCP Streamable HTTP adapter
@@ -107,7 +84,6 @@ src/
     └── weekly_review.rs # WeeklyReviewDeliveryWorker
 migrations/              # sqlx migrations (applied automatically)
 prompts/                 # Versioned LLM prompt files
-web/                     # Vite + React + Tailwind + shadcn dashboard
 ```
 
 ## Architecture Notes
