@@ -88,6 +88,16 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         },
     );
 
+    // Central store for tokens issued via the Telegram /token command. It
+    // lives in the default database so one lookup resolves any token.
+    let issued_tokens = if config.http_auth.dynamic_tokens {
+        let pool = database::connect_pool(&config.database_url).await?;
+        sqlx::migrate!().run(&pool).await?;
+        Some(crate::tokens::UserTokenStore::new(pool))
+    } else {
+        None
+    };
+
     // Spawn the global HTTP server (MCP and Dashboard)
     spawn_http_server(
         &mut workers,
@@ -95,6 +105,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &config,
         embedding_config.as_ref(),
         &journal_registry,
+        issued_tokens.clone(),
     )
     .await?;
 
@@ -123,7 +134,8 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         config.telegram_bot_token.clone(),
         config.telegram_allowed_user_ids.clone(),
         journal_registry,
-    );
+    )
+    .with_token_issuer(issued_tokens.map(crate::tokens::TokenIssuer::new));
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
 }
 
@@ -133,6 +145,7 @@ async fn spawn_http_server(
     config: &ServeConfig,
     embedding_config: Option<&EmbeddingConfig>,
     registry: &crate::journal::registry::JournalServiceRegistry,
+    issued_tokens: Option<crate::tokens::UserTokenStore>,
 ) -> Result<(), Box<dyn Error>> {
     if !config.mcp_server.enabled && !config.dashboard.enabled {
         return Ok(());
@@ -152,13 +165,19 @@ async fn spawn_http_server(
         shutdown: shutdown.clone(),
     };
 
-    let (router, auth_mode) = if !config.http_auth.user_tokens.is_empty() {
+    let per_user = !config.http_auth.user_tokens.is_empty() || issued_tokens.is_some();
+    let (router, auth_mode) = if per_user {
         // Per-user tokens: every /mcp and /api request is served from the
-        // database of the user owning the presented token.
-        let tokens = Arc::new(UserTokens::new(config.http_auth.user_tokens.clone()));
+        // database of the user owning the presented token. Tokens come from
+        // FROID_AUTH_TOKENS and, when dynamic tokens are enabled, from the
+        // store fed by the Telegram /token command.
+        let resolver = Arc::new(crate::auth::TokenResolver::new(
+            UserTokens::new(config.http_auth.user_tokens.clone()),
+            issued_tokens,
+        ));
         let tenants = http::TenantRouters::new(registry.clone(), router_config);
         (
-            http::build_per_user_app(tenants, tokens, config.dashboard.enabled),
+            http::build_per_user_app(tenants, resolver, config.dashboard.enabled),
             "per-user",
         )
     } else {

@@ -31,7 +31,7 @@ use tracing::error;
 
 use crate::{
     adapters::mcp::AnalyzerMcpServer,
-    auth::{AuthenticatedTenant, UserTokens, require_bearer, require_user_bearer},
+    auth::{AuthenticatedTenant, TokenResolver, require_bearer, require_user_bearer},
     dashboard,
     journal::{
         analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_mcp_components},
@@ -168,7 +168,7 @@ async fn forward_to_tenant(State(tenants): State<TenantRouters>, request: Reques
 /// the authenticated user's database; `/health` and the SPA shell are public.
 pub fn build_per_user_app(
     tenants: TenantRouters,
-    tokens: Arc<UserTokens>,
+    resolver: Arc<TokenResolver>,
     dashboard_enabled: bool,
 ) -> Router {
     let mut router = Router::new()
@@ -177,7 +177,7 @@ pub fn build_per_user_app(
         .route("/api/{*path}", any(forward_to_tenant))
         .with_state(tenants)
         .layer(axum::middleware::from_fn_with_state(
-            tokens,
+            resolver,
             require_user_bearer,
         ))
         .merge(crate::health::router());

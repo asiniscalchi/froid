@@ -49,6 +49,42 @@ impl UserTokens {
 #[derive(Debug, Clone)]
 pub struct AuthenticatedTenant(pub Arc<str>);
 
+/// Resolves a presented bearer token to a tenant, checking the
+/// operator-configured `FROID_AUTH_TOKENS` table first and then the
+/// store of tokens issued via the Telegram `/token` command.
+#[derive(Clone)]
+pub struct TokenResolver {
+    static_tokens: UserTokens,
+    issued: Option<crate::tokens::UserTokenStore>,
+}
+
+impl TokenResolver {
+    pub fn new(static_tokens: UserTokens, issued: Option<crate::tokens::UserTokenStore>) -> Self {
+        Self {
+            static_tokens,
+            issued,
+        }
+    }
+
+    async fn resolve(&self, provided: &str) -> Option<String> {
+        if let Some(chat_id) = self.static_tokens.resolve(provided) {
+            return Some(chat_id.to_string());
+        }
+        if let Some(store) = &self.issued {
+            match store
+                .find_chat_id_by_hash(&crate::tokens::hash_token(provided))
+                .await
+            {
+                Ok(found) => return found,
+                Err(err) => {
+                    tracing::error!(error = %err, "failed to look up issued bearer token");
+                }
+            }
+        }
+        None
+    }
+}
+
 /// Returns the bearer token from an `Authorization` header value, if present.
 fn extract_bearer(header_value: Option<&str>) -> Option<&str> {
     header_value?.strip_prefix("Bearer ")
@@ -85,10 +121,11 @@ pub async fn require_bearer(
     }
 }
 
-/// Axum middleware for per-user tokens: rejects requests whose bearer token is
-/// not in the table, and tags accepted requests with the owning tenant.
+/// Axum middleware for per-user tokens: rejects requests whose bearer token
+/// is not known to the resolver, and tags accepted requests with the owning
+/// tenant.
 pub async fn require_user_bearer(
-    State(tokens): State<Arc<UserTokens>>,
+    State(resolver): State<Arc<TokenResolver>>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -97,13 +134,15 @@ pub async fn require_user_bearer(
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
 
-    let chat_id = extract_bearer(header_value)
-        .and_then(|provided| tokens.resolve(provided))
+    let provided = extract_bearer(header_value).ok_or(StatusCode::UNAUTHORIZED)?;
+    let chat_id = resolver
+        .resolve(provided)
+        .await
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
     request
         .extensions_mut()
-        .insert(AuthenticatedTenant(Arc::from(chat_id)));
+        .insert(AuthenticatedTenant(Arc::from(chat_id.as_str())));
     Ok(next.run(request).await)
 }
 
@@ -190,7 +229,9 @@ mod tests {
     }
 
     mod per_user {
-        use super::super::{AuthenticatedTenant, UserToken, UserTokens, require_user_bearer};
+        use super::super::{
+            AuthenticatedTenant, TokenResolver, UserToken, UserTokens, require_user_bearer,
+        };
 
         use axum::{
             Extension, Router,
@@ -202,8 +243,8 @@ mod tests {
         use std::sync::Arc;
         use tower::ServiceExt;
 
-        fn protected_router() -> Router {
-            let tokens = Arc::new(UserTokens::new(vec![
+        fn static_tokens() -> UserTokens {
+            UserTokens::new(vec![
                 UserToken {
                     chat_id: "111".into(),
                     token: "alice-secret".into(),
@@ -212,7 +253,10 @@ mod tests {
                     chat_id: "222".into(),
                     token: "bob-secret".into(),
                 },
-            ]));
+            ])
+        }
+
+        fn router_with(resolver: TokenResolver) -> Router {
             Router::new()
                 .route(
                     "/whoami",
@@ -222,7 +266,11 @@ mod tests {
                         },
                     ),
                 )
-                .layer(from_fn_with_state(tokens, require_user_bearer))
+                .layer(from_fn_with_state(Arc::new(resolver), require_user_bearer))
+        }
+
+        fn protected_router() -> Router {
+            router_with(TokenResolver::new(static_tokens(), None))
         }
 
         async fn body_for_token(token: &str) -> (StatusCode, String) {
@@ -270,6 +318,60 @@ mod tests {
                 )
                 .await
                 .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        async fn issued_token_store() -> crate::tokens::UserTokenStore {
+            crate::database::register_sqlite_vec_extension();
+            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+            sqlx::migrate!().run(&pool).await.unwrap();
+            crate::tokens::UserTokenStore::new(pool)
+        }
+
+        #[tokio::test]
+        async fn resolves_tokens_issued_via_the_store() {
+            let store = issued_token_store().await;
+            let issuer = crate::tokens::TokenIssuer::new(store.clone());
+            let token = issuer.issue("333").await.unwrap();
+
+            let app = router_with(TokenResolver::new(static_tokens(), Some(store)));
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri("/whoami")
+                        .header(AUTHORIZATION, format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert_eq!(String::from_utf8_lossy(&body), "333");
+        }
+
+        #[tokio::test]
+        async fn revoked_issued_token_stops_working() {
+            let store = issued_token_store().await;
+            let issuer = crate::tokens::TokenIssuer::new(store.clone());
+            let token = issuer.issue("333").await.unwrap();
+            issuer.revoke("333").await.unwrap();
+
+            let app = router_with(TokenResolver::new(static_tokens(), Some(store)));
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri("/whoami")
+                        .header(AUTHORIZATION, format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         }
     }

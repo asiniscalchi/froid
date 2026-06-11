@@ -12,6 +12,7 @@ use crate::{
     handler::MessageHandler,
     journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
     messages::{IncomingMessage, MessageSource, SINGLE_USER_ID},
+    tokens::TokenIssuer,
 };
 
 const UNSUPPORTED_MESSAGE_RESPONSE: &str = "Unsupported message type";
@@ -20,6 +21,7 @@ pub struct TelegramAdapter<H: MessageHandler> {
     bot_token: String,
     allowed_user_ids: Option<Vec<u64>>,
     handler: H,
+    token_issuer: Option<TokenIssuer>,
 }
 
 impl<H: MessageHandler> TelegramAdapter<H> {
@@ -28,13 +30,21 @@ impl<H: MessageHandler> TelegramAdapter<H> {
             bot_token,
             allowed_user_ids,
             handler,
+            token_issuer: None,
         }
+    }
+
+    /// Enable the `/token` command, backed by the central token store.
+    pub fn with_token_issuer(mut self, token_issuer: Option<TokenIssuer>) -> Self {
+        self.token_issuer = token_issuer;
+        self
     }
 
     pub async fn run(self) {
         let bot = Bot::new(self.bot_token);
         let allowed_user_ids = self.allowed_user_ids;
         let handler = self.handler;
+        let token_issuer = self.token_issuer;
 
         match &allowed_user_ids {
             Some(ids) => {
@@ -56,8 +66,11 @@ impl<H: MessageHandler> TelegramAdapter<H> {
         teloxide::repl(bot, move |bot: Bot, message: Message| {
             let handler = handler.clone();
             let allowed_user_ids = allowed_user_ids.clone();
+            let token_issuer = token_issuer.clone();
 
-            async move { handle_message(bot, message, allowed_user_ids, handler).await }
+            async move {
+                handle_message(bot, message, allowed_user_ids, handler, token_issuer).await
+            }
         })
         .await;
     }
@@ -68,6 +81,7 @@ async fn handle_message<H: MessageHandler>(
     message: Message,
     allowed_user_ids: Option<Vec<u64>>,
     handler: H,
+    token_issuer: Option<TokenIssuer>,
 ) -> ResponseResult<()> {
     if !should_handle_message(&message, allowed_user_ids.as_deref()) {
         info!(
@@ -84,6 +98,14 @@ async fn handle_message<H: MessageHandler>(
             .await?;
         return Ok(());
     };
+
+    if let Some(action) = parse_token_command(text) {
+        info!(chat_id = %message.chat.id, "received Telegram /token command");
+        let reply =
+            handle_token_command(token_issuer.as_ref(), action, &message.chat.id.to_string()).await;
+        bot.send_message(message.chat.id, reply).await?;
+        return Ok(());
+    }
 
     if let Some(command) = parse_command(text, message.date) {
         let request = JournalCommandRequest {
@@ -158,6 +180,69 @@ fn incoming_from_text_message(message: &Message) -> IncomingMessage {
         user_id: SINGLE_USER_ID.to_string(),
         text: message.text().unwrap_or_default().to_string(),
         received_at: message.date,
+    }
+}
+
+/// Action requested via the `/token` command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TokenAction {
+    Issue,
+    Revoke,
+    Usage,
+}
+
+fn parse_token_command(text: &str) -> Option<TokenAction> {
+    let mut parts = text.trim().splitn(2, char::is_whitespace);
+    let command = parts.next()?.split('@').next()?;
+    if command != "/token" {
+        return None;
+    }
+
+    match parts.next().map(str::trim).filter(|s| !s.is_empty()) {
+        None => Some(TokenAction::Issue),
+        Some("revoke") => Some(TokenAction::Revoke),
+        Some(_) => Some(TokenAction::Usage),
+    }
+}
+
+async fn handle_token_command(
+    issuer: Option<&TokenIssuer>,
+    action: TokenAction,
+    chat_id: &str,
+) -> String {
+    let Some(issuer) = issuer else {
+        return "Access tokens are not enabled on this server. Ask the operator to set \
+                FROID_AUTH_DYNAMIC_TOKENS=true."
+            .to_string();
+    };
+
+    match action {
+        TokenAction::Issue => match issuer.issue(chat_id).await {
+            Ok(token) => format!(
+                "Your new access token:\n\n{token}\n\nUse it as a bearer token for the \
+                 dashboard and MCP (Authorization: Bearer …). It replaces any previous \
+                 token and is shown only once — treat it like a password. Send /token \
+                 again to rotate it, or /token revoke to disable access."
+            ),
+            Err(err) => {
+                error!(%err, chat_id, "failed to issue access token");
+                "Something went wrong issuing your token. Please try again.".to_string()
+            }
+        },
+        TokenAction::Revoke => match issuer.revoke(chat_id).await {
+            Ok(true) => {
+                "Your access token has been revoked. Send /token to create a new one.".to_string()
+            }
+            Ok(false) => "You have no active access token. Send /token to create one.".to_string(),
+            Err(err) => {
+                error!(%err, chat_id, "failed to revoke access token");
+                "Something went wrong revoking your token. Please try again.".to_string()
+            }
+        },
+        TokenAction::Usage => {
+            "Usage: /token to create or rotate your access token, /token revoke to disable it."
+                .to_string()
+        }
     }
 }
 
@@ -508,6 +593,100 @@ mod tests {
     #[test]
     fn parse_returns_none_for_non_command() {
         assert_eq!(cmd("hello"), None);
+    }
+
+    #[test]
+    fn parse_token_command_variants() {
+        assert_eq!(parse_token_command("/token"), Some(TokenAction::Issue));
+        assert_eq!(
+            parse_token_command("/token@mybot"),
+            Some(TokenAction::Issue)
+        );
+        assert_eq!(
+            parse_token_command("/token revoke"),
+            Some(TokenAction::Revoke)
+        );
+        assert_eq!(
+            parse_token_command("/token nonsense"),
+            Some(TokenAction::Usage)
+        );
+        assert_eq!(parse_token_command("/help"), None);
+        assert_eq!(parse_token_command("token"), None);
+    }
+
+    mod token_command {
+        use super::super::{TokenAction, handle_token_command};
+        use crate::database;
+        use crate::tokens::{TokenIssuer, UserTokenStore, hash_token};
+
+        async fn issuer() -> (TokenIssuer, UserTokenStore) {
+            database::register_sqlite_vec_extension();
+            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+            sqlx::migrate!().run(&pool).await.unwrap();
+            let store = UserTokenStore::new(pool);
+            (TokenIssuer::new(store.clone()), store)
+        }
+
+        #[tokio::test]
+        async fn replies_with_hint_when_dynamic_tokens_disabled() {
+            let reply = handle_token_command(None, TokenAction::Issue, "42").await;
+
+            assert!(reply.contains("not enabled"));
+        }
+
+        #[tokio::test]
+        async fn issue_returns_working_token() {
+            let (issuer, store) = issuer().await;
+
+            let reply = handle_token_command(Some(&issuer), TokenAction::Issue, "42").await;
+
+            let token = reply
+                .split_whitespace()
+                .find(|word| word.starts_with("froid_"))
+                .expect("reply contains the token");
+            assert_eq!(
+                store
+                    .find_chat_id_by_hash(&hash_token(token))
+                    .await
+                    .unwrap(),
+                Some("42".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn revoke_disables_the_token() {
+            let (issuer, store) = issuer().await;
+            let token = issuer.issue("42").await.unwrap();
+
+            let reply = handle_token_command(Some(&issuer), TokenAction::Revoke, "42").await;
+
+            assert!(reply.contains("revoked"));
+            assert_eq!(
+                store
+                    .find_chat_id_by_hash(&hash_token(&token))
+                    .await
+                    .unwrap(),
+                None
+            );
+        }
+
+        #[tokio::test]
+        async fn revoke_without_token_says_so() {
+            let (issuer, _) = issuer().await;
+
+            let reply = handle_token_command(Some(&issuer), TokenAction::Revoke, "42").await;
+
+            assert!(reply.contains("no active access token"));
+        }
+
+        #[tokio::test]
+        async fn usage_reply_mentions_both_forms() {
+            let (issuer, _) = issuer().await;
+
+            let reply = handle_token_command(Some(&issuer), TokenAction::Usage, "42").await;
+
+            assert!(reply.contains("/token revoke"));
+        }
     }
 
     #[test]

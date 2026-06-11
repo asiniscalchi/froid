@@ -183,6 +183,9 @@ pub struct Cli {
         value_delimiter = ','
     )]
     auth_tokens: Option<Vec<String>>,
+
+    #[arg(long, env = "FROID_AUTH_DYNAMIC_TOKENS", global = true)]
+    auth_dynamic_tokens: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -230,6 +233,10 @@ pub struct HttpAuthConfig {
     /// request is served from the database of the user owning the token.
     /// Mutually exclusive with `token`.
     pub user_tokens: Vec<UserToken>,
+    /// Allow users to mint their own bearer tokens via the Telegram `/token`
+    /// command. Enables per-user request routing like `user_tokens`.
+    /// Mutually exclusive with `token`.
+    pub dynamic_tokens: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,6 +399,7 @@ impl Cli {
         };
 
         let user_tokens = parse_user_tokens(self.auth_tokens.as_deref().unwrap_or_default())?;
+        let dynamic_tokens = self.auth_dynamic_tokens.unwrap_or(false);
 
         if token.is_some() && !user_tokens.is_empty() {
             return Err(clap::Error::raw(
@@ -400,7 +408,18 @@ impl Cli {
             ));
         }
 
-        let http_auth = HttpAuthConfig { token, user_tokens };
+        if token.is_some() && dynamic_tokens {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                "FROID_AUTH_TOKEN and FROID_AUTH_DYNAMIC_TOKENS are mutually exclusive; per-user tokens require per-user routing",
+            ));
+        }
+
+        let http_auth = HttpAuthConfig {
+            token,
+            user_tokens,
+            dynamic_tokens,
+        };
 
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
@@ -456,6 +475,7 @@ mod tests {
             dashboard_enabled: None,
             auth_token: None,
             auth_tokens: None,
+            auth_dynamic_tokens: None,
         }
     }
 
@@ -990,6 +1010,55 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("same token"));
+    }
+
+    #[test]
+    fn serve_config_dynamic_tokens_disabled_by_default() {
+        let config = cli_with_token("token").serve_config().unwrap();
+
+        assert!(!config.http_auth.dynamic_tokens);
+    }
+
+    #[test]
+    fn serve_config_enables_dynamic_tokens_when_flag_set() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--auth-dynamic-tokens",
+            "true",
+        ]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert!(config.http_auth.dynamic_tokens);
+    }
+
+    #[test]
+    fn serve_config_allows_dynamic_tokens_with_static_user_tokens() {
+        let cli = Cli {
+            auth_tokens: Some(vec!["111:alice".to_string()]),
+            auth_dynamic_tokens: Some(true),
+            ..cli_with_token("token")
+        };
+
+        let config = cli.serve_config().unwrap();
+
+        assert!(config.http_auth.dynamic_tokens);
+        assert_eq!(config.http_auth.user_tokens.len(), 1);
+    }
+
+    #[test]
+    fn serve_config_rejects_single_token_with_dynamic_tokens() {
+        let error = Cli {
+            auth_token: Some("single".to_string()),
+            auth_dynamic_tokens: Some(true),
+            ..cli_with_token("token")
+        }
+        .serve_config()
+        .unwrap_err();
+
+        assert!(error.to_string().contains("mutually exclusive"));
     }
 
     #[test]

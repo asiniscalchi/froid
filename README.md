@@ -69,6 +69,8 @@ All requests are served from one database: in multiuser mode, the isolated datab
 
 **Per-user tokens** — set `FROID_AUTH_TOKENS` to comma-separated `<chat_id>:<token>` pairs (e.g. `123456789:alice-secret,987654321:bob-secret`). Each token authenticates one user, and `/mcp` and `/api` requests are served from that user's isolated journal database. This gives every user of a shared instance their own MCP endpoint and dashboard view. The two variables are mutually exclusive.
 
+**Self-serve tokens via Telegram** — set `FROID_AUTH_DYNAMIC_TOKENS=true` and users can mint their own tokens by sending `/token` to the bot. Telegram is already the authenticated channel (the chat id arrives with the message), so the bot can safely issue HTTP credentials for exactly that identity: it generates a 256-bit random token, stores only its SHA-256 hash in the default database, and replies once with the plaintext. `/token` again rotates the token; `/token revoke` disables access. No operator action or restart is needed to onboard a user. Can be combined with `FROID_AUTH_TOKENS` (the static table is checked first); mutually exclusive with `FROID_AUTH_TOKEN`.
+
 Requests without a valid token receive `401 Unauthorized`. The static dashboard shell (HTML/JS assets, which contain no journal data) and the `/health` probe are intentionally served without authentication; all data flows through the protected `/api` and `/mcp` routes.
 
 When neither variable is set, the endpoints are unauthenticated and Froid logs a warning at startup — in that case restrict access at the network level (loopback bind or a Docker internal network).
@@ -150,6 +152,7 @@ All workers are disabled by default and require `OPENAI_API_KEY`.
 | `FROID_MCP_BIND` | `127.0.0.1:8080` | Bind address (e.g. `0.0.0.0:8080` for Docker Compose) |
 | `FROID_AUTH_TOKEN` | _(none)_ | Single shared bearer token for the HTTP listener (MCP and dashboard); unset means no authentication |
 | `FROID_AUTH_TOKENS` | _(none)_ | Per-user bearer tokens as comma-separated `<chat_id>:<token>` pairs; each token serves its user's isolated database. Mutually exclusive with `FROID_AUTH_TOKEN` |
+| `FROID_AUTH_DYNAMIC_TOKENS` | `false` | Let users mint/rotate/revoke their own bearer tokens via the Telegram `/token` command. Mutually exclusive with `FROID_AUTH_TOKEN` |
 
 ### Models
 
