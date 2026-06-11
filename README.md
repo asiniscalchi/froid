@@ -39,7 +39,7 @@ docker run --env-file .env -v ./data:/app/data ghcr.io/asiniscalchi/froid:latest
 
 ## Exposing tools over MCP
 
-Set `FROID_MCP_ENABLED=true` to expose the analyzer's read-only tools over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. The MCP server runs alongside the Telegram bot in the same process. Set `FROID_AUTH_TOKEN` to require an `Authorization: Bearer <token>` header on the HTTP listener (see [Authentication](#authentication)); when it is unset, the endpoints are unauthenticated, so restrict access at the network level — use the default loopback bind for local use, or a Docker internal network when running in Compose.
+Set `FROID_MCP_ENABLED=true` to expose the analyzer's read-only tools over the MCP Streamable HTTP transport at `http://127.0.0.1:8080/mcp`. The MCP server runs alongside the Telegram bot in the same process. Set `FROID_AUTH_ENABLED=true` to require an `Authorization: Bearer <token>` header on the HTTP listener, with tokens minted via the Telegram `/token` command (see [Authentication](#authentication)); when it is unset, the endpoints are unauthenticated, so restrict access at the network level — use the default loopback bind for local use, or a Docker internal network when running in Compose.
 
 ```bash
 FROID_MCP_ENABLED=true cargo run -- serve
@@ -49,7 +49,7 @@ Available tools: `journal_get`, `journal_get_recent`, `journal_search_text`, `jo
 
 ## Dashboard webapp
 
-Set `FROID_DASHBOARD_ENABLED=true` to serve a small React webapp at `http://127.0.0.1:8080/`. Besides message export/import and prompt editing, the dashboard API exposes journal data directly: `GET /api/entries` (recent entries), `POST /api/messages` (capture a new entry from the browser; it flows through the same extraction/embedding/review pipeline as Telegram messages), and `GET /api/reviews/daily` / `GET /api/reviews/weekly` (completed reviews, optional `from`/`to` date filters). The dashboard shares the HTTP listener with the MCP endpoint (`FROID_MCP_BIND`, default `127.0.0.1:8080`) and can be enabled independently of MCP. Assets are embedded into the release binary, so the Docker image carries everything it needs. The dashboard is protected by the same `FROID_AUTH_TOKEN` bearer check as MCP (see [Authentication](#authentication)); when no token is set, restrict access at the network level.
+Set `FROID_DASHBOARD_ENABLED=true` to serve a small React webapp at `http://127.0.0.1:8080/`. Besides message export/import and prompt editing, the dashboard API exposes journal data directly: `GET /api/entries` (recent entries), `POST /api/messages` (capture a new entry from the browser; it flows through the same extraction/embedding/review pipeline as Telegram messages), and `GET /api/reviews/daily` / `GET /api/reviews/weekly` (completed reviews, optional `from`/`to` date filters). The dashboard shares the HTTP listener with the MCP endpoint (`FROID_MCP_BIND`, default `127.0.0.1:8080`) and can be enabled independently of MCP. Assets are embedded into the release binary, so the Docker image carries everything it needs. The dashboard is protected by the same bearer check as MCP (see [Authentication](#authentication)); when authentication is disabled, restrict access at the network level.
 
 ```bash
 FROID_DASHBOARD_ENABLED=true cargo run -- serve
@@ -57,23 +57,19 @@ FROID_DASHBOARD_ENABLED=true cargo run -- serve
 
 ## Authentication
 
-The HTTP listener shared by the MCP endpoint and the dashboard supports two modes.
-
-**Single token** — set `FROID_AUTH_TOKEN` to any secret string and every request to `/mcp` and `/api` must carry a matching header:
+Set `FROID_AUTH_ENABLED=true` and every request to `/mcp` and `/api` must carry a bearer token minted through the bot:
 
 ```
 Authorization: Bearer <your-token>
 ```
 
-All requests are served from one database: in multiuser mode, the isolated database of the first whitelisted Telegram user; otherwise the default database.
-
-**Per-user tokens** — set `FROID_AUTH_TOKENS` to comma-separated `<chat_id>:<token>` pairs (e.g. `123456789:alice-secret,987654321:bob-secret`). Each token authenticates one user, and `/mcp` and `/api` requests are served from that user's isolated journal database. This gives every user of a shared instance their own MCP endpoint and dashboard view. The two variables are mutually exclusive.
-
-**Self-serve tokens via Telegram** — set `FROID_AUTH_DYNAMIC_TOKENS=true` and users can mint their own tokens by sending `/token` to the bot. Telegram is already the authenticated channel (the chat id arrives with the message), so the bot can safely issue HTTP credentials for exactly that identity: it generates a 256-bit random token, stores only its SHA-256 hash in the default database, and replies once with the plaintext. `/token` again rotates the token; `/token revoke` disables access. No operator action or restart is needed to onboard a user. Can be combined with `FROID_AUTH_TOKENS` (the static table is checked first); mutually exclusive with `FROID_AUTH_TOKEN`.
+Users mint their own tokens by sending `/token` to the Telegram bot. Telegram is already the authenticated channel (the chat id arrives with the message), so the bot can safely issue HTTP credentials for exactly that identity: it generates a 256-bit random token, stores only its SHA-256 hash in the default database, and replies once with the plaintext. Each request is then served from the token owner's isolated journal database, so every user of a shared instance gets their own MCP endpoint and dashboard view. Sending `/token` again rotates the token; `/token revoke` disables access. Onboarding a user requires no operator action and no restart.
 
 Requests without a valid token receive `401 Unauthorized`. The static dashboard shell (HTML/JS assets, which contain no journal data) and the `/health` probe are intentionally served without authentication; all data flows through the protected `/api` and `/mcp` routes.
 
-When neither variable is set, the endpoints are unauthenticated and Froid logs a warning at startup — in that case restrict access at the network level (loopback bind or a Docker internal network).
+When `FROID_AUTH_ENABLED` is unset, the endpoints are unauthenticated and Froid logs a warning at startup — in that case restrict access at the network level (loopback bind or a Docker internal network). Unauthenticated requests are served from a single database: in multiuser mode, the isolated database of the first whitelisted Telegram user; otherwise the default database.
+
+The static-token variables from earlier versions (`FROID_AUTH_TOKEN`, `FROID_AUTH_TOKENS`, `FROID_AUTH_DYNAMIC_TOKENS`) have been removed; Froid refuses to start if one is still set, to avoid silently running unauthenticated.
 
 ## Health endpoint
 
@@ -150,9 +146,7 @@ All workers are disabled by default and require `OPENAI_API_KEY`.
 |---|---|---|
 | `FROID_MCP_ENABLED` | `false` | Enable the MCP Streamable HTTP server |
 | `FROID_MCP_BIND` | `127.0.0.1:8080` | Bind address (e.g. `0.0.0.0:8080` for Docker Compose) |
-| `FROID_AUTH_TOKEN` | _(none)_ | Single shared bearer token for the HTTP listener (MCP and dashboard); unset means no authentication |
-| `FROID_AUTH_TOKENS` | _(none)_ | Per-user bearer tokens as comma-separated `<chat_id>:<token>` pairs; each token serves its user's isolated database. Mutually exclusive with `FROID_AUTH_TOKEN` |
-| `FROID_AUTH_DYNAMIC_TOKENS` | `false` | Let users mint/rotate/revoke their own bearer tokens via the Telegram `/token` command. Mutually exclusive with `FROID_AUTH_TOKEN` |
+| `FROID_AUTH_ENABLED` | `false` | Require bearer tokens (minted via the Telegram `/token` command) on the HTTP listener; each request is served from the token owner's isolated database. Unset means no authentication |
 
 ### Models
 

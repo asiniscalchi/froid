@@ -212,7 +212,7 @@ async fn handle_token_command(
 ) -> String {
     let Some(issuer) = issuer else {
         return "Access tokens are not enabled on this server. Ask the operator to set \
-                FROID_AUTH_DYNAMIC_TOKENS=true."
+                FROID_AUTH_ENABLED=true."
             .to_string();
     };
 

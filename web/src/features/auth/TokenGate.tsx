@@ -7,9 +7,9 @@ import { Label } from '@/components/ui/label'
 import { UnauthorizedError, apiFetch, setToken } from '@/lib/http'
 
 /**
- * Full-screen prompt for the bearer token (FROID_AUTH_TOKEN or the user's
- * entry in FROID_AUTH_TOKENS). The token is verified against the API and
- * kept in localStorage for subsequent visits.
+ * Full-screen prompt for the bearer token minted via the Telegram /token
+ * command. The token is verified against the API and kept in localStorage
+ * for subsequent visits.
  */
 function TokenGate({ onAuthenticated }: { onAuthenticated: () => void }) {
   const [value, setValue] = useState('')
@@ -67,8 +67,8 @@ function TokenGate({ onAuthenticated }: { onAuthenticated: () => void }) {
                 autoFocus
               />
               <p className="text-xs text-muted-foreground">
-                The token configured via FROID_AUTH_TOKEN, or your personal
-                entry in FROID_AUTH_TOKENS. It is stored only in this browser.
+                Send /token to your Telegram bot to get one. It is stored only
+                in this browser.
               </p>
             </div>
             {error && (
