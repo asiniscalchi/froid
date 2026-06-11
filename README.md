@@ -61,8 +61,6 @@ Requests without a valid token receive `401 Unauthorized`; only the `/health` pr
 
 Because Telegram access is what mints HTTP credentials, `TELEGRAM_ALLOWED_USER_IDS` is the gate that decides who can become a user — set it on any instance whose bot a stranger could message.
 
-Variables from removed features (`FROID_AUTH_TOKEN`, `FROID_AUTH_TOKENS`, `FROID_AUTH_DYNAMIC_TOKENS`, `FROID_AUTH_ENABLED`, `FROID_DASHBOARD_ENABLED`) make Froid refuse to start if still set, so behavior changes cannot go unnoticed.
-
 ## Health endpoint
 
 Whenever the MCP listener is running, `GET /health` answers `200 OK` with the service name and version. It is intentionally exempt from the bearer-token check so supervisors, load balancers, and container healthchecks can probe it without credentials:
