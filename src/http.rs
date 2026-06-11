@@ -1,15 +1,10 @@
 //! Assembly of the shared HTTP listener (MCP endpoint + dashboard).
 //!
-//! Two layouts exist, selected by the auth configuration:
-//!
-//! - **Single tenant** (`FROID_AUTH_TOKEN` or no auth): every request is
-//!   served from one fixed database, optionally behind one bearer token.
-//! - **Per user** (`FROID_AUTH_TOKENS`): the bearer token identifies a user
-//!   (Telegram chat id) and `/mcp` + `/api` requests are forwarded to a
-//!   lazily built router bound to that user's isolated database.
-//!
-//! In both layouts the `/health` probe and the static SPA shell are served
-//! without authentication; only the data-bearing routes sit behind tokens.
+//! Authentication is always on: the bearer token (minted via the Telegram
+//! `/token` command) identifies a user, and `/mcp` + `/api` requests are
+//! forwarded to a lazily built router bound to that user's isolated
+//! database. The `/health` probe and the static SPA shell are served without
+//! authentication; only the data-bearing routes sit behind tokens.
 
 use std::{collections::HashMap, error::Error, sync::Arc};
 
@@ -54,7 +49,7 @@ pub struct TenantRouterConfig {
 /// Build the protected routes (`/mcp`, `/api`) bound to one database.
 /// `capture_conversation_id` is the conversation web-captured entries are
 /// filed under (the owning user's chat id).
-pub fn build_tenant_router(
+fn build_tenant_router(
     pool: &SqlitePool,
     capture_conversation_id: &str,
     config: &TenantRouterConfig,
@@ -181,18 +176,6 @@ pub fn build_per_user_app(
             require_user_bearer,
         ))
         .merge(crate::health::router());
-
-    if dashboard_enabled {
-        router = router.merge(dashboard::spa_router());
-    }
-    router
-}
-
-/// Full listener app for the unauthenticated single-tenant layout (no auth
-/// configured): everything is served from one database and access is expected
-/// to be restricted at the network level.
-pub fn build_single_tenant_app(tenant_router: Router, dashboard_enabled: bool) -> Router {
-    let mut router = tenant_router.merge(crate::health::router());
 
     if dashboard_enabled {
         router = router.merge(dashboard::spa_router());

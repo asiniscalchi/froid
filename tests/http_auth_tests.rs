@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use froid::{
     auth::TokenResolver,
     cli::Cli,
-    http::{TenantRouterConfig, TenantRouters, build_per_user_app, build_single_tenant_app},
+    http::{TenantRouterConfig, TenantRouters, build_per_user_app},
     journal::{
         extraction::JournalEntryExtractionRuntimeConfig,
         registry::{JournalServiceRegistry, JournalServiceRegistryConfig},
@@ -50,12 +50,9 @@ async fn registry(temp_base_dir: &std::path::Path) -> JournalServiceRegistry {
         temp_base_dir.to_str().unwrap(),
         "--dashboard-enabled",
         "true",
-        "--auth-enabled",
-        "true",
     ])
     .unwrap();
     let config = cli.serve_config().unwrap();
-    assert!(config.http_auth.enabled);
 
     JournalServiceRegistry::new(JournalServiceRegistryConfig {
         config,
@@ -193,38 +190,6 @@ async fn per_user_app_serves_health_and_spa_without_token() {
     let (status, body) = get(app.clone(), "/health", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("\"ok\""));
-
-    let (status, body) = get(app, "/", None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("<div id=\"root\">"));
-}
-
-#[tokio::test]
-async fn unauthenticated_single_tenant_app_serves_everything() {
-    use froid::http::build_tenant_router;
-
-    froid::database::register_sqlite_vec_extension();
-    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
-
-    let tenant_router = build_tenant_router(
-        &pool,
-        "default",
-        &TenantRouterConfig {
-            mcp_enabled: false,
-            dashboard_enabled: true,
-            embedding_config: None,
-            shutdown: CancellationToken::new(),
-        },
-    )
-    .unwrap();
-    let app = build_single_tenant_app(tenant_router, true);
-
-    let (status, _) = get(app.clone(), "/api/messages/export", None).await;
-    assert_eq!(status, StatusCode::OK);
-
-    let (status, _) = get(app.clone(), "/health", None).await;
-    assert_eq!(status, StatusCode::OK);
 
     let (status, body) = get(app, "/", None).await;
     assert_eq!(status, StatusCode::OK);
