@@ -1,4 +1,6 @@
-use std::{env, error::Error, fmt, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf};
+
+use thiserror::Error;
 
 pub const DEFAULT_WEEK_REVIEW_PROMPT_PATH: &str = "prompts/weekly_review_v1.md";
 
@@ -60,30 +62,13 @@ impl WeeklyReviewPromptConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum WeeklyReviewPromptError {
+    #[error("failed to load weekly review prompt from {}: {message}", path.display())]
     ReadFailed { path: PathBuf, message: String },
+    #[error("weekly review prompt file is empty: {}", path.display())]
     Empty { path: PathBuf },
 }
-
-impl fmt::Display for WeeklyReviewPromptError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ReadFailed { path, message } => {
-                write!(
-                    f,
-                    "failed to load weekly review prompt from {}: {message}",
-                    path.display()
-                )
-            }
-            Self::Empty { path } => {
-                write!(f, "weekly review prompt file is empty: {}", path.display())
-            }
-        }
-    }
-}
-
-impl Error for WeeklyReviewPromptError {}
 
 #[cfg(test)]
 mod tests {

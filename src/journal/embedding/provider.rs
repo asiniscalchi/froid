@@ -1,41 +1,24 @@
-use std::{env, error::Error, fmt};
+use std::env;
 
 use async_trait::async_trait;
 use rig::{client::EmbeddingsClient, embeddings::EmbeddingModel, providers::openai};
+use thiserror::Error;
 
 use super::{Embedder, EmbedderError, Embedding, EmbeddingConfig, SUPPORTED_EMBEDDING_DIMENSIONS};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RigOpenAiEmbedderError {
+    #[error("OPENAI_API_KEY is required")]
     MissingOpenAiApiKey,
+    #[error("failed to construct OpenAI embedder: {0}")]
     Client(String),
 }
 
-impl fmt::Display for RigOpenAiEmbedderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingOpenAiApiKey => write!(f, "OPENAI_API_KEY is required"),
-            Self::Client(message) => write!(f, "failed to construct OpenAI embedder: {message}"),
-        }
-    }
-}
-
-impl Error for RigOpenAiEmbedderError {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProviderError {
+    #[error("{0}")]
     Request(String),
 }
-
-impl fmt::Display for ProviderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Request(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl Error for ProviderError {}
 
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {

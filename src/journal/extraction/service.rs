@@ -1,7 +1,6 @@
-use std::{error::Error, fmt};
-use tracing::{info, warn};
-
 use async_trait::async_trait;
+use thiserror::Error;
+use tracing::{info, warn};
 
 use crate::journal::extraction::{
     JournalEntryExtractionGenerator,
@@ -9,25 +8,10 @@ use crate::journal::extraction::{
     validation::validate_extraction_json,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum JournalEntryExtractionServiceError {
-    Repository(JournalEntryExtractionRepositoryError),
-}
-
-impl fmt::Display for JournalEntryExtractionServiceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Repository(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl Error for JournalEntryExtractionServiceError {}
-
-impl From<JournalEntryExtractionRepositoryError> for JournalEntryExtractionServiceError {
-    fn from(error: JournalEntryExtractionRepositoryError) -> Self {
-        Self::Repository(error)
-    }
+    #[error("{0}")]
+    Repository(#[from] JournalEntryExtractionRepositoryError),
 }
 
 #[async_trait]

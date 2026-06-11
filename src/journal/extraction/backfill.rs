@@ -1,5 +1,4 @@
-use std::{error::Error, fmt};
-
+use thiserror::Error;
 use tracing::warn;
 
 use super::{
@@ -15,25 +14,10 @@ pub struct ExtractionBackfillResult {
     pub remaining: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ExtractionBackfillError {
-    Repository(JournalEntryExtractionRepositoryError),
-}
-
-impl fmt::Display for ExtractionBackfillError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Repository(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl Error for ExtractionBackfillError {}
-
-impl From<JournalEntryExtractionRepositoryError> for ExtractionBackfillError {
-    fn from(error: JournalEntryExtractionRepositoryError) -> Self {
-        Self::Repository(error)
-    }
+    #[error("{0}")]
+    Repository(#[from] JournalEntryExtractionRepositoryError),
 }
 
 #[derive(Debug, Clone)]
@@ -110,19 +94,12 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 enum ProcessCandidateError {
+    #[error("repository error: {0}")]
     Repository(JournalEntryExtractionRepositoryError),
+    #[error("extraction error: {0}")]
     Extraction(JournalEntryExtractionServiceError),
-}
-
-impl fmt::Display for ProcessCandidateError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Repository(error) => write!(f, "repository error: {error}"),
-            Self::Extraction(error) => write!(f, "extraction error: {error}"),
-        }
-    }
 }
 
 #[cfg(test)]

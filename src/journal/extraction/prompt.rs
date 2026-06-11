@@ -1,4 +1,6 @@
-use std::{env, error::Error, fmt, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf};
+
+use thiserror::Error;
 
 pub const DEFAULT_JOURNAL_ENTRY_EXTRACTION_PROMPT_PATH: &str = "prompts/entry_extraction_v1.md";
 
@@ -60,31 +62,10 @@ impl JournalEntryExtractionPromptConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum JournalEntryExtractionPromptError {
+    #[error("failed to load journal entry extraction prompt from {}: {message}", path.display())]
     ReadFailed { path: PathBuf, message: String },
+    #[error("journal entry extraction prompt file is empty: {}", path.display())]
     Empty { path: PathBuf },
 }
-
-impl fmt::Display for JournalEntryExtractionPromptError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ReadFailed { path, message } => {
-                write!(
-                    f,
-                    "failed to load journal entry extraction prompt from {}: {message}",
-                    path.display()
-                )
-            }
-            Self::Empty { path } => {
-                write!(
-                    f,
-                    "journal entry extraction prompt file is empty: {}",
-                    path.display()
-                )
-            }
-        }
-    }
-}
-
-impl Error for JournalEntryExtractionPromptError {}
