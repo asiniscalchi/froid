@@ -4,10 +4,9 @@ use teloxide::{
     prelude::*,
     sugar::bot::BotMessagesExt,
     types::{Message, ReactionType},
+    utils::command::BotCommands,
 };
-use tracing::{error, info};
-
-use chrono::{DateTime, Utc};
+use tracing::{error, info, warn};
 
 use crate::{
     handler::MessageHandler,
@@ -79,11 +78,27 @@ impl<H: MessageHandler> TelegramAdapter<H> {
             }
         }
 
+        // The bot username is needed to parse commands like /cmd@botname.
+        let bot_username = match bot.get_me().await {
+            Ok(me) => me.username().to_string(),
+            Err(err) => {
+                warn!(%err, "failed to fetch bot identity; /cmd@botname forms will not parse");
+                String::new()
+            }
+        };
+
+        // Register the command list with Telegram so clients show the
+        // autocomplete menu. Derived from the same enum as parsing and /help.
+        if let Err(err) = bot.set_my_commands(Command::bot_commands()).await {
+            warn!(%err, "failed to register the bot command menu with Telegram");
+        }
+
         teloxide::repl(bot, move |bot: Bot, message: Message| {
             let handler = handler.clone();
             let allowed_user_ids = allowed_user_ids.clone();
             let token_issuer = token_issuer.clone();
             let transfer = transfer.clone();
+            let bot_username = bot_username.clone();
 
             async move {
                 handle_message(
@@ -93,12 +108,117 @@ impl<H: MessageHandler> TelegramAdapter<H> {
                     handler,
                     token_issuer,
                     transfer,
+                    &bot_username,
                 )
                 .await
             }
         })
         .await;
     }
+}
+
+/// All bot commands: the single source of truth for parsing, the `/help`
+/// text, and the command menu registered with Telegram at startup.
+#[derive(BotCommands, Clone, Debug, PartialEq)]
+#[command(rename_rule = "snake_case")]
+enum Command {
+    #[command(description = "start journaling")]
+    Start,
+    #[command(description = "show commands")]
+    Help,
+    #[command(description = "show latest entry")]
+    Last,
+    #[command(description = "delete latest entry")]
+    Undo,
+    #[command(description = "show recent entries (optionally how many)")]
+    Recent(String),
+    #[command(description = "show today's entries")]
+    Today,
+    #[command(description = "show daily review")]
+    DayReview,
+    #[command(description = "show last week's review")]
+    WeekReview,
+    #[command(description = "show journal stats")]
+    Stats,
+    #[command(description = "show bot status")]
+    Status,
+    #[command(description = "search entries by meaning")]
+    Search(String),
+    #[command(description = "create or rotate your MCP access token (/token revoke to disable)")]
+    Token(String),
+    #[command(description = "download your journal as a JSON file")]
+    Export,
+    #[command(description = "send an export file with /import as the caption to load it")]
+    Import,
+}
+
+/// Where a parsed command is handled.
+#[derive(Debug, PartialEq)]
+enum Dispatch {
+    /// Forwarded to the per-tenant journal service.
+    Journal(JournalCommand),
+    Help,
+    Token(TokenAction),
+    Export,
+    /// `/import` sent as plain text — the file must come as a document.
+    ImportUsage,
+}
+
+fn dispatch_for(command: Command) -> Dispatch {
+    match command {
+        Command::Start => Dispatch::Journal(JournalCommand::Start),
+        Command::Help => Dispatch::Help,
+        Command::Last => Dispatch::Journal(JournalCommand::Last),
+        Command::Undo => Dispatch::Journal(JournalCommand::Undo),
+        Command::Recent(argument) => {
+            let argument = argument.trim();
+            let command = if argument.is_empty() {
+                JournalCommand::Recent {
+                    requested_limit: DEFAULT_RECENT_LIMIT,
+                }
+            } else {
+                match argument.parse::<u32>() {
+                    Ok(limit) if limit > 0 => JournalCommand::Recent {
+                        requested_limit: limit,
+                    },
+                    _ => JournalCommand::RecentUsage,
+                }
+            };
+            Dispatch::Journal(command)
+        }
+        Command::Today => Dispatch::Journal(JournalCommand::Today),
+        Command::DayReview => Dispatch::Journal(JournalCommand::DayReviewLast),
+        Command::WeekReview => Dispatch::Journal(JournalCommand::WeekReviewLast),
+        Command::Stats => Dispatch::Journal(JournalCommand::Stats),
+        Command::Status => Dispatch::Journal(JournalCommand::Status),
+        Command::Search(query) => {
+            let query = query.trim();
+            let command = if query.is_empty() {
+                JournalCommand::SearchUsage
+            } else {
+                JournalCommand::Search {
+                    query: query.to_string(),
+                }
+            };
+            Dispatch::Journal(command)
+        }
+        Command::Token(argument) => Dispatch::Token(match argument.trim() {
+            "" => TokenAction::Issue,
+            "revoke" => TokenAction::Revoke,
+            _ => TokenAction::Usage,
+        }),
+        Command::Export => Dispatch::Export,
+        Command::Import => Dispatch::ImportUsage,
+    }
+}
+
+fn help_text() -> String {
+    format!("Commands:\n{}", Command::descriptions())
+}
+
+fn unknown_command_reply(text: &str) -> String {
+    let command = text.split_whitespace().next().unwrap_or(text);
+    format!("Unknown command: {command}\n\n{}", help_text())
 }
 
 async fn handle_message<H: MessageHandler>(
@@ -108,6 +228,7 @@ async fn handle_message<H: MessageHandler>(
     handler: H,
     token_issuer: Option<TokenIssuer>,
     transfer: Option<TransferService>,
+    bot_username: &str,
 ) -> ResponseResult<()> {
     if !should_handle_message(&message, allowed_user_ids.as_deref()) {
         info!(
@@ -137,47 +258,55 @@ async fn handle_message<H: MessageHandler>(
         return Ok(());
     };
 
-    match parse_transfer_command(text) {
-        Some(TransferCommand::Export) => {
-            info!(chat_id = %message.chat.id, "received Telegram /export command");
-            return handle_export_command(&bot, &message, transfer.as_ref()).await;
-        }
-        Some(TransferCommand::ImportUsage) => {
-            bot.send_message(
-                message.chat.id,
-                "To import, send your froid export JSON file as a document with /import as the caption.",
-            )
-            .await?;
+    let trimmed = text.trim_start();
+    if trimmed.starts_with('/') {
+        info!(chat_id = %message.chat.id, "received Telegram command");
+        let Ok(command) = Command::parse(trimmed, bot_username) else {
+            bot.send_message(message.chat.id, unknown_command_reply(trimmed))
+                .await?;
             return Ok(());
-        }
-        None => {}
-    }
-
-    if let Some(action) = parse_token_command(text) {
-        info!(chat_id = %message.chat.id, "received Telegram /token command");
-        let reply =
-            handle_token_command(token_issuer.as_ref(), action, &message.chat.id.to_string()).await;
-        bot.send_message(message.chat.id, reply).await?;
-        return Ok(());
-    }
-
-    if let Some(command) = parse_command(text, message.date) {
-        let request = JournalCommandRequest {
-            source: MessageSource::Telegram,
-            source_conversation_id: message.chat.id.to_string(),
-            user_id: SINGLE_USER_ID.to_string(),
-            received_at: message.date,
-            command,
         };
 
-        info!("received Telegram command");
+        match dispatch_for(command) {
+            Dispatch::Journal(command) => {
+                let request = JournalCommandRequest {
+                    source: MessageSource::Telegram,
+                    source_conversation_id: message.chat.id.to_string(),
+                    user_id: SINGLE_USER_ID.to_string(),
+                    received_at: message.date,
+                    command,
+                };
 
-        match handler.command(&request).await {
-            Ok(outgoing) => {
-                bot.send_message(message.chat.id, outgoing.text).await?;
+                match handler.command(&request).await {
+                    Ok(outgoing) => {
+                        bot.send_message(message.chat.id, outgoing.text).await?;
+                    }
+                    Err(err) => {
+                        error!(%err, "failed to process journal command");
+                    }
+                }
             }
-            Err(err) => {
-                error!(%err, "failed to process journal command");
+            Dispatch::Help => {
+                bot.send_message(message.chat.id, help_text()).await?;
+            }
+            Dispatch::Token(action) => {
+                let reply = handle_token_command(
+                    token_issuer.as_ref(),
+                    action,
+                    &message.chat.id.to_string(),
+                )
+                .await;
+                bot.send_message(message.chat.id, reply).await?;
+            }
+            Dispatch::Export => {
+                return handle_export_command(&bot, &message, transfer.as_ref()).await;
+            }
+            Dispatch::ImportUsage => {
+                bot.send_message(
+                    message.chat.id,
+                    "To import, send your froid export JSON file as a document with /import as the caption.",
+                )
+                .await?;
             }
         }
 
@@ -234,23 +363,6 @@ fn incoming_from_text_message(message: &Message) -> IncomingMessage {
         user_id: SINGLE_USER_ID.to_string(),
         text: message.text().unwrap_or_default().to_string(),
         received_at: message.date,
-    }
-}
-
-/// Data-portability command parsed from a text message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TransferCommand {
-    Export,
-    /// `/import` sent as plain text — the file must come as a document.
-    ImportUsage,
-}
-
-fn parse_transfer_command(text: &str) -> Option<TransferCommand> {
-    let command = text.split_whitespace().next()?.split('@').next()?;
-    match command {
-        "/export" => Some(TransferCommand::Export),
-        "/import" => Some(TransferCommand::ImportUsage),
-        _ => None,
     }
 }
 
@@ -380,20 +492,6 @@ enum TokenAction {
     Usage,
 }
 
-fn parse_token_command(text: &str) -> Option<TokenAction> {
-    let mut parts = text.trim().splitn(2, char::is_whitespace);
-    let command = parts.next()?.split('@').next()?;
-    if command != "/token" {
-        return None;
-    }
-
-    match parts.next().map(str::trim).filter(|s| !s.is_empty()) {
-        None => Some(TokenAction::Issue),
-        Some("revoke") => Some(TokenAction::Revoke),
-        Some(_) => Some(TokenAction::Usage),
-    }
-}
-
 async fn handle_token_command(
     issuer: Option<&TokenIssuer>,
     action: TokenAction,
@@ -436,70 +534,25 @@ async fn handle_token_command(
     }
 }
 
-fn parse_command(text: &str, _received_at: DateTime<Utc>) -> Option<JournalCommand> {
-    let mut parts = text.trim().splitn(2, char::is_whitespace);
-    let command = parts.next()?;
-    // strip optional @botname suffix
-    let command = command.split('@').next()?;
-    let argument = parts.next().map(str::trim).filter(|s| !s.is_empty());
-
-    match command {
-        "/start" => Some(JournalCommand::Start),
-        "/help" => Some(JournalCommand::Help),
-        "/last" => Some(JournalCommand::Last),
-        "/undo" => Some(JournalCommand::Undo),
-        "/recent" => parse_recent_argument(argument),
-        "/today" => Some(JournalCommand::Today),
-        "/stats" => Some(JournalCommand::Stats),
-        "/status" => Some(JournalCommand::Status),
-        "/day_review" => Some(JournalCommand::DayReviewLast),
-        "/week_review" => Some(JournalCommand::WeekReviewLast),
-        "/search" => Some(parse_search_argument(argument)),
-        _ if command.starts_with('/') => Some(JournalCommand::Unknown {
-            command: command.to_string(),
-        }),
-        _ => None,
-    }
-}
-
-fn parse_search_argument(argument: Option<&str>) -> JournalCommand {
-    match argument {
-        Some(query) => JournalCommand::Search {
-            query: query.to_string(),
-        },
-        None => JournalCommand::SearchUsage,
-    }
-}
-
-fn parse_recent_argument(argument: Option<&str>) -> Option<JournalCommand> {
-    let Some(argument) = argument else {
-        return Some(JournalCommand::Recent {
-            requested_limit: DEFAULT_RECENT_LIMIT,
-        });
-    };
-
-    match argument.parse::<u32>() {
-        Ok(limit) if limit > 0 => Some(JournalCommand::Recent {
-            requested_limit: limit,
-        }),
-        _ => Some(JournalCommand::RecentUsage),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
     use serde_json::json;
 
     use super::*;
     use crate::messages::MessageSource;
 
-    fn received_at() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 4, 29, 12, 0, 0).unwrap()
+    /// Parse a command the way `handle_message` does and return its dispatch.
+    fn cmd(text: &str) -> Option<Dispatch> {
+        Command::parse(text.trim_start(), "mybot")
+            .ok()
+            .map(dispatch_for)
     }
 
-    fn cmd(text: &str) -> Option<JournalCommand> {
-        parse_command(text, received_at())
+    fn journal(text: &str) -> Option<JournalCommand> {
+        match cmd(text)? {
+            Dispatch::Journal(command) => Some(command),
+            other => panic!("expected journal dispatch, got {other:?}"),
+        }
     }
 
     #[test]
@@ -645,120 +698,30 @@ mod tests {
     }
 
     #[test]
-    fn parse_start_command() {
-        assert_eq!(cmd("/start"), Some(JournalCommand::Start));
-    }
-
-    #[test]
-    fn parse_help_command() {
-        assert_eq!(cmd("/help"), Some(JournalCommand::Help));
-    }
-
-    #[test]
-    fn parse_last_command() {
-        assert_eq!(cmd("/last"), Some(JournalCommand::Last));
-        assert_eq!(cmd("/last@mybot"), Some(JournalCommand::Last));
-    }
-
-    #[test]
-    fn parse_undo_command() {
-        assert_eq!(cmd("/undo"), Some(JournalCommand::Undo));
-        assert_eq!(cmd("/undo@mybot"), Some(JournalCommand::Undo));
-    }
-
-    #[test]
-    fn parse_recent_command_with_no_argument_uses_default_limit() {
+    fn parse_journal_commands() {
+        assert_eq!(journal("/start"), Some(JournalCommand::Start));
+        assert_eq!(journal("/last"), Some(JournalCommand::Last));
+        assert_eq!(journal("/undo"), Some(JournalCommand::Undo));
+        assert_eq!(journal("/today"), Some(JournalCommand::Today));
+        assert_eq!(journal("/stats"), Some(JournalCommand::Stats));
+        assert_eq!(journal("/status"), Some(JournalCommand::Status));
+        assert_eq!(journal("/day_review"), Some(JournalCommand::DayReviewLast));
         assert_eq!(
-            cmd("/recent"),
-            Some(JournalCommand::Recent {
-                requested_limit: DEFAULT_RECENT_LIMIT
-            })
-        );
-    }
-
-    #[test]
-    fn parse_recent_command_with_explicit_limit() {
-        assert_eq!(
-            cmd("/recent 5"),
-            Some(JournalCommand::Recent { requested_limit: 5 })
-        );
-    }
-
-    #[test]
-    fn parse_recent_command_strips_bot_name_suffix() {
-        assert_eq!(
-            cmd("/recent@mybot"),
-            Some(JournalCommand::Recent {
-                requested_limit: DEFAULT_RECENT_LIMIT
-            })
-        );
-        assert_eq!(
-            cmd("/recent@mybot 3"),
-            Some(JournalCommand::Recent { requested_limit: 3 })
-        );
-    }
-
-    #[test]
-    fn parse_recent_command_returns_usage_for_invalid_argument() {
-        assert_eq!(cmd("/recent abc"), Some(JournalCommand::RecentUsage));
-        assert_eq!(cmd("/recent 0"), Some(JournalCommand::RecentUsage));
-        assert_eq!(cmd("/recent -3"), Some(JournalCommand::RecentUsage));
-    }
-
-    #[test]
-    fn parse_today_command() {
-        assert_eq!(cmd("/today"), Some(JournalCommand::Today));
-    }
-
-    #[test]
-    fn parse_stats_command() {
-        assert_eq!(cmd("/stats"), Some(JournalCommand::Stats));
-    }
-
-    #[test]
-    fn parse_status_command() {
-        assert_eq!(cmd("/status"), Some(JournalCommand::Status));
-    }
-
-    #[test]
-    fn parse_status_command_strips_bot_name_suffix() {
-        assert_eq!(cmd("/status@mybot"), Some(JournalCommand::Status));
-    }
-
-    #[test]
-    fn parse_day_review_command() {
-        assert_eq!(cmd("/day_review"), Some(JournalCommand::DayReviewLast));
-        assert_eq!(cmd("/day_review "), Some(JournalCommand::DayReviewLast));
-        assert_eq!(
-            cmd("/day_review@mybot"),
-            Some(JournalCommand::DayReviewLast)
-        );
-    }
-
-    #[test]
-    fn parse_week_review_command() {
-        assert_eq!(cmd("/week_review"), Some(JournalCommand::WeekReviewLast));
-        assert_eq!(cmd("/week_review "), Some(JournalCommand::WeekReviewLast));
-        assert_eq!(
-            cmd("/week_review@mybot"),
+            journal("/week_review"),
             Some(JournalCommand::WeekReviewLast)
         );
     }
 
     #[test]
-    fn parse_search_command_with_query() {
+    fn parse_strips_bot_name_suffix() {
+        assert_eq!(journal("/last@mybot"), Some(JournalCommand::Last));
+        assert_eq!(journal("/status@mybot"), Some(JournalCommand::Status));
         assert_eq!(
-            cmd("/search anxiety before meetings"),
-            Some(JournalCommand::Search {
-                query: "anxiety before meetings".to_string()
-            })
+            journal("/recent@mybot 3"),
+            Some(JournalCommand::Recent { requested_limit: 3 })
         );
-    }
-
-    #[test]
-    fn parse_search_command_strips_bot_name_suffix() {
         assert_eq!(
-            cmd("/search@mybot something"),
+            journal("/search@mybot something"),
             Some(JournalCommand::Search {
                 query: "something".to_string()
             })
@@ -766,41 +729,79 @@ mod tests {
     }
 
     #[test]
-    fn parse_search_command_without_query_returns_usage() {
-        assert_eq!(cmd("/search"), Some(JournalCommand::SearchUsage));
-    }
-
-    #[test]
-    fn parse_search_command_treats_all_words_after_command_as_query() {
+    fn parse_recent_command_arguments() {
         assert_eq!(
-            cmd("/search word1 word2 word3"),
-            Some(JournalCommand::Search {
-                query: "word1 word2 word3".to_string()
+            journal("/recent"),
+            Some(JournalCommand::Recent {
+                requested_limit: DEFAULT_RECENT_LIMIT
             })
         );
+        assert_eq!(
+            journal("/recent 5"),
+            Some(JournalCommand::Recent { requested_limit: 5 })
+        );
+        assert_eq!(journal("/recent abc"), Some(JournalCommand::RecentUsage));
+        assert_eq!(journal("/recent 0"), Some(JournalCommand::RecentUsage));
+        assert_eq!(journal("/recent -3"), Some(JournalCommand::RecentUsage));
     }
 
     #[test]
-    fn parse_returns_none_for_non_command() {
+    fn parse_search_command_arguments() {
+        assert_eq!(
+            journal("/search anxiety before meetings"),
+            Some(JournalCommand::Search {
+                query: "anxiety before meetings".to_string()
+            })
+        );
+        assert_eq!(journal("/search"), Some(JournalCommand::SearchUsage));
+    }
+
+    #[test]
+    fn parse_adapter_handled_commands() {
+        assert_eq!(cmd("/help"), Some(Dispatch::Help));
+        assert_eq!(cmd("/export"), Some(Dispatch::Export));
+        assert_eq!(cmd("/export@mybot"), Some(Dispatch::Export));
+        assert_eq!(cmd("/import"), Some(Dispatch::ImportUsage));
+        assert_eq!(cmd("/token"), Some(Dispatch::Token(TokenAction::Issue)));
+        assert_eq!(
+            cmd("/token revoke"),
+            Some(Dispatch::Token(TokenAction::Revoke))
+        );
+        assert_eq!(
+            cmd("/token nonsense"),
+            Some(Dispatch::Token(TokenAction::Usage))
+        );
+    }
+
+    #[test]
+    fn parse_rejects_non_commands_and_unknown_commands() {
         assert_eq!(cmd("hello"), None);
+        assert_eq!(cmd("/other"), None);
+        assert_eq!(cmd("   /other with text"), None);
     }
 
     #[test]
-    fn parse_transfer_command_variants() {
-        assert_eq!(
-            parse_transfer_command("/export"),
-            Some(TransferCommand::Export)
-        );
-        assert_eq!(
-            parse_transfer_command("/export@mybot"),
-            Some(TransferCommand::Export)
-        );
-        assert_eq!(
-            parse_transfer_command("/import"),
-            Some(TransferCommand::ImportUsage)
-        );
-        assert_eq!(parse_transfer_command("/help"), None);
-        assert_eq!(parse_transfer_command("export"), None);
+    fn unknown_command_reply_names_the_command_and_shows_help() {
+        let reply = unknown_command_reply("/other with text");
+
+        assert!(reply.starts_with("Unknown command: /other"));
+        assert!(reply.contains("/help"));
+    }
+
+    #[test]
+    fn help_text_covers_every_registered_command() {
+        let help = help_text();
+
+        for registered in Command::bot_commands() {
+            assert!(
+                help.contains(&registered.command),
+                "help text is missing {}",
+                registered.command
+            );
+        }
+        assert!(help.contains("/recent"));
+        assert!(help.contains("/token"));
+        assert!(help.contains("/export"));
     }
 
     #[test]
@@ -933,25 +934,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parse_token_command_variants() {
-        assert_eq!(parse_token_command("/token"), Some(TokenAction::Issue));
-        assert_eq!(
-            parse_token_command("/token@mybot"),
-            Some(TokenAction::Issue)
-        );
-        assert_eq!(
-            parse_token_command("/token revoke"),
-            Some(TokenAction::Revoke)
-        );
-        assert_eq!(
-            parse_token_command("/token nonsense"),
-            Some(TokenAction::Usage)
-        );
-        assert_eq!(parse_token_command("/help"), None);
-        assert_eq!(parse_token_command("token"), None);
-    }
-
     mod token_command {
         use super::super::{TokenAction, handle_token_command};
         use crate::database;
@@ -1025,28 +1007,6 @@ mod tests {
 
             assert!(reply.contains("/token revoke"));
         }
-    }
-
-    #[test]
-    fn parse_unknown_slash_prefixed_message_as_command() {
-        assert_eq!(
-            cmd("/other"),
-            Some(JournalCommand::Unknown {
-                command: "/other".to_string()
-            })
-        );
-        assert_eq!(
-            cmd("/other@mybot"),
-            Some(JournalCommand::Unknown {
-                command: "/other".to_string()
-            })
-        );
-        assert_eq!(
-            cmd("   /other with text"),
-            Some(JournalCommand::Unknown {
-                command: "/other".to_string()
-            })
-        );
     }
 
     fn telegram_message(value: serde_json::Value) -> Message {

@@ -510,27 +510,6 @@ async fn command_start_returns_welcome_message() {
 }
 
 #[tokio::test]
-async fn command_help_returns_available_commands() {
-    let service = setup().await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::Help))
-        .await
-        .unwrap();
-
-    assert!(outgoing.text.contains("/recent [number]"));
-    assert!(outgoing.text.contains("/today"));
-    assert!(outgoing.text.contains("/day_review - show daily review"));
-    assert!(
-        outgoing
-            .text
-            .contains("/week_review - show last week's review")
-    );
-    assert!(outgoing.text.contains("/stats"));
-    assert!(outgoing.text.contains("/status"));
-}
-
-#[tokio::test]
 async fn status_returns_stable_sections_when_optional_subsystems_are_unavailable() {
     let service = setup().await;
 
@@ -1190,18 +1169,6 @@ async fn stats_formats_basic_statistics() {
 }
 
 #[tokio::test]
-async fn command_help_includes_search() {
-    let service = setup().await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::Help))
-        .await
-        .unwrap();
-
-    assert!(outgoing.text.contains("/search <query>"));
-}
-
-#[tokio::test]
 async fn command_search_usage_returns_usage_message() {
     let service = setup().await;
 
@@ -1211,39 +1178,6 @@ async fn command_search_usage_returns_usage_message() {
         .unwrap();
 
     assert!(outgoing.text.contains("Usage: /search <query>"));
-}
-
-#[tokio::test]
-async fn unknown_command_returns_help_response() {
-    let service = setup().await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::Unknown {
-            command: "/other".to_string(),
-        }))
-        .await
-        .unwrap();
-
-    assert!(outgoing.text.starts_with("Unknown command: /other"));
-    assert!(outgoing.text.contains("/help - show commands"));
-}
-
-#[tokio::test]
-async fn unknown_command_does_not_store_command_text_as_journal_entry() {
-    let (service, pool) = setup_with_pool().await;
-
-    service
-        .command(&command(JournalCommand::Unknown {
-            command: "/other".to_string(),
-        }))
-        .await
-        .unwrap();
-
-    let entry_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(entry_count, 0);
 }
 
 #[tokio::test]
