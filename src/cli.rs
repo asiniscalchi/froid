@@ -215,44 +215,6 @@ pub struct ServeConfig {
     pub mcp_server: McpServerConfig,
 }
 
-/// Environment variables from removed features, with the hint shown when one
-/// is still set. Their presence is a hard error rather than a silent ignore,
-/// so an operator upgrading across the removal notices the behavior change.
-const REMOVED_VARS: &[(&str, &str)] = &[
-    (
-        "FROID_AUTH_TOKEN",
-        "authentication is always enabled and every user mints their own bearer token with the Telegram /token command",
-    ),
-    (
-        "FROID_AUTH_TOKENS",
-        "authentication is always enabled and every user mints their own bearer token with the Telegram /token command",
-    ),
-    (
-        "FROID_AUTH_DYNAMIC_TOKENS",
-        "authentication is always enabled and every user mints their own bearer token with the Telegram /token command",
-    ),
-    (
-        "FROID_AUTH_ENABLED",
-        "authentication is always enabled and every user mints their own bearer token with the Telegram /token command",
-    ),
-    (
-        "FROID_DASHBOARD_ENABLED",
-        "the web dashboard was removed; capture and reviews live in Telegram, reads go through MCP, and /export + /import cover data portability",
-    ),
-];
-
-fn reject_removed_vars(lookup: impl Fn(&str) -> Option<String>) -> Result<(), clap::Error> {
-    for (name, hint) in REMOVED_VARS {
-        if lookup(name).is_some() {
-            return Err(clap::Error::raw(
-                clap::error::ErrorKind::ValueValidation,
-                format!("{name} is no longer supported: {hint}. Remove the variable."),
-            ));
-        }
-    }
-    Ok(())
-}
-
 impl Cli {
     pub fn subcommand(&self) -> Option<&Command> {
         self.command.as_ref()
@@ -340,8 +302,6 @@ impl Cli {
             enabled: self.mcp_enabled.unwrap_or(false),
             bind: self.mcp_bind,
         };
-
-        reject_removed_vars(|name| std::env::var(name).ok())?;
 
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
@@ -793,24 +753,6 @@ mod tests {
 
         assert!(!config.mcp_server.enabled);
         assert_eq!(config.mcp_server.bind.to_string(), "127.0.0.1:8080");
-    }
-
-    #[test]
-    fn rejects_removed_variables() {
-        for (name, _) in super::REMOVED_VARS {
-            let error =
-                reject_removed_vars(|candidate| (candidate == *name).then(|| "value".to_string()))
-                    .unwrap_err();
-
-            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-            assert!(error.to_string().contains(name), "{name}");
-            assert!(error.to_string().contains("no longer supported"));
-        }
-    }
-
-    #[test]
-    fn accepts_environment_without_removed_variables() {
-        assert!(reject_removed_vars(|_| None).is_ok());
     }
 
     #[test]
