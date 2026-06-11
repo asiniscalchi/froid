@@ -27,6 +27,7 @@ ulid = "1"
 tower = { version = "0.5", features = ["util"] }
 rand = "0.8"
 sha2 = "0.10"
+thiserror = "2.0.18"
 
 [dev-dependencies]
 rmcp = { version = "1.6", features = ["client", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }

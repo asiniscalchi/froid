@@ -1,40 +1,25 @@
-use std::{collections::HashMap, error::Error, fmt};
+use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
+use thiserror::Error;
+
+use crate::errors::from_error_string;
 
 use super::{
     JournalEntryExtraction, JournalEntryExtractionCandidate, JournalEntryExtractionResult,
     JournalEntryExtractionStatus,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum JournalEntryExtractionRepositoryError {
+    #[error("{0}")]
     Storage(String),
+    #[error("invalid journal entry extraction status stored in database: {0}")]
     InvalidStatus(String),
 }
 
-impl fmt::Display for JournalEntryExtractionRepositoryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Storage(message) => write!(f, "{message}"),
-            Self::InvalidStatus(value) => {
-                write!(
-                    f,
-                    "invalid journal entry extraction status stored in database: {value}"
-                )
-            }
-        }
-    }
-}
-
-impl Error for JournalEntryExtractionRepositoryError {}
-
-impl From<sqlx::Error> for JournalEntryExtractionRepositoryError {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
+from_error_string!(JournalEntryExtractionRepositoryError::Storage, sqlx::Error);
 
 #[derive(Debug, Clone)]
 pub struct JournalEntryExtractionRepository {

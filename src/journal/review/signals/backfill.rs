@@ -1,6 +1,5 @@
-use std::{error::Error, fmt};
-
 use chrono::NaiveDate;
+use thiserror::Error;
 use tracing::warn;
 
 use super::{
@@ -15,25 +14,10 @@ pub struct DailyReviewSignalBackfillResult {
     pub remaining: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DailyReviewSignalBackfillError {
-    Repository(DailyReviewSignalRepositoryError),
-}
-
-impl fmt::Display for DailyReviewSignalBackfillError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Repository(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl Error for DailyReviewSignalBackfillError {}
-
-impl From<DailyReviewSignalRepositoryError> for DailyReviewSignalBackfillError {
-    fn from(error: DailyReviewSignalRepositoryError) -> Self {
-        Self::Repository(error)
-    }
+    #[error("{0}")]
+    Repository(#[from] DailyReviewSignalRepositoryError),
 }
 
 #[derive(Clone)]
@@ -123,25 +107,12 @@ impl DailyReviewSignalBackfillService {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 enum ProcessCandidateError {
+    #[error("service error: {0}")]
     Service(DailyReviewSignalServiceError),
+    #[error("generation failed for daily_review_id={daily_review_id}: {error}")]
     GenerationFailed { daily_review_id: i64, error: String },
-}
-
-impl fmt::Display for ProcessCandidateError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Service(error) => write!(f, "service error: {error}"),
-            Self::GenerationFailed {
-                daily_review_id,
-                error,
-            } => write!(
-                f,
-                "generation failed for daily_review_id={daily_review_id}: {error}"
-            ),
-        }
-    }
 }
 
 #[cfg(test)]

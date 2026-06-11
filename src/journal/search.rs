@@ -1,6 +1,7 @@
-use std::{collections::HashMap, error::Error, fmt};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
+use thiserror::Error;
 
 use super::{
     embedding::{
@@ -19,24 +20,15 @@ pub struct SemanticSearchResult {
     pub distance: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SemanticSearchError {
+    #[error("failed to embed search query: {0}")]
     Embedder(EmbedderError),
+    #[error("vector search failed: {0}")]
     Index(EmbeddingRepositoryError),
+    #[error("failed to load journal entries: {0}")]
     Repository(String),
 }
-
-impl fmt::Display for SemanticSearchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Embedder(e) => write!(f, "failed to embed search query: {e}"),
-            Self::Index(e) => write!(f, "vector search failed: {e}"),
-            Self::Repository(e) => write!(f, "failed to load journal entries: {e}"),
-        }
-    }
-}
-
-impl Error for SemanticSearchError {}
 
 #[async_trait]
 pub(crate) trait SearchService: Send + Sync {

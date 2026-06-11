@@ -1,7 +1,8 @@
-use std::{error::Error, fmt};
-
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
+use thiserror::Error;
+
+use crate::errors::from_error_string;
 
 use crate::{
     journal::extraction::{BehaviorValence, NeedStatus},
@@ -10,34 +11,17 @@ use crate::{
 
 use super::types::{DailyReviewSignal, DailyReviewSignalCandidate, SignalType};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DailyReviewSignalRepositoryError {
+    #[error("{0}")]
     Storage(String),
+    #[error("invalid signal_type stored in database: {0}")]
     InvalidSignalType(String),
+    #[error("invalid review_date stored in database: {0}")]
     InvalidReviewDate(String),
 }
 
-impl fmt::Display for DailyReviewSignalRepositoryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Storage(message) => write!(f, "{message}"),
-            Self::InvalidSignalType(value) => {
-                write!(f, "invalid signal_type stored in database: {value}")
-            }
-            Self::InvalidReviewDate(value) => {
-                write!(f, "invalid review_date stored in database: {value}")
-            }
-        }
-    }
-}
-
-impl Error for DailyReviewSignalRepositoryError {}
-
-impl From<sqlx::Error> for DailyReviewSignalRepositoryError {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
+from_error_string!(DailyReviewSignalRepositoryError::Storage, sqlx::Error);
 
 #[derive(Debug, Clone, Default)]
 pub struct SignalSearchFilters {

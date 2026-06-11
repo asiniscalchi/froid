@@ -1,46 +1,24 @@
-use std::{error::Error, fmt};
-
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
+use thiserror::Error;
+
+use crate::errors::from_error_string;
 
 use crate::messages::SINGLE_USER_ID;
 
 use super::{WeeklyReview, WeeklyReviewStatus};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum WeeklyReviewRepositoryError {
+    #[error("{0}")]
     Storage(String),
+    #[error("invalid weekly review week start stored in database: {0}")]
     InvalidWeekStartDate(String),
+    #[error("invalid weekly review status stored in database: {0}")]
     InvalidStatus(String),
 }
 
-impl fmt::Display for WeeklyReviewRepositoryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Storage(message) => write!(f, "{message}"),
-            Self::InvalidWeekStartDate(value) => {
-                write!(
-                    f,
-                    "invalid weekly review week start stored in database: {value}"
-                )
-            }
-            Self::InvalidStatus(value) => {
-                write!(
-                    f,
-                    "invalid weekly review status stored in database: {value}"
-                )
-            }
-        }
-    }
-}
-
-impl Error for WeeklyReviewRepositoryError {}
-
-impl From<sqlx::Error> for WeeklyReviewRepositoryError {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
+from_error_string!(WeeklyReviewRepositoryError::Storage, sqlx::Error);
 
 #[derive(Debug, Clone)]
 pub struct WeeklyReviewRepository {

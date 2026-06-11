@@ -1,6 +1,9 @@
-use std::{error::Error, fmt, sync::Arc};
+use std::sync::Arc;
 
 use chrono::NaiveDate;
+use thiserror::Error;
+
+use crate::errors::from_error_string;
 
 use crate::journal::{
     extraction::repository::JournalEntryExtractionRepository,
@@ -15,42 +18,18 @@ use crate::journal::{
 
 const EMPTY_REVIEW_ERROR: &str = "daily review generator returned an empty review";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DailyReviewServiceError {
+    #[error("{0}")]
     Storage(String),
 }
 
-impl fmt::Display for DailyReviewServiceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Storage(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl Error for DailyReviewServiceError {}
-
-impl From<sqlx::Error> for DailyReviewServiceError {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
-
-impl From<DailyReviewRepositoryError> for DailyReviewServiceError {
-    fn from(error: DailyReviewRepositoryError) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
-
-impl From<crate::journal::extraction::repository::JournalEntryExtractionRepositoryError>
-    for DailyReviewServiceError
-{
-    fn from(
-        error: crate::journal::extraction::repository::JournalEntryExtractionRepositoryError,
-    ) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
+from_error_string!(
+    DailyReviewServiceError::Storage,
+    sqlx::Error,
+    DailyReviewRepositoryError,
+    crate::journal::extraction::repository::JournalEntryExtractionRepositoryError,
+);
 
 #[derive(Clone)]
 pub struct DailyReviewService {

@@ -1,14 +1,15 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use teloxide::{prelude::*, types::ChatId};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::workers::{
-    ReconciliationWorker, config::ReconciliationWorkerConfig, reconciliation::ReconciliationCycle,
+    ReconciliationWorker, ReviewSendOutcome, config::ReconciliationWorkerConfig,
+    reconciliation::ReconciliationCycle,
 };
 
 use crate::{
+    errors::from_error_string,
     journal::{
         repository::JournalRepository,
         responses::format_daily_review_for_date,
@@ -29,32 +30,17 @@ pub struct DailyReviewDeliveryResult {
     pub failed: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DailyReviewDeliveryWorkerError {
+    #[error("{0}")]
     Storage(String),
 }
 
-impl std::fmt::Display for DailyReviewDeliveryWorkerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Storage(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl std::error::Error for DailyReviewDeliveryWorkerError {}
-
-impl From<sqlx::Error> for DailyReviewDeliveryWorkerError {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
-
-impl From<DailyReviewRepositoryError> for DailyReviewDeliveryWorkerError {
-    fn from(error: DailyReviewRepositoryError) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
+from_error_string!(
+    DailyReviewDeliveryWorkerError::Storage,
+    sqlx::Error,
+    DailyReviewRepositoryError,
+);
 
 #[async_trait]
 pub trait DailyReviewSender: Send + Sync {
@@ -62,58 +48,7 @@ pub trait DailyReviewSender: Send + Sync {
         &self,
         source_conversation_id: &str,
         text: &str,
-    ) -> Result<DailyReviewSendOutcome, String>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DailyReviewSendOutcome {
-    Sent,
-    Skipped,
-}
-
-#[derive(Clone)]
-pub struct TelegramDailyReviewSender {
-    bot: Bot,
-    allowed_user_ids: Option<Vec<u64>>,
-}
-
-impl TelegramDailyReviewSender {
-    pub fn new(bot_token: String, allowed_user_ids: Option<Vec<u64>>) -> Self {
-        Self {
-            bot: Bot::new(bot_token),
-            allowed_user_ids,
-        }
-    }
-}
-
-#[async_trait]
-impl DailyReviewSender for TelegramDailyReviewSender {
-    async fn send_daily_review(
-        &self,
-        source_conversation_id: &str,
-        text: &str,
-    ) -> Result<DailyReviewSendOutcome, String> {
-        let chat_id = source_conversation_id
-            .parse::<i64>()
-            .map_err(|_| format!("invalid Telegram chat id: {source_conversation_id}"))?;
-
-        if let Some(ref allowed_user_ids) = self.allowed_user_ids
-            && (chat_id < 0 || !allowed_user_ids.contains(&(chat_id as u64)))
-        {
-            info!(
-                source_conversation_id,
-                ?allowed_user_ids,
-                "skipping daily review delivery outside configured Telegram user scope"
-            );
-            return Ok(DailyReviewSendOutcome::Skipped);
-        }
-
-        self.bot
-            .send_message(ChatId(chat_id), text.to_string())
-            .await
-            .map(|_| DailyReviewSendOutcome::Sent)
-            .map_err(|error| error.to_string())
-    }
+    ) -> Result<ReviewSendOutcome, String>;
 }
 
 pub struct DailyReviewDeliveryCycle<R, S> {
@@ -213,11 +148,11 @@ where
                 .send_daily_review(&target.source_conversation_id, &text)
                 .await
             {
-                Ok(DailyReviewSendOutcome::Sent) => {
+                Ok(ReviewSendOutcome::Sent) => {
                     self.daily_reviews.mark_delivered(review_date).await?;
                     result.delivered += 1;
                 }
-                Ok(DailyReviewSendOutcome::Skipped) => {
+                Ok(ReviewSendOutcome::Skipped) => {
                     result.skipped += 1;
                 }
                 Err(error) => {
@@ -341,21 +276,21 @@ mod tests {
     #[derive(Debug, Clone)]
     struct FakeSender {
         sent: Arc<Mutex<Vec<(String, String)>>>,
-        result: Result<DailyReviewSendOutcome, String>,
+        result: Result<ReviewSendOutcome, String>,
     }
 
     impl FakeSender {
         fn succeeding() -> Self {
             Self {
                 sent: Arc::new(Mutex::new(Vec::new())),
-                result: Ok(DailyReviewSendOutcome::Sent),
+                result: Ok(ReviewSendOutcome::Sent),
             }
         }
 
         fn skipped() -> Self {
             Self {
                 sent: Arc::new(Mutex::new(Vec::new())),
-                result: Ok(DailyReviewSendOutcome::Skipped),
+                result: Ok(ReviewSendOutcome::Skipped),
             }
         }
 
@@ -377,7 +312,7 @@ mod tests {
             &self,
             source_conversation_id: &str,
             text: &str,
-        ) -> Result<DailyReviewSendOutcome, String> {
+        ) -> Result<ReviewSendOutcome, String> {
             self.sent
                 .lock()
                 .unwrap()

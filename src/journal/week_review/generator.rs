@@ -1,7 +1,5 @@
 use std::{
     env,
-    error::Error,
-    fmt,
     sync::{Arc, RwLock},
 };
 
@@ -11,6 +9,7 @@ use rig::{
     completion::Prompt,
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
+use thiserror::Error;
 
 use crate::{
     journal::review::signals::types::DailyReviewSignal,
@@ -49,7 +48,8 @@ impl WeeklyReviewConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
 pub struct WeeklyReviewGenerationError {
     message: String,
 }
@@ -62,14 +62,6 @@ impl WeeklyReviewGenerationError {
     }
 }
 
-impl fmt::Display for WeeklyReviewGenerationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl Error for WeeklyReviewGenerationError {}
-
 #[async_trait]
 pub trait WeeklyReviewGenerator: Send + Sync {
     fn model(&self) -> &str;
@@ -81,42 +73,19 @@ pub trait WeeklyReviewGenerator: Send + Sync {
     ) -> Result<String, WeeklyReviewGenerationError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RigOpenAiWeeklyReviewGeneratorError {
+    #[error("OPENAI_API_KEY is required")]
     MissingOpenAiApiKey,
+    #[error("failed to construct OpenAI weekly review generator: {0}")]
     Client(String),
 }
 
-impl fmt::Display for RigOpenAiWeeklyReviewGeneratorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingOpenAiApiKey => write!(f, "OPENAI_API_KEY is required"),
-            Self::Client(message) => {
-                write!(
-                    f,
-                    "failed to construct OpenAI weekly review generator: {message}"
-                )
-            }
-        }
-    }
-}
-
-impl Error for RigOpenAiWeeklyReviewGeneratorError {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum WeeklyReviewProviderError {
+    #[error("{0}")]
     Request(String),
 }
-
-impl fmt::Display for WeeklyReviewProviderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Request(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl Error for WeeklyReviewProviderError {}
 
 #[async_trait]
 pub(crate) trait WeeklyReviewProvider: Send + Sync {

@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::error::Error;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
@@ -24,30 +24,14 @@ impl UserContext {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum AnalyzerError {
+    #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    #[error("limit exceeds maximum (max {max})")]
     LimitTooLarge { max: u32 },
-    Internal(Box<dyn Error + Send + Sync>),
-}
-
-impl fmt::Display for AnalyzerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidArgument(message) => write!(f, "invalid argument: {message}"),
-            Self::LimitTooLarge { max } => write!(f, "limit exceeds maximum (max {max})"),
-            Self::Internal(source) => write!(f, "internal error: {source}"),
-        }
-    }
-}
-
-impl Error for AnalyzerError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Internal(source) => Some(source.as_ref()),
-            _ => None,
-        }
-    }
+    #[error("internal error: {0}")]
+    Internal(#[source] Box<dyn Error + Send + Sync>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

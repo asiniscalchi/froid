@@ -1,6 +1,7 @@
-use std::{collections::HashMap, error::Error, fmt};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
+use thiserror::Error;
 
 use crate::journal::{
     embedding::{
@@ -9,24 +10,15 @@ use crate::journal::{
     review::{DailyReview, DailyReviewSearchResult, repository::DailyReviewRepository},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DailyReviewSearchError {
+    #[error("failed to embed search query: {0}")]
     Embedder(EmbedderError),
+    #[error("vector search failed: {0}")]
     Index(EmbeddingRepositoryError),
+    #[error("failed to load daily reviews: {0}")]
     Repository(String),
 }
-
-impl fmt::Display for DailyReviewSearchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Embedder(e) => write!(f, "failed to embed search query: {e}"),
-            Self::Index(e) => write!(f, "vector search failed: {e}"),
-            Self::Repository(e) => write!(f, "failed to load daily reviews: {e}"),
-        }
-    }
-}
-
-impl Error for DailyReviewSearchError {}
 
 #[async_trait]
 pub trait DailyReviewSearchService: Send + Sync {

@@ -1,6 +1,7 @@
-use std::{error::Error, fmt, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Embedding(Vec<f32>);
@@ -49,27 +50,13 @@ pub struct EmbeddingSearchResult<ID> {
     pub distance: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum EmbedderError {
+    #[error("embedding dimension mismatch: expected {expected}, got {actual}")]
     InvalidDimension { expected: usize, actual: usize },
+    #[error("embedding provider failed: {0}")]
     Provider(String),
 }
-
-impl fmt::Display for EmbedderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidDimension { expected, actual } => {
-                write!(
-                    f,
-                    "embedding dimension mismatch: expected {expected}, got {actual}"
-                )
-            }
-            Self::Provider(message) => write!(f, "embedding provider failed: {message}"),
-        }
-    }
-}
-
-impl Error for EmbedderError {}
 
 #[async_trait]
 pub trait Embedder: Send + Sync {

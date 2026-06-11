@@ -1,7 +1,5 @@
 use std::{
     env,
-    error::Error,
-    fmt,
     sync::{Arc, RwLock},
 };
 
@@ -11,6 +9,7 @@ use rig::{
     completion::Prompt,
     providers::openai::{Client as OpenAiClient, completion::GPT_5_MINI},
 };
+use thiserror::Error;
 
 use crate::{
     journal::review::{DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction},
@@ -47,7 +46,8 @@ impl ReviewConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
 pub struct ReviewGenerationError {
     message: String,
 }
@@ -60,14 +60,6 @@ impl ReviewGenerationError {
     }
 }
 
-impl fmt::Display for ReviewGenerationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl Error for ReviewGenerationError {}
-
 #[async_trait]
 pub trait ReviewGenerator: Send + Sync {
     fn model(&self) -> &str;
@@ -79,47 +71,21 @@ pub trait ReviewGenerator: Send + Sync {
     ) -> Result<String, ReviewGenerationError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RigOpenAiReviewGeneratorError {
+    #[error("OPENAI_API_KEY is required")]
     MissingOpenAiApiKey,
-    Prompt(DailyReviewPromptError),
+    #[error("{0}")]
+    Prompt(#[from] DailyReviewPromptError),
+    #[error("failed to construct OpenAI review generator: {0}")]
     Client(String),
 }
 
-impl fmt::Display for RigOpenAiReviewGeneratorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingOpenAiApiKey => write!(f, "OPENAI_API_KEY is required"),
-            Self::Prompt(error) => write!(f, "{error}"),
-            Self::Client(message) => {
-                write!(f, "failed to construct OpenAI review generator: {message}")
-            }
-        }
-    }
-}
-
-impl Error for RigOpenAiReviewGeneratorError {}
-
-impl From<DailyReviewPromptError> for RigOpenAiReviewGeneratorError {
-    fn from(error: DailyReviewPromptError) -> Self {
-        Self::Prompt(error)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ReviewProviderError {
+    #[error("{0}")]
     Request(String),
 }
-
-impl fmt::Display for ReviewProviderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Request(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl Error for ReviewProviderError {}
 
 #[async_trait]
 pub(crate) trait ReviewProvider: Send + Sync {

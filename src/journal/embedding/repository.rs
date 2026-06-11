@@ -1,8 +1,9 @@
-use std::{error::Error, fmt};
-
 use async_trait::async_trait;
 use chrono::{NaiveDate, TimeZone, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
+use thiserror::Error;
+
+use crate::errors::from_error_string;
 
 use super::{Embedding, EmbeddingCandidate, EmbeddingSearchResult};
 
@@ -13,26 +14,13 @@ fn map_search_result(row: SqliteRow) -> EmbeddingSearchResult<String> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum EmbeddingRepositoryError {
+    #[error("embedding repository database error: {0}")]
     Database(String),
 }
 
-impl fmt::Display for EmbeddingRepositoryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Database(message) => write!(f, "embedding repository database error: {message}"),
-        }
-    }
-}
-
-impl Error for EmbeddingRepositoryError {}
-
-impl From<sqlx::Error> for EmbeddingRepositoryError {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Database(error.to_string())
-    }
-}
+from_error_string!(EmbeddingRepositoryError::Database, sqlx::Error);
 
 #[async_trait]
 pub trait EmbeddingIndex<ID>: Send + Sync {

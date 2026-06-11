@@ -1,5 +1,4 @@
-use std::{error::Error, fmt};
-
+use thiserror::Error;
 use tracing::warn;
 
 use super::{Embedder, EmbeddingIndex, EmbeddingRepositoryError};
@@ -12,20 +11,11 @@ pub struct BackfillResult {
     pub remaining: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum EmbeddingBackfillError {
+    #[error("{0}")]
     Repository(EmbeddingRepositoryError),
 }
-
-impl fmt::Display for EmbeddingBackfillError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Repository(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl Error for EmbeddingBackfillError {}
 
 #[derive(Debug, Clone)]
 pub struct EmbeddingBackfillService<ID, I, E> {

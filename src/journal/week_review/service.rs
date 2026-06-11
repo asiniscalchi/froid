@@ -1,6 +1,9 @@
-use std::{collections::HashMap, error::Error, fmt, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use chrono::{Duration, NaiveDate};
+use thiserror::Error;
+
+use crate::errors::from_error_string;
 
 use crate::journal::{
     review::{
@@ -19,44 +22,19 @@ pub const DEFAULT_MIN_DAILY_REVIEWS: usize = 3;
 
 const EMPTY_REVIEW_ERROR: &str = "weekly review generator returned an empty review";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum WeeklyReviewServiceError {
+    #[error("{0}")]
     Storage(String),
 }
 
-impl fmt::Display for WeeklyReviewServiceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Storage(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl Error for WeeklyReviewServiceError {}
-
-impl From<sqlx::Error> for WeeklyReviewServiceError {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
-
-impl From<WeeklyReviewRepositoryError> for WeeklyReviewServiceError {
-    fn from(error: WeeklyReviewRepositoryError) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
-
-impl From<DailyReviewRepositoryError> for WeeklyReviewServiceError {
-    fn from(error: DailyReviewRepositoryError) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
-
-impl From<DailyReviewSignalRepositoryError> for WeeklyReviewServiceError {
-    fn from(error: DailyReviewSignalRepositoryError) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
+from_error_string!(
+    WeeklyReviewServiceError::Storage,
+    sqlx::Error,
+    WeeklyReviewRepositoryError,
+    DailyReviewRepositoryError,
+    DailyReviewSignalRepositoryError,
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WeeklyReviewResult {

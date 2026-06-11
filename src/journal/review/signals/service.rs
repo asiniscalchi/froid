@@ -1,7 +1,10 @@
-use std::{error::Error, fmt, sync::Arc};
+use std::sync::Arc;
 
 use chrono::NaiveDate;
+use thiserror::Error;
 use tracing::{info, warn};
+
+use crate::errors::from_error_string;
 
 use crate::journal::{
     extraction::repository::JournalEntryExtractionRepository,
@@ -18,61 +21,24 @@ use crate::journal::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DailyReviewSignalServiceError {
+    #[error("no completed daily review found for user '{user_id}' on {review_date}")]
     NoDailyReview {
         user_id: String,
         review_date: NaiveDate,
     },
+    #[error("{0}")]
     Storage(String),
 }
 
-impl fmt::Display for DailyReviewSignalServiceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoDailyReview {
-                user_id,
-                review_date,
-            } => write!(
-                f,
-                "no completed daily review found for user '{user_id}' on {review_date}"
-            ),
-            Self::Storage(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl Error for DailyReviewSignalServiceError {}
-
-impl From<DailyReviewSignalRepositoryError> for DailyReviewSignalServiceError {
-    fn from(error: DailyReviewSignalRepositoryError) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
-
-impl From<sqlx::Error> for DailyReviewSignalServiceError {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
-
-impl From<crate::journal::review::repository::DailyReviewRepositoryError>
-    for DailyReviewSignalServiceError
-{
-    fn from(error: crate::journal::review::repository::DailyReviewRepositoryError) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
-
-impl From<crate::journal::extraction::repository::JournalEntryExtractionRepositoryError>
-    for DailyReviewSignalServiceError
-{
-    fn from(
-        error: crate::journal::extraction::repository::JournalEntryExtractionRepositoryError,
-    ) -> Self {
-        Self::Storage(error.to_string())
-    }
-}
+from_error_string!(
+    DailyReviewSignalServiceError::Storage,
+    DailyReviewSignalRepositoryError,
+    sqlx::Error,
+    crate::journal::review::repository::DailyReviewRepositoryError,
+    crate::journal::extraction::repository::JournalEntryExtractionRepositoryError,
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DailyReviewSignalResult {

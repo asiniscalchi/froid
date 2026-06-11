@@ -805,6 +805,7 @@ dependencies = [
  "sqlite-vec",
  "sqlx",
  "teloxide",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tower",
