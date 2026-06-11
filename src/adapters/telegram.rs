@@ -34,9 +34,9 @@ impl<H: MessageHandler> TelegramAdapter<H> {
         }
     }
 
-    /// Enable the `/token` command, backed by the central token store.
-    pub fn with_token_issuer(mut self, token_issuer: Option<TokenIssuer>) -> Self {
-        self.token_issuer = token_issuer;
+    /// Attach the issuer backing the `/token` command (the central token store).
+    pub fn with_token_issuer(mut self, token_issuer: TokenIssuer) -> Self {
+        self.token_issuer = Some(token_issuer);
         self
     }
 
@@ -211,9 +211,10 @@ async fn handle_token_command(
     chat_id: &str,
 ) -> String {
     let Some(issuer) = issuer else {
-        return "Access tokens are not enabled on this server. Ask the operator to set \
-                FROID_AUTH_ENABLED=true."
-            .to_string();
+        // Defensive: serve() always attaches an issuer; this only triggers if
+        // the adapter was built without one.
+        error!(chat_id, "received /token but no token issuer is attached");
+        return "Access tokens are not available right now. Please try again later.".to_string();
     };
 
     match action {
@@ -628,10 +629,10 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn replies_with_hint_when_dynamic_tokens_disabled() {
+        async fn replies_gracefully_when_no_issuer_is_attached() {
             let reply = handle_token_command(None, TokenAction::Issue, "42").await;
 
-            assert!(reply.contains("not enabled"));
+            assert!(reply.contains("not available"));
         }
 
         #[tokio::test]

@@ -170,9 +170,6 @@ pub struct Cli {
 
     #[arg(long, env = "FROID_DASHBOARD_ENABLED", global = true)]
     dashboard_enabled: Option<bool>,
-
-    #[arg(long, env = "FROID_AUTH_ENABLED", global = true)]
-    auth_enabled: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -212,15 +209,6 @@ pub struct DashboardConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HttpAuthConfig {
-    /// Require bearer tokens (minted via the Telegram `/token` command) on
-    /// the HTTP listener, routing each request to the owning user's database.
-    /// When `false`, the endpoints are unauthenticated and access must be
-    /// restricted at the network level.
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeConfig {
     pub telegram_bot_token: String,
     pub telegram_allowed_user_ids: Option<Vec<u64>>,
@@ -234,16 +222,16 @@ pub struct ServeConfig {
     pub signal_worker: ReconciliationWorkerConfig,
     pub mcp_server: McpServerConfig,
     pub dashboard: DashboardConfig,
-    pub http_auth: HttpAuthConfig,
 }
 
-/// Environment variables from the removed static-token auth strategies.
-/// Their presence is a hard error rather than a silent ignore: an operator
-/// upgrading with one still set would otherwise run unauthenticated.
+/// Environment variables from removed auth strategies. Their presence is a
+/// hard error rather than a silent ignore, so an operator upgrading with one
+/// still set notices that the behavior changed.
 const REMOVED_AUTH_VARS: &[&str] = &[
     "FROID_AUTH_TOKEN",
     "FROID_AUTH_TOKENS",
     "FROID_AUTH_DYNAMIC_TOKENS",
+    "FROID_AUTH_ENABLED",
 ];
 
 fn reject_removed_auth_vars(lookup: impl Fn(&str) -> Option<String>) -> Result<(), clap::Error> {
@@ -252,9 +240,9 @@ fn reject_removed_auth_vars(lookup: impl Fn(&str) -> Option<String>) -> Result<(
             return Err(clap::Error::raw(
                 clap::error::ErrorKind::ValueValidation,
                 format!(
-                    "{name} is no longer supported: static bearer tokens were replaced by \
-                     self-serve tokens. Set FROID_AUTH_ENABLED=true and have each user mint a \
-                     token with the Telegram /token command."
+                    "{name} is no longer supported: authentication is always enabled and every \
+                     user mints their own bearer token with the Telegram /token command. Remove \
+                     the variable."
                 ),
             ));
         }
@@ -356,10 +344,6 @@ impl Cli {
 
         reject_removed_auth_vars(|name| std::env::var(name).ok())?;
 
-        let http_auth = HttpAuthConfig {
-            enabled: self.auth_enabled.unwrap_or(false),
-        };
-
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
             telegram_allowed_user_ids: self.telegram_allowed_user_ids.clone(),
@@ -373,7 +357,6 @@ impl Cli {
             signal_worker,
             mcp_server,
             dashboard,
-            http_auth,
         })
     }
 }
@@ -412,7 +395,6 @@ mod tests {
             mcp_enabled: None,
             mcp_bind: "127.0.0.1:8080".parse().unwrap(),
             dashboard_enabled: None,
-            auth_enabled: None,
         }
     }
 
@@ -821,28 +803,6 @@ mod tests {
         let config = cli_with_token("token").serve_config().unwrap();
 
         assert!(!config.dashboard.enabled);
-    }
-
-    #[test]
-    fn serve_config_auth_disabled_by_default() {
-        let config = cli_with_token("token").serve_config().unwrap();
-
-        assert!(!config.http_auth.enabled);
-    }
-
-    #[test]
-    fn serve_config_enables_auth_when_flag_set() {
-        let cli = Cli::parse_from([
-            "froid",
-            "--telegram-bot-token",
-            "token",
-            "--auth-enabled",
-            "true",
-        ]);
-
-        let config = cli.serve_config().unwrap();
-
-        assert!(config.http_auth.enabled);
     }
 
     #[test]

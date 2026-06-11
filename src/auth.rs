@@ -1,11 +1,9 @@
 //! Bearer-token authentication for the shared HTTP listener (MCP and dashboard).
 //!
-//! Tokens are minted by users themselves through the Telegram `/token`
-//! command and stored hashed in the central database. A matching request is
-//! tagged with an [`AuthenticatedTenant`] extension so the router can serve
-//! it from that user's isolated database. When authentication is disabled
-//! (`FROID_AUTH_ENABLED` unset), no middleware is installed and access must
-//! be restricted at the network level.
+//! Authentication is always on. Tokens are minted by users themselves
+//! through the Telegram `/token` command and stored hashed in the central
+//! database. A matching request is tagged with an [`AuthenticatedTenant`]
+//! extension so the router can serve it from that user's isolated database.
 
 use std::sync::Arc;
 

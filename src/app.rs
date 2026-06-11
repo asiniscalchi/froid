@@ -89,12 +89,10 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
 
     // Central store for tokens issued via the Telegram /token command. It
     // lives in the default database so one lookup resolves any token.
-    let issued_tokens = if config.http_auth.enabled {
+    let issued_tokens = {
         let pool = database::connect_pool(&config.database_url).await?;
         sqlx::migrate!().run(&pool).await?;
-        Some(crate::tokens::UserTokenStore::new(pool))
-    } else {
-        None
+        crate::tokens::UserTokenStore::new(pool)
     };
 
     // Spawn the global HTTP server (MCP and Dashboard)
@@ -134,7 +132,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         config.telegram_allowed_user_ids.clone(),
         journal_registry,
     )
-    .with_token_issuer(issued_tokens.map(crate::tokens::TokenIssuer::new));
+    .with_token_issuer(crate::tokens::TokenIssuer::new(issued_tokens));
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
 }
 
@@ -144,7 +142,7 @@ async fn spawn_http_server(
     config: &ServeConfig,
     embedding_config: Option<&EmbeddingConfig>,
     registry: &crate::journal::registry::JournalServiceRegistry,
-    issued_tokens: Option<crate::tokens::UserTokenStore>,
+    issued_tokens: crate::tokens::UserTokenStore,
 ) -> Result<(), Box<dyn Error>> {
     if !config.mcp_server.enabled && !config.dashboard.enabled {
         return Ok(());
@@ -164,53 +162,12 @@ async fn spawn_http_server(
         shutdown: shutdown.clone(),
     };
 
-    let (router, auth_mode) = if let Some(issued_tokens) = issued_tokens {
-        // Auth enabled: every /mcp and /api request must carry a bearer token
-        // minted via the Telegram /token command, and is served from the
-        // database of the user who minted it.
-        let resolver = Arc::new(crate::auth::TokenResolver::new(issued_tokens));
-        let tenants = http::TenantRouters::new(registry.clone(), router_config);
-        (
-            http::build_per_user_app(tenants, resolver, config.dashboard.enabled),
-            "per-user",
-        )
-    } else {
-        // Auth disabled: unauthenticated single tenant. In multiuser mode
-        // with a whitelist, the administrative user is the first ID in the
-        // whitelist and we serve their isolated database. Otherwise, the
-        // default/legacy database.
-        warn!(
-            "HTTP server (MCP & Dashboard) is running without authentication; set FROID_AUTH_ENABLED=true to require bearer tokens minted via the Telegram /token command"
-        );
-        let (pool, capture_conversation_id) = if let Some(first_id) = config
-            .telegram_allowed_user_ids
-            .as_ref()
-            .and_then(|ids| ids.first())
-        {
-            info!(
-                chat_id = %first_id,
-                "HTTP server (MCP & Dashboard) running in multiuser mode; binding to first whitelisted user's database"
-            );
-            let chat_id = first_id.to_string();
-            let pool = registry
-                .pool(&chat_id)
-                .await
-                .map_err(|e| -> Box<dyn Error> { e })?;
-            (pool, chat_id)
-        } else {
-            let pool = database::connect_pool(&config.database_url).await?;
-            sqlx::migrate!().run(&pool).await?;
-            (pool, crate::messages::SINGLE_USER_ID.to_string())
-        };
-
-        let tenant_router =
-            http::build_tenant_router(&pool, &capture_conversation_id, &router_config)
-                .map_err(|e| -> Box<dyn Error> { e })?;
-        (
-            http::build_single_tenant_app(tenant_router, config.dashboard.enabled),
-            "none",
-        )
-    };
+    // Every /mcp and /api request must carry a bearer token minted via the
+    // Telegram /token command, and is served from the database of the user
+    // who minted it.
+    let resolver = Arc::new(crate::auth::TokenResolver::new(issued_tokens));
+    let tenants = http::TenantRouters::new(registry.clone(), router_config);
+    let router = http::build_per_user_app(tenants, resolver, config.dashboard.enabled);
 
     let listener = tokio::net::TcpListener::bind(config.mcp_server.bind).await?;
     let local_addr = listener.local_addr()?;
@@ -218,8 +175,7 @@ async fn spawn_http_server(
         addr = %local_addr,
         mcp = config.mcp_server.enabled,
         dashboard = config.dashboard.enabled,
-        auth = auth_mode,
-        "HTTP server listening"
+        "HTTP server listening; bearer tokens are minted via the Telegram /token command"
     );
 
     let token = shutdown.clone();
