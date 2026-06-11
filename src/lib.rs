@@ -11,5 +11,6 @@ pub mod journal;
 pub mod messages;
 mod openai;
 pub mod prompts;
+pub mod users;
 pub mod version;
 pub mod workers;

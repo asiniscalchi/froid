@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use crate::{
     auth::UserToken,
@@ -14,6 +15,9 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(version = version::VERSION, about)]
 pub struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     #[arg(
         long,
         env = "TELEGRAM_BOT_TOKEN",
@@ -181,6 +185,31 @@ pub struct Cli {
     auth_tokens: Option<Vec<String>>,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Run the Telegram bot, background workers, and HTTP listener (default)
+    Serve,
+    /// Manage per-user journal databases (run while the server is stopped)
+    Users {
+        #[command(subcommand)]
+        command: UsersCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UsersCommand {
+    /// List the per-user journal databases on disk
+    List,
+    /// Permanently delete a user's journal database (their entire journal)
+    Delete {
+        /// Telegram chat id of the user to delete
+        chat_id: String,
+        /// Confirm the irreversible deletion
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpServerConfig {
     pub enabled: bool,
@@ -260,6 +289,20 @@ fn parse_user_tokens(pairs: &[String]) -> Result<Vec<UserToken>, clap::Error> {
 }
 
 impl Cli {
+    pub fn subcommand(&self) -> Option<&Command> {
+        self.command.as_ref()
+    }
+
+    /// Directory holding the per-user journal databases, mirroring the layout
+    /// used by the journal service registry (`<data dir>/journals`).
+    pub fn journals_dir(&self) -> PathBuf {
+        let database_path = format!("{}/{}", self.data_dir, self.database_file);
+        let data_dir = std::path::Path::new(&database_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("data"));
+        data_dir.join("journals")
+    }
+
     pub fn serve_config(&self) -> Result<ServeConfig, clap::Error> {
         let Some(telegram_bot_token) = self.telegram_bot_token.as_ref() else {
             return Err(clap::Error::raw(
@@ -385,6 +428,7 @@ mod tests {
 
     fn default_cli() -> Cli {
         Cli {
+            command: None,
             telegram_bot_token: None,
             telegram_allowed_user_ids: None,
             data_dir: "data".to_string(),
@@ -495,6 +539,68 @@ mod tests {
     #[test]
     fn command_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn parses_serve_subcommand() {
+        let cli = Cli::parse_from(["froid", "serve", "--telegram-bot-token", "token"]);
+
+        assert!(matches!(cli.subcommand(), Some(super::Command::Serve)));
+        assert!(cli.serve_config().is_ok());
+    }
+
+    #[test]
+    fn defaults_to_serve_when_no_subcommand_given() {
+        let cli = Cli::parse_from(["froid", "--telegram-bot-token", "token"]);
+
+        assert!(cli.subcommand().is_none());
+        assert!(cli.serve_config().is_ok());
+    }
+
+    #[test]
+    fn parses_users_list_subcommand() {
+        let cli = Cli::parse_from(["froid", "users", "list"]);
+
+        assert!(matches!(
+            cli.subcommand(),
+            Some(super::Command::Users {
+                command: UsersCommand::List
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_users_delete_subcommand() {
+        let cli = Cli::parse_from(["froid", "users", "delete", "111", "--yes"]);
+
+        let Some(super::Command::Users {
+            command: UsersCommand::Delete { chat_id, yes },
+        }) = cli.subcommand()
+        else {
+            panic!("expected users delete command");
+        };
+        assert_eq!(chat_id, "111");
+        assert!(yes);
+    }
+
+    #[test]
+    fn users_delete_defaults_to_unconfirmed() {
+        let cli = Cli::parse_from(["froid", "users", "delete", "111"]);
+
+        let Some(super::Command::Users {
+            command: UsersCommand::Delete { yes, .. },
+        }) = cli.subcommand()
+        else {
+            panic!("expected users delete command");
+        };
+        assert!(!yes);
+    }
+
+    #[test]
+    fn journals_dir_derives_from_data_dir() {
+        let cli = Cli::parse_from(["froid", "--data-dir", "custom"]);
+
+        assert_eq!(cli.journals_dir(), PathBuf::from("custom/journals"));
     }
 
     #[test]

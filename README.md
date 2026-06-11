@@ -91,6 +91,17 @@ All persistent state lives in `DATA_DIR` (default `data/`): the legacy database 
 
 Restoring is the reverse: stop the service and put the files back in place.
 
+## Managing users
+
+Each user's journal lives in its own SQLite database under `DATA_DIR/journals/user_<chat_id>.sqlite3`. The `users` subcommands operate directly on those files, so run them while the server is stopped:
+
+```bash
+froid users list                  # chat id, size, last modified, path
+froid users delete <chat_id> --yes
+```
+
+`users delete` permanently removes the user's entire journal (database plus WAL side-files) and refuses to run without `--yes`. Combined with the export endpoint this covers data-portability and right-to-erasure requests.
+
 ## Configuration
 
 All options can be set via environment variables or the equivalent `--flag` CLI argument. Copy `.env.example` as a starting point.
