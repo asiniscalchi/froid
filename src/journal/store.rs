@@ -132,6 +132,24 @@ async fn delete_daily_review(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     date: NaiveDate,
 ) -> Result<(), sqlx::Error> {
+    // The vec0 virtual table does not participate in FK cascades, so its rows
+    // must be deleted explicitly before the review row cascades the metadata
+    // away.
+    sqlx::query(
+        r#"
+        DELETE FROM daily_review_embedding_vec
+        WHERE rowid IN (
+            SELECT metadata.id
+            FROM daily_review_embedding_metadata metadata
+            JOIN daily_reviews ON daily_reviews.id = metadata.daily_review_id
+            WHERE daily_reviews.review_date = ?
+        )
+        "#,
+    )
+    .bind(date.to_string())
+    .execute(&mut **tx)
+    .await?;
+
     sqlx::query(
         r#"
         DELETE FROM daily_reviews
@@ -154,8 +172,12 @@ mod tests {
     use crate::{
         database,
         journal::{
-            embedding::{Embedding, SqliteEmbeddingRepository},
+            embedding::{Embedding, EmbeddingIndex, SqliteEmbeddingRepository},
             repository::JournalRepository,
+            review::{
+                embedding_repository::SqliteDailyReviewEmbeddingRepository,
+                repository::DailyReviewRepository,
+            },
         },
     };
 
@@ -243,6 +265,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(review_count, 0);
+    }
+
+    /// Seed a completed daily review for 2026-04-28 with a stored embedding
+    /// vector, returning the review's embedding metadata id.
+    async fn seed_embedded_daily_review(pool: &SqlitePool) -> i64 {
+        let review = DailyReviewRepository::new(pool.clone())
+            .upsert_completed(
+                chrono::NaiveDate::from_ymd_opt(2026, 4, 28).unwrap(),
+                "persisted review",
+                "model",
+                "v1",
+            )
+            .await
+            .unwrap();
+        let embedding = Embedding::new(vec![0.1; 1536], 1536).unwrap();
+        EmbeddingIndex::store_embedding(
+            &SqliteDailyReviewEmbeddingRepository::new(pool.clone()),
+            review.id,
+            "test-model",
+            1536,
+            &embedding,
+        )
+        .await
+        .unwrap();
+        review.id
+    }
+
+    async fn daily_review_embedding_counts(pool: &SqlitePool) -> (i64, i64) {
+        let metadata = sqlx::query_scalar("SELECT COUNT(*) FROM daily_review_embedding_metadata")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let vectors = sqlx::query_scalar("SELECT COUNT(*) FROM daily_review_embedding_vec")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        (metadata, vectors)
+    }
+
+    #[tokio::test]
+    async fn store_invalidating_daily_review_removes_its_embedding_vectors() {
+        let (store, _repo, pool) = setup().await;
+        seed_embedded_daily_review(&pool).await;
+
+        store
+            .store(&incoming("1", "new entry", at(10, 0)))
+            .await
+            .unwrap();
+
+        assert_eq!(daily_review_embedding_counts(&pool).await, (0, 0));
+    }
+
+    #[tokio::test]
+    async fn delete_last_for_conversation_removes_daily_review_embedding_vectors() {
+        let (store, _repo, pool) = setup().await;
+        store
+            .store(&incoming("1", "reviewed entry", at(10, 0)))
+            .await
+            .unwrap();
+        seed_embedded_daily_review(&pool).await;
+
+        store
+            .delete_last_for_conversation(&MessageSource::Telegram, "42")
+            .await
+            .unwrap();
+
+        assert_eq!(daily_review_embedding_counts(&pool).await, (0, 0));
     }
 
     #[tokio::test]
