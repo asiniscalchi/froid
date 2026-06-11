@@ -1,11 +1,3 @@
-FROM node:20-bookworm AS web-builder
-
-WORKDIR /web
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
-COPY web ./
-RUN npm run build
-
 FROM rust:1-bookworm AS builder
 
 WORKDIR /app
@@ -21,7 +13,6 @@ COPY build.rs ./
 COPY migrations ./migrations
 COPY prompts ./prompts
 COPY src ./src
-COPY --from=web-builder /web/dist ./web/dist
 
 RUN cargo build --locked --release
 

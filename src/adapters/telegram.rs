@@ -409,10 +409,10 @@ async fn handle_token_command(
     match action {
         TokenAction::Issue => match issuer.issue(chat_id).await {
             Ok(token) => format!(
-                "Your new access token:\n\n{token}\n\nUse it as a bearer token for the \
-                 dashboard and MCP (Authorization: Bearer …). It replaces any previous \
-                 token and is shown only once — treat it like a password. Send /token \
-                 again to rotate it, or /token revoke to disable access."
+                "Your new access token:\n\n{token}\n\nUse it as a bearer token for MCP \
+                 clients (Authorization: Bearer …). It replaces any previous token and \
+                 is shown only once — treat it like a password. Send /token again to \
+                 rotate it, or /token revoke to disable access."
             ),
             Err(err) => {
                 error!(%err, chat_id, "failed to issue access token");

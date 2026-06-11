@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 /// A stable identifier for each prompt that can be customized by the user.
 ///
 /// The string returned by [`PromptKey::as_str`] is the lookup key used in the
-/// `customized_prompts` table and in dashboard API URLs. It must remain stable
+/// `customized_prompts` table. It must remain stable
 /// across releases even when the bundled markdown filename changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PromptKey {
@@ -30,7 +30,7 @@ impl PromptKey {
         }
     }
 
-    /// Human-readable label shown in the dashboard UI.
+    /// Human-readable label for this prompt.
     pub fn label(self) -> &'static str {
         match self {
             PromptKey::DailyReview => "Daily review",

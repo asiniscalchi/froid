@@ -1,6 +1,10 @@
-//! Integration tests for the tenant-aware HTTP listener: bearer tokens
-//! minted via the Telegram /token flow route `/api` requests to isolated
-//! databases, while `/health` and the SPA shell stay public.
+//! Integration tests for the MCP listener app: bearer tokens minted via the
+//! Telegram /token flow gate `/mcp`, while `/health` stays public.
+//!
+//! Database-level tenant isolation is covered by the auth middleware tests
+//! (token → chat id) and the transfer tests (per-tenant journals); here we
+//! exercise the assembled listener: the auth layer runs before any tenant
+//! routing, and only valid tokens get past it.
 
 use std::sync::Arc;
 
@@ -9,7 +13,6 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header::AUTHORIZATION},
 };
-use chrono::Utc;
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
@@ -19,27 +22,15 @@ use froid::{
     cli::Cli,
     http::{TenantRouterConfig, TenantRouters, build_per_user_app},
     journal::{
+        embedding::EmbeddingConfig,
         extraction::JournalEntryExtractionRuntimeConfig,
         registry::{JournalServiceRegistry, JournalServiceRegistryConfig},
-        repository::JournalRepository,
         review::DailyReviewRuntimeConfig,
         review::signals::wiring::DailyReviewSignalRuntimeConfig,
         week_review::WeeklyReviewRuntimeConfig,
     },
-    messages::{IncomingMessage, MessageSource},
     tokens::{TokenIssuer, UserTokenStore},
 };
-
-fn message(chat_id: &str, message_id: &str, text: &str) -> IncomingMessage {
-    IncomingMessage {
-        source: MessageSource::Telegram,
-        source_conversation_id: chat_id.to_string(),
-        source_message_id: message_id.to_string(),
-        user_id: chat_id.to_string(),
-        text: text.to_string(),
-        received_at: Utc::now(),
-    }
-}
 
 async fn registry(temp_base_dir: &std::path::Path) -> JournalServiceRegistry {
     let cli = Cli::try_parse_from([
@@ -48,14 +39,11 @@ async fn registry(temp_base_dir: &std::path::Path) -> JournalServiceRegistry {
         "mock_telegram_token_123",
         "--data-dir",
         temp_base_dir.to_str().unwrap(),
-        "--dashboard-enabled",
-        "true",
     ])
     .unwrap();
-    let config = cli.serve_config().unwrap();
 
     JournalServiceRegistry::new(JournalServiceRegistryConfig {
-        config,
+        config: cli.serve_config().unwrap(),
         embedding_config: None,
         entry_extraction_config: JournalEntryExtractionRuntimeConfig::from_env(),
         daily_review_config: DailyReviewRuntimeConfig::from_env(),
@@ -74,38 +62,27 @@ async fn central_store() -> UserTokenStore {
     UserTokenStore::new(pool)
 }
 
-/// App with two users ("111" with one seeded entry, "222" empty) and their
-/// minted tokens, mirroring the per-user wiring in `app::spawn_http_server`.
-async fn per_user_app() -> (Router, String, String) {
+/// Listener app plus a token minted for user "111", mirroring the wiring in
+/// `app::spawn_http_server`.
+async fn mcp_app() -> (Router, String) {
     let test_id = ulid::Ulid::new().to_string();
     let temp_base_dir = std::env::temp_dir().join(format!("froid_test_http_{test_id}"));
     tokio::fs::create_dir_all(&temp_base_dir).await.unwrap();
 
     let registry = registry(&temp_base_dir).await;
 
-    // Seed one entry in Alice's isolated database.
-    let pool = registry.pool("111").await.unwrap();
-    JournalRepository::new(pool)
-        .store(&message("111", "m1", "alice secret note"))
-        .await
-        .unwrap();
-
     let store = central_store().await;
-    let issuer = TokenIssuer::new(store.clone());
-    let alice = issuer.issue("111").await.unwrap();
-    let bob = issuer.issue("222").await.unwrap();
+    let token = TokenIssuer::new(store.clone()).issue("111").await.unwrap();
 
     let tenants = TenantRouters::new(
         registry,
         TenantRouterConfig {
-            mcp_enabled: false,
-            dashboard_enabled: true,
-            embedding_config: None,
+            embedding_config: Some(EmbeddingConfig::default()),
             shutdown: CancellationToken::new(),
         },
     );
-    let app = build_per_user_app(tenants, Arc::new(TokenResolver::new(store)), true);
-    (app, alice, bob)
+    let app = build_per_user_app(tenants, Arc::new(TokenResolver::new(store)));
+    (app, token)
 }
 
 async fn get(app: Router, uri: &str, token: Option<&str>) -> (StatusCode, String) {
@@ -123,75 +100,57 @@ async fn get(app: Router, uri: &str, token: Option<&str>) -> (StatusCode, String
 }
 
 #[tokio::test]
-async fn minted_tokens_route_to_isolated_databases() {
-    let (app, alice, bob) = per_user_app().await;
+async fn mcp_rejects_missing_and_unknown_tokens() {
+    let (app, _) = mcp_app().await;
 
-    let (status, body) = get(app.clone(), "/api/messages/export", Some(&alice)).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        body.contains("alice secret note"),
-        "alice should see her entry, got: {body}"
-    );
-
-    let (status, body) = get(app, "/api/messages/export", Some(&bob)).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !body.contains("alice secret note"),
-        "bob must not see alice's entry, got: {body}"
-    );
-}
-
-#[tokio::test]
-async fn per_user_app_rejects_missing_and_unknown_tokens() {
-    let (app, _, _) = per_user_app().await;
-
-    let (status, _) = get(app.clone(), "/api/messages/export", None).await;
+    let (status, _) = get(app.clone(), "/mcp", None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-    let (status, _) = get(app, "/api/messages/export", Some("froid_not_real")).await;
+    let (status, _) = get(app, "/mcp", Some("froid_not_real")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
-async fn rotated_token_loses_access_and_new_token_keeps_it() {
+async fn mcp_lets_minted_tokens_past_the_auth_layer() {
+    let (app, token) = mcp_app().await;
+
+    // The request reaches the MCP transport (which answers with a non-auth
+    // status for a bodyless GET) instead of being rejected by the auth layer.
+    let (status, _) = get(app, "/mcp", Some(&token)).await;
+    assert_ne!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn revoked_token_stops_passing_the_auth_layer() {
     let test_id = ulid::Ulid::new().to_string();
-    let temp_base_dir = std::env::temp_dir().join(format!("froid_test_rotate_{test_id}"));
+    let temp_base_dir = std::env::temp_dir().join(format!("froid_test_revoke_{test_id}"));
     tokio::fs::create_dir_all(&temp_base_dir).await.unwrap();
     let registry = registry(&temp_base_dir).await;
-    registry.pool("111").await.unwrap();
 
     let store = central_store().await;
     let issuer = TokenIssuer::new(store.clone());
-    let old = issuer.issue("111").await.unwrap();
-    let new = issuer.issue("111").await.unwrap();
+    let token = issuer.issue("111").await.unwrap();
+    issuer.revoke("111").await.unwrap();
 
     let tenants = TenantRouters::new(
         registry,
         TenantRouterConfig {
-            mcp_enabled: false,
-            dashboard_enabled: true,
-            embedding_config: None,
+            embedding_config: Some(EmbeddingConfig::default()),
             shutdown: CancellationToken::new(),
         },
     );
-    let app = build_per_user_app(tenants, Arc::new(TokenResolver::new(store)), true);
+    let app = build_per_user_app(tenants, Arc::new(TokenResolver::new(store)));
 
-    let (status, _) = get(app.clone(), "/api/messages/export", Some(&old)).await;
+    let (status, _) = get(app, "/mcp", Some(&token)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-
-    let (status, _) = get(app, "/api/messages/export", Some(&new)).await;
-    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]
-async fn per_user_app_serves_health_and_spa_without_token() {
-    let (app, _, _) = per_user_app().await;
+async fn health_stays_public() {
+    let (app, _) = mcp_app().await;
 
-    let (status, body) = get(app.clone(), "/health", None).await;
+    let (status, body) = get(app, "/health", None).await;
+
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("\"ok\""));
-
-    let (status, body) = get(app, "/", None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("<div id=\"root\">"));
 }

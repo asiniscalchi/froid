@@ -167,9 +167,6 @@ pub struct Cli {
         default_value = "127.0.0.1:8080"
     )]
     mcp_bind: SocketAddr,
-
-    #[arg(long, env = "FROID_DASHBOARD_ENABLED", global = true)]
-    dashboard_enabled: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -204,11 +201,6 @@ pub struct McpServerConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DashboardConfig {
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeConfig {
     pub telegram_bot_token: String,
     pub telegram_allowed_user_ids: Option<Vec<u64>>,
@@ -221,29 +213,40 @@ pub struct ServeConfig {
     pub weekly_review_delivery: WeeklyReviewDeliveryWorkerConfig,
     pub signal_worker: ReconciliationWorkerConfig,
     pub mcp_server: McpServerConfig,
-    pub dashboard: DashboardConfig,
 }
 
-/// Environment variables from removed auth strategies. Their presence is a
-/// hard error rather than a silent ignore, so an operator upgrading with one
-/// still set notices that the behavior changed.
-const REMOVED_AUTH_VARS: &[&str] = &[
-    "FROID_AUTH_TOKEN",
-    "FROID_AUTH_TOKENS",
-    "FROID_AUTH_DYNAMIC_TOKENS",
-    "FROID_AUTH_ENABLED",
+/// Environment variables from removed features, with the hint shown when one
+/// is still set. Their presence is a hard error rather than a silent ignore,
+/// so an operator upgrading across the removal notices the behavior change.
+const REMOVED_VARS: &[(&str, &str)] = &[
+    (
+        "FROID_AUTH_TOKEN",
+        "authentication is always enabled and every user mints their own bearer token with the Telegram /token command",
+    ),
+    (
+        "FROID_AUTH_TOKENS",
+        "authentication is always enabled and every user mints their own bearer token with the Telegram /token command",
+    ),
+    (
+        "FROID_AUTH_DYNAMIC_TOKENS",
+        "authentication is always enabled and every user mints their own bearer token with the Telegram /token command",
+    ),
+    (
+        "FROID_AUTH_ENABLED",
+        "authentication is always enabled and every user mints their own bearer token with the Telegram /token command",
+    ),
+    (
+        "FROID_DASHBOARD_ENABLED",
+        "the web dashboard was removed; capture and reviews live in Telegram, reads go through MCP, and /export + /import cover data portability",
+    ),
 ];
 
-fn reject_removed_auth_vars(lookup: impl Fn(&str) -> Option<String>) -> Result<(), clap::Error> {
-    for name in REMOVED_AUTH_VARS {
+fn reject_removed_vars(lookup: impl Fn(&str) -> Option<String>) -> Result<(), clap::Error> {
+    for (name, hint) in REMOVED_VARS {
         if lookup(name).is_some() {
             return Err(clap::Error::raw(
                 clap::error::ErrorKind::ValueValidation,
-                format!(
-                    "{name} is no longer supported: authentication is always enabled and every \
-                     user mints their own bearer token with the Telegram /token command. Remove \
-                     the variable."
-                ),
+                format!("{name} is no longer supported: {hint}. Remove the variable."),
             ));
         }
     }
@@ -338,11 +341,7 @@ impl Cli {
             bind: self.mcp_bind,
         };
 
-        let dashboard = DashboardConfig {
-            enabled: self.dashboard_enabled.unwrap_or(false),
-        };
-
-        reject_removed_auth_vars(|name| std::env::var(name).ok())?;
+        reject_removed_vars(|name| std::env::var(name).ok())?;
 
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
@@ -356,7 +355,6 @@ impl Cli {
             weekly_review_delivery,
             signal_worker,
             mcp_server,
-            dashboard,
         })
     }
 }
@@ -394,7 +392,6 @@ mod tests {
             signal_worker_interval_seconds: None,
             mcp_enabled: None,
             mcp_bind: "127.0.0.1:8080".parse().unwrap(),
-            dashboard_enabled: None,
         }
     }
 
@@ -799,44 +796,21 @@ mod tests {
     }
 
     #[test]
-    fn serve_config_dashboard_disabled_by_default() {
-        let config = cli_with_token("token").serve_config().unwrap();
-
-        assert!(!config.dashboard.enabled);
-    }
-
-    #[test]
-    fn rejects_removed_static_token_variables() {
-        for name in super::REMOVED_AUTH_VARS {
-            let error = reject_removed_auth_vars(|candidate| {
-                (candidate == *name).then(|| "value".to_string())
-            })
-            .unwrap_err();
+    fn rejects_removed_variables() {
+        for (name, _) in super::REMOVED_VARS {
+            let error =
+                reject_removed_vars(|candidate| (candidate == *name).then(|| "value".to_string()))
+                    .unwrap_err();
 
             assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
             assert!(error.to_string().contains(name), "{name}");
-            assert!(error.to_string().contains("/token"));
+            assert!(error.to_string().contains("no longer supported"));
         }
     }
 
     #[test]
     fn accepts_environment_without_removed_variables() {
-        assert!(reject_removed_auth_vars(|_| None).is_ok());
-    }
-
-    #[test]
-    fn serve_config_dashboard_enabled_when_flag_set() {
-        let cli = Cli::parse_from([
-            "froid",
-            "--telegram-bot-token",
-            "token",
-            "--dashboard-enabled",
-            "true",
-        ]);
-
-        let config = cli.serve_config().unwrap();
-
-        assert!(config.dashboard.enabled);
+        assert!(reject_removed_vars(|_| None).is_ok());
     }
 
     #[test]

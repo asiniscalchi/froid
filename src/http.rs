@@ -1,10 +1,9 @@
-//! Assembly of the shared HTTP listener (MCP endpoint + dashboard).
+//! Assembly of the HTTP listener serving the MCP endpoint.
 //!
 //! Authentication is always on: the bearer token (minted via the Telegram
-//! `/token` command) identifies a user, and `/mcp` + `/api` requests are
-//! forwarded to a lazily built router bound to that user's isolated
-//! database. The `/health` probe and the static SPA shell are served without
-//! authentication; only the data-bearing routes sit behind tokens.
+//! `/token` command) identifies a user, and `/mcp` requests are forwarded to
+//! a lazily built router bound to that user's isolated database. Only the
+//! `/health` probe is served without authentication.
 
 use std::{collections::HashMap, error::Error, sync::Arc};
 
@@ -27,7 +26,6 @@ use tracing::error;
 use crate::{
     adapters::mcp::AnalyzerMcpServer,
     auth::{AuthenticatedTenant, TokenResolver, require_user_bearer},
-    dashboard,
     journal::{
         analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_mcp_components},
         embedding::{EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository},
@@ -38,63 +36,45 @@ use crate::{
 
 type BoxError = Box<dyn Error + Send + Sync>;
 
-/// Feature flags and shared context for building a tenant's router.
+/// Shared context for building a tenant's router.
 pub struct TenantRouterConfig {
-    pub mcp_enabled: bool,
-    pub dashboard_enabled: bool,
     pub embedding_config: Option<EmbeddingConfig>,
     pub shutdown: CancellationToken,
 }
 
-/// Build the protected routes (`/mcp`, `/api`) bound to one database.
-/// `capture_conversation_id` is the conversation web-captured entries are
-/// filed under (the owning user's chat id).
-fn build_tenant_router(
-    pool: &SqlitePool,
-    capture_conversation_id: &str,
-    config: &TenantRouterConfig,
-) -> Result<Router, BoxError> {
-    let mut router = Router::new();
+/// Build the protected `/mcp` routes bound to one database.
+fn build_tenant_router(pool: &SqlitePool, config: &TenantRouterConfig) -> Result<Router, BoxError> {
+    // The caller refuses to start the listener without embedding
+    // configuration, so this only guards internal misuse.
+    let cfg = config
+        .embedding_config
+        .as_ref()
+        .ok_or("MCP requires embedding configuration")?;
 
-    if config.mcp_enabled {
-        // The caller refuses to start the listener when MCP is enabled
-        // without embedding configuration, so this only guards internal misuse.
-        let cfg = config
-            .embedding_config
-            .as_ref()
-            .ok_or("MCP requires embedding configuration")?;
+    let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
+    let semantic = Arc::new(DefaultSemanticJournalSearcher::new(
+        SqliteEmbeddingRepository::new(pool.clone()),
+        embedder,
+        JournalRepository::new(pool.clone()),
+    ));
 
-        let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
-        let semantic = Arc::new(DefaultSemanticJournalSearcher::new(
-            SqliteEmbeddingRepository::new(pool.clone()),
-            embedder,
-            JournalRepository::new(pool.clone()),
-        ));
+    let components = build_analyzer_mcp_components(pool.clone(), semantic);
+    let user = UserContext::new(crate::messages::SINGLE_USER_ID);
+    let server = AnalyzerMcpServer::new(components, user);
 
-        let components = build_analyzer_mcp_components(pool.clone(), semantic);
-        let user = UserContext::new(crate::messages::SINGLE_USER_ID);
-        let server = AnalyzerMcpServer::new(components, user);
+    let service = StreamableHttpService::new(
+        {
+            let server = server.clone();
+            move || Ok(server.clone())
+        },
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default()
+            .disable_allowed_hosts()
+            .with_stateful_mode(false)
+            .with_cancellation_token(config.shutdown.child_token()),
+    );
 
-        let service = StreamableHttpService::new(
-            {
-                let server = server.clone();
-                move || Ok(server.clone())
-            },
-            Arc::new(LocalSessionManager::default()),
-            StreamableHttpServerConfig::default()
-                .disable_allowed_hosts()
-                .with_stateful_mode(false)
-                .with_cancellation_token(config.shutdown.child_token()),
-        );
-
-        router = router.nest_service("/mcp", service);
-    }
-
-    if config.dashboard_enabled {
-        router = router.merge(dashboard::api_router(pool, capture_conversation_id));
-    }
-
-    Ok(router)
+    Ok(Router::new().nest_service("/mcp", service))
 }
 
 /// Lazily built, cached per-tenant routers backed by the registry's isolated
@@ -131,7 +111,7 @@ impl TenantRouters {
             return Ok(router.clone());
         }
 
-        let router = build_tenant_router(&pool, chat_id, &self.config)?;
+        let router = build_tenant_router(&pool, &self.config)?;
         guard.insert(chat_id.to_string(), router.clone());
         Ok(router)
     }
@@ -159,26 +139,16 @@ async fn forward_to_tenant(State(tenants): State<TenantRouters>, request: Reques
     }
 }
 
-/// Full listener app for per-user token auth: `/mcp` and `/api` are routed to
-/// the authenticated user's database; `/health` and the SPA shell are public.
-pub fn build_per_user_app(
-    tenants: TenantRouters,
-    resolver: Arc<TokenResolver>,
-    dashboard_enabled: bool,
-) -> Router {
-    let mut router = Router::new()
+/// Full listener app: `/mcp` is routed to the authenticated user's database;
+/// `/health` is public.
+pub fn build_per_user_app(tenants: TenantRouters, resolver: Arc<TokenResolver>) -> Router {
+    Router::new()
         .route("/mcp", any(forward_to_tenant))
         .route("/mcp/{*path}", any(forward_to_tenant))
-        .route("/api/{*path}", any(forward_to_tenant))
         .with_state(tenants)
         .layer(axum::middleware::from_fn_with_state(
             resolver,
             require_user_bearer,
         ))
-        .merge(crate::health::router());
-
-    if dashboard_enabled {
-        router = router.merge(dashboard::spa_router());
-    }
-    router
+        .merge(crate::health::router())
 }

@@ -65,7 +65,7 @@ impl PromptSource {
 }
 
 /// Reads the bundled default file at `path` and returns it as a [`ResolvedPrompt`].
-/// Exposed so dashboard handlers can serve "default text" for the editor.
+/// Returns the bundled default text regardless of any stored customization.
 pub fn load_default(key: PromptKey, path: &Path) -> Result<ResolvedPrompt, PromptSourceError> {
     let text = fs::read_to_string(path).map_err(|source| PromptSourceError::ReadFailed {
         key: key.as_str(),

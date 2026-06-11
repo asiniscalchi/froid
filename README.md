@@ -47,33 +47,25 @@ FROID_MCP_ENABLED=true cargo run -- serve
 
 Available tools: `journal_get`, `journal_get_recent`, `journal_search_text`, `journal_search_semantic`, `daily_review_get`, `daily_review_get_range`, `weekly_review_get`, `weekly_review_get_range`, `signals_search`.
 
-## Dashboard webapp
-
-Set `FROID_DASHBOARD_ENABLED=true` to serve a small React webapp at `http://127.0.0.1:8080/`. Besides message export/import and prompt editing, the dashboard API exposes journal data directly: `GET /api/entries` (recent entries), `POST /api/messages` (capture a new entry from the browser; it flows through the same extraction/embedding/review pipeline as Telegram messages), and `GET /api/reviews/daily` / `GET /api/reviews/weekly` (completed reviews, optional `from`/`to` date filters). The dashboard shares the HTTP listener with the MCP endpoint (`FROID_MCP_BIND`, default `127.0.0.1:8080`) and can be enabled independently of MCP. Assets are embedded into the release binary, so the Docker image carries everything it needs. The dashboard is protected by the same bearer check as MCP (see [Authentication](#authentication)); on first visit it asks for your token.
-
-```bash
-FROID_DASHBOARD_ENABLED=true cargo run -- serve
-```
-
 ## Authentication
 
-Authentication is always on: every request to `/mcp` and `/api` must carry a bearer token minted through the bot:
+Authentication is always on: every request to `/mcp` must carry a bearer token minted through the bot:
 
 ```
 Authorization: Bearer <your-token>
 ```
 
-Users mint their own tokens by sending `/token` to the Telegram bot. Telegram is already the authenticated channel (the chat id arrives with the message), so the bot can safely issue HTTP credentials for exactly that identity: it generates a 256-bit random token, stores only its SHA-256 hash in the default database, and replies once with the plaintext. Each request is then served from the token owner's isolated journal database, so every user of a shared instance gets their own MCP endpoint and dashboard view. Sending `/token` again rotates the token; `/token revoke` disables access. Onboarding a user requires no operator action and no restart.
+Users mint their own tokens by sending `/token` to the Telegram bot. Telegram is already the authenticated channel (the chat id arrives with the message), so the bot can safely issue HTTP credentials for exactly that identity: it generates a 256-bit random token, stores only its SHA-256 hash in the default database, and replies once with the plaintext. Each request is then served from the token owner's isolated journal database, so every user of a shared instance gets their own MCP endpoint. Sending `/token` again rotates the token; `/token revoke` disables access. Onboarding a user requires no operator action and no restart.
 
-Requests without a valid token receive `401 Unauthorized`. The static dashboard shell (HTML/JS assets, which contain no journal data) and the `/health` probe are intentionally served without authentication; all data flows through the protected `/api` and `/mcp` routes.
+Requests without a valid token receive `401 Unauthorized`; only the `/health` probe is served without authentication.
 
 Because Telegram access is what mints HTTP credentials, `TELEGRAM_ALLOWED_USER_IDS` is the gate that decides who can become a user — set it on any instance whose bot a stranger could message.
 
-The auth variables from earlier versions (`FROID_AUTH_TOKEN`, `FROID_AUTH_TOKENS`, `FROID_AUTH_DYNAMIC_TOKENS`, `FROID_AUTH_ENABLED`) have been removed; Froid refuses to start if one is still set, so the behavior change cannot go unnoticed.
+Variables from removed features (`FROID_AUTH_TOKEN`, `FROID_AUTH_TOKENS`, `FROID_AUTH_DYNAMIC_TOKENS`, `FROID_AUTH_ENABLED`, `FROID_DASHBOARD_ENABLED`) make Froid refuse to start if still set, so behavior changes cannot go unnoticed.
 
 ## Health endpoint
 
-Whenever the HTTP listener is running (MCP or dashboard enabled), `GET /health` answers `200 OK` with the service name and version. It is intentionally exempt from the bearer-token check so supervisors, load balancers, and container healthchecks can probe it without credentials:
+Whenever the MCP listener is running, `GET /health` answers `200 OK` with the service name and version. It is intentionally exempt from the bearer-token check so supervisors, load balancers, and container healthchecks can probe it without credentials:
 
 ```bash
 curl http://127.0.0.1:8080/health
@@ -100,7 +92,7 @@ froid users list                  # chat id, size, last modified, path
 froid users delete <chat_id> --yes
 ```
 
-`users delete` permanently removes the user's entire journal (database plus WAL side-files) and refuses to run without `--yes`. Combined with the export endpoint this covers data-portability and right-to-erasure requests.
+`users delete` permanently removes the user's entire journal (database plus WAL side-files) and refuses to run without `--yes`. Combined with the `/export` command this covers data-portability and right-to-erasure requests.
 
 ## Configuration
 
