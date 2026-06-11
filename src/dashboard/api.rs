@@ -13,15 +13,13 @@ use sqlx::SqlitePool;
 use tracing::error;
 
 use crate::{
-    journal::repository::{BulkImportError, JournalEntryRecord, JournalRepository},
+    journal::repository::JournalRepository,
     journal::review::repository::{DailyReviewRepository, DailyReviewRepositoryError},
+    journal::transfer::{self, TransferError},
     journal::week_review::repository::{WeeklyReviewRepository, WeeklyReviewRepositoryError},
     messages::{IncomingMessage, MessageSource},
     prompts::{PromptKey, PromptRepository, load_default, registry::version_for},
 };
-
-pub const EXPORT_FORMAT_VERSION: u32 = 2;
-pub const MIN_SUPPORTED_IMPORT_VERSION: u32 = 1;
 
 const DEFAULT_ENTRIES_LIMIT: u32 = 50;
 const MAX_ENTRIES_LIMIT: u32 = 200;
@@ -72,47 +70,15 @@ pub fn router(pool: &SqlitePool, capture_conversation_id: &str) -> Router {
         .merge(prompts)
 }
 
-#[derive(Serialize)]
-struct ExportedMessage {
-    id: String,
-    source: String,
-    source_conversation_id: String,
-    source_message_id: String,
-    text: String,
-    received_at: DateTime<Utc>,
-}
-
-#[derive(Serialize)]
-struct ExportEnvelope {
-    version: u32,
-    exported_at: DateTime<Utc>,
-    messages: Vec<ExportedMessage>,
-}
-
 #[derive(Debug)]
 enum DashboardError {
-    ExportRepository(sqlx::Error),
-    Serialization(serde_json::Error),
-    UnsupportedVersion {
-        version: u32,
-    },
-    ImportConflict {
-        source: String,
-        source_conversation_id: String,
-        source_message_id: String,
-    },
-    ImportRepository(sqlx::Error),
+    Transfer(TransferError),
     EmptyCapture,
     CaptureRepository(sqlx::Error),
     CaptureConflict,
-    InvalidLimit {
-        max: u32,
-    },
+    InvalidLimit { max: u32 },
     EntriesRepository(sqlx::Error),
-    InvalidRange {
-        from: NaiveDate,
-        to: NaiveDate,
-    },
+    InvalidRange { from: NaiveDate, to: NaiveDate },
     DailyReviews(DailyReviewRepositoryError),
     WeeklyReviews(WeeklyReviewRepositoryError),
 }
@@ -120,58 +86,34 @@ enum DashboardError {
 impl IntoResponse for DashboardError {
     fn into_response(self) -> Response {
         match self {
-            Self::ExportRepository(err) => {
-                error!(error = %err, "failed to fetch journal entries for export");
-                (StatusCode::INTERNAL_SERVER_ERROR, "failed to load messages").into_response()
-            }
-            Self::Serialization(err) => {
-                error!(error = %err, "failed to serialize journal entries for export");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to serialize messages",
-                )
-                    .into_response()
-            }
-            Self::UnsupportedVersion { version } => {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ImportError {
-                        error: format!(
-                            "unsupported export version {} (supported {}..={})",
-                            version, MIN_SUPPORTED_IMPORT_VERSION, EXPORT_FORMAT_VERSION
-                        ),
-                        conflict: None,
+            Self::Transfer(error) => {
+                let status = match &error {
+                    TransferError::InvalidPayload(_) | TransferError::UnsupportedVersion { .. } => {
+                        StatusCode::BAD_REQUEST
+                    }
+                    TransferError::Conflict { .. } => StatusCode::CONFLICT,
+                    TransferError::Storage(_) | TransferError::Serialization(_) => {
+                        error!(error = %error, "journal transfer failed");
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                };
+                let conflict = match &error {
+                    TransferError::Conflict {
+                        source,
+                        source_conversation_id,
+                        source_message_id,
+                    } => Some(ConflictDetails {
+                        source: source.clone(),
+                        source_conversation_id: source_conversation_id.clone(),
+                        source_message_id: source_message_id.clone(),
                     }),
-                )
-                    .into_response()
-            }
-            Self::ImportConflict {
-                source,
-                source_conversation_id,
-                source_message_id,
-            } => {
+                    _ => None,
+                };
                 (
-                    StatusCode::CONFLICT,
+                    status,
                     Json(ImportError {
-                        error: format!(
-                            "import aborted: entry ({source}, {source_conversation_id}, {source_message_id}) collides with an existing message"
-                        ),
-                        conflict: Some(ConflictDetails {
-                            source: source.clone(),
-                            source_conversation_id: source_conversation_id.clone(),
-                            source_message_id: source_message_id.clone(),
-                        }),
-                    }),
-                )
-                    .into_response()
-            }
-            Self::ImportRepository(err) => {
-                error!(error = %err, "failed to import journal entries");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ImportError {
-                        error: "failed to import messages".to_string(),
-                        conflict: None,
+                        error: error.to_string(),
+                        conflict,
                     }),
                 )
                     .into_response()
@@ -395,33 +337,9 @@ async fn list_weekly_reviews(
 async fn export_messages(
     State(repo): State<JournalRepository>,
 ) -> Result<impl IntoResponse, DashboardError> {
-    let records = repo
-        .fetch_all_for_export()
+    let export = transfer::export_json(&repo)
         .await
-        .map_err(DashboardError::ExportRepository)?;
-
-    let envelope = ExportEnvelope {
-        version: EXPORT_FORMAT_VERSION,
-        exported_at: Utc::now(),
-        messages: records
-            .into_iter()
-            .map(|r| ExportedMessage {
-                id: r.id,
-                source: r.source,
-                source_conversation_id: r.source_conversation_id,
-                source_message_id: r.source_message_id,
-                text: r.text,
-                received_at: r.received_at,
-            })
-            .collect(),
-    };
-
-    let body = serde_json::to_vec(&envelope).map_err(DashboardError::Serialization)?;
-
-    let filename = format!(
-        "froid-messages-{}.json",
-        envelope.exported_at.format("%Y-%m-%d")
-    );
+        .map_err(DashboardError::Transfer)?;
 
     Ok((
         StatusCode::OK,
@@ -429,31 +347,11 @@ async fn export_messages(
             (header::CONTENT_TYPE, "application/json".to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{filename}\""),
+                format!("attachment; filename=\"{}\"", export.filename),
             ),
         ],
-        body,
+        export.bytes,
     ))
-}
-
-#[derive(Deserialize)]
-struct ImportedMessage {
-    #[serde(default)]
-    id: Option<String>,
-    source: String,
-    source_conversation_id: String,
-    source_message_id: String,
-    text: String,
-    received_at: DateTime<Utc>,
-}
-
-#[derive(Deserialize)]
-struct ImportEnvelope {
-    version: u32,
-    #[serde(default)]
-    #[allow(dead_code)]
-    exported_at: Option<DateTime<Utc>>,
-    messages: Vec<ImportedMessage>,
 }
 
 #[derive(Serialize)]
@@ -477,43 +375,11 @@ struct ImportError {
 
 async fn import_messages(
     State(repo): State<JournalRepository>,
-    Json(envelope): Json<ImportEnvelope>,
+    body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, DashboardError> {
-    if envelope.version < MIN_SUPPORTED_IMPORT_VERSION || envelope.version > EXPORT_FORMAT_VERSION {
-        return Err(DashboardError::UnsupportedVersion {
-            version: envelope.version,
-        });
-    }
-
-    if envelope.messages.is_empty() {
-        return Ok((StatusCode::OK, Json(ImportResult { imported: 0 })).into_response());
-    }
-
-    let records: Vec<JournalEntryRecord> = envelope
-        .messages
-        .into_iter()
-        .map(|m| JournalEntryRecord {
-            id: m.id.unwrap_or_default(),
-            source: m.source,
-            source_conversation_id: m.source_conversation_id,
-            source_message_id: m.source_message_id,
-            text: m.text,
-            received_at: m.received_at,
-        })
-        .collect();
-
-    let imported = repo.bulk_import(&records).await.map_err(|err| match err {
-        BulkImportError::Conflict {
-            source,
-            source_conversation_id,
-            source_message_id,
-        } => DashboardError::ImportConflict {
-            source,
-            source_conversation_id,
-            source_message_id,
-        },
-        BulkImportError::Database(e) => DashboardError::ImportRepository(e),
-    })?;
+    let imported = transfer::import_json(&repo, &body)
+        .await
+        .map_err(DashboardError::Transfer)?;
 
     Ok((StatusCode::OK, Json(ImportResult { imported })).into_response())
 }
@@ -720,6 +586,7 @@ async fn reset_prompt(
 mod tests {
     use super::*;
     use crate::database;
+    use crate::journal::transfer::EXPORT_FORMAT_VERSION;
     use crate::messages::{IncomingMessage, MessageSource};
     use axum::body::{Body, to_bytes};
     use axum::http::Request;

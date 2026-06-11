@@ -89,6 +89,8 @@ All persistent state lives in `DATA_DIR` (default `data/`): the legacy database 
 
 Restoring is the reverse: stop the service and put the files back in place.
 
+For per-user data portability, every user can pull their own journal without operator involvement: send `/export` to the bot to receive a JSON file of all raw messages, and send that file back as a document with `/import` as the caption to load it (all-or-nothing; a collision with an existing message aborts the import). Telegram bots can download files up to ~20 MB, so an enormous import would need the file-level restore path above instead.
+
 ## Managing users
 
 Each user's journal lives in its own SQLite database under `DATA_DIR/journals/user_<chat_id>.sqlite3`. The `users` subcommands operate directly on those files, so run them while the server is stopped:

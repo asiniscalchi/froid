@@ -18,7 +18,7 @@ pub(super) fn start_response() -> String {
 }
 
 pub(super) fn help_response() -> String {
-    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/day_review - show daily review\n/week_review - show last week's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/help - show commands".to_string()
+    "Commands:\n/last - show latest entry\n/undo - delete latest entry\n/recent [number] - show recent entries\n/today - show today's entries\n/day_review - show daily review\n/week_review - show last week's review\n/stats - show journal stats\n/status - show bot status\n/search <query> - search entries by meaning\n/token - create or rotate your web/MCP access token (/token revoke to disable)\n/export - download your journal as a JSON file\n/import - send an export file with /import as the caption to load it\n/help - show commands".to_string()
 }
 
 pub(super) fn unknown_command_response(command: &str) -> String {

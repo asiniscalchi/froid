@@ -130,9 +130,12 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let adapter = TelegramAdapter::new(
         config.telegram_bot_token.clone(),
         config.telegram_allowed_user_ids.clone(),
-        journal_registry,
+        journal_registry.clone(),
     )
-    .with_token_issuer(crate::tokens::TokenIssuer::new(issued_tokens));
+    .with_token_issuer(crate::tokens::TokenIssuer::new(issued_tokens))
+    .with_transfer(crate::journal::transfer::TransferService::new(
+        journal_registry,
+    ));
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
 }
 
