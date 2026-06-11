@@ -39,12 +39,9 @@ use crate::{
     prompts::{PromptKey, PromptRepository, PromptSource},
     version,
     workers::{
-        ReconciliationWorker, ReconciliationWorkerConfig,
-        daily_review::{DailyReviewDeliveryWorker, TelegramDailyReviewSender},
-        embedding::EmbeddingCycle,
-        extraction::ExtractionCycle,
-        signals::DailyReviewSignalCycle,
-        weekly_review::{TelegramWeeklyReviewSender, WeeklyReviewDeliveryWorker},
+        ReconciliationWorker, ReconciliationWorkerConfig, daily_review::DailyReviewDeliveryWorker,
+        embedding::EmbeddingCycle, extraction::ExtractionCycle, signals::DailyReviewSignalCycle,
+        telegram::TelegramReviewSender, weekly_review::WeeklyReviewDeliveryWorker,
     },
 };
 
@@ -504,7 +501,7 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
                     JournalRepository::new(pool.clone()),
                     crate::journal::review::repository::DailyReviewRepository::new(pool),
                     daily_review_service,
-                    TelegramDailyReviewSender::new(
+                    TelegramReviewSender::new(
                         serve_config.telegram_bot_token.clone(),
                         serve_config.telegram_allowed_user_ids.clone(),
                     ),
@@ -540,7 +537,7 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
                     JournalRepository::new(pool.clone()),
                     crate::journal::week_review::repository::WeeklyReviewRepository::new(pool),
                     weekly_review_service,
-                    TelegramWeeklyReviewSender::new(
+                    TelegramReviewSender::new(
                         serve_config.telegram_bot_token.clone(),
                         serve_config.telegram_allowed_user_ids.clone(),
                     ),

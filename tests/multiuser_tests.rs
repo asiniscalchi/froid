@@ -192,12 +192,9 @@ async fn test_multiuser_database_isolation_and_routing() {
 
 #[tokio::test]
 async fn test_multiuser_whitelist_gatekeeping() {
-    use froid::workers::daily_review::{
-        DailyReviewSendOutcome, DailyReviewSender, TelegramDailyReviewSender,
-    };
-    use froid::workers::weekly_review::{
-        TelegramWeeklyReviewSender, WeeklyReviewSendOutcome, WeeklyReviewSender,
-    };
+    use froid::workers::daily_review::DailyReviewSender;
+    use froid::workers::weekly_review::WeeklyReviewSender;
+    use froid::workers::{ReviewSendOutcome, TelegramReviewSender};
 
     let test_id = ulid::Ulid::new().to_string();
     let temp_base_dir = std::env::temp_dir().join(format!("froid_test_whitelist_{}", test_id));
@@ -219,28 +216,26 @@ async fn test_multiuser_whitelist_gatekeeping() {
     assert_eq!(config.telegram_allowed_user_ids, Some(vec![12345, 67890]));
 
     // Construct daily review sender
-    let daily_sender = TelegramDailyReviewSender::new(
+    let daily_sender = TelegramReviewSender::new(
         config.telegram_bot_token.clone(),
         config.telegram_allowed_user_ids.clone(),
     );
 
-    // Delivery to non-whitelisted user "99999" must be Skipped (DailyReviewSendOutcome::Skipped)
+    // Delivery to non-whitelisted user "99999" must be Skipped (ReviewSendOutcome::Skipped)
     let skipped_res = daily_sender
         .send_daily_review("99999", "test")
         .await
         .unwrap();
-    assert_eq!(skipped_res, DailyReviewSendOutcome::Skipped);
+    assert_eq!(skipped_res, ReviewSendOutcome::Skipped);
 
     // Let's also verify weekly review sender behaves the same
-    let weekly_sender = TelegramWeeklyReviewSender::new(
-        config.telegram_bot_token,
-        config.telegram_allowed_user_ids,
-    );
+    let weekly_sender =
+        TelegramReviewSender::new(config.telegram_bot_token, config.telegram_allowed_user_ids);
     let skipped_weekly_res = weekly_sender
         .send_weekly_review("99999", "test")
         .await
         .unwrap();
-    assert_eq!(skipped_weekly_res, WeeklyReviewSendOutcome::Skipped);
+    assert_eq!(skipped_weekly_res, ReviewSendOutcome::Skipped);
 
     // Clean up
     let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
