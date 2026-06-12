@@ -4,67 +4,43 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::workers::{
-    ReconciliationWorker, ReviewSendOutcome, config::ReconciliationWorkerConfig,
-    reconciliation::ReconciliationCycle,
+    ReconciliationWorker,
+    config::ReconciliationWorkerConfig,
+    review_delivery::{
+        ReviewDeliveryCycle, ReviewDeliveryError, ReviewDeliveryKind, ReviewSender, ReviewStep,
+    },
 };
 
 use crate::{
     errors::from_error_string,
     journal::{
-        repository::JournalRepository,
+        repository::{JournalConversation, JournalRepository},
         responses::format_daily_review_for_date,
         review::{
-            DailyReviewDeliveryWorkerConfig, DailyReviewResult,
+            DailyReview, DailyReviewDeliveryWorkerConfig, DailyReviewResult,
             repository::{DailyReviewRepository, DailyReviewRepositoryError},
-            service::{DailyReviewRunner, DailyReviewServiceError},
+            service::DailyReviewRunner,
         },
     },
     messages::MessageSource,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DailyReviewDeliveryResult {
-    pub attempted: usize,
-    pub delivered: usize,
-    pub skipped: usize,
-    pub failed: usize,
-}
+from_error_string!(ReviewDeliveryError::Storage, DailyReviewRepositoryError);
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum DailyReviewDeliveryWorkerError {
-    #[error("{0}")]
-    Storage(String),
-}
-
-from_error_string!(
-    DailyReviewDeliveryWorkerError::Storage,
-    sqlx::Error,
-    DailyReviewRepositoryError,
-);
-
-#[async_trait]
-pub trait DailyReviewSender: Send + Sync {
-    async fn send_daily_review(
-        &self,
-        source_conversation_id: &str,
-        text: &str,
-    ) -> Result<ReviewSendOutcome, String>;
-}
-
-pub struct DailyReviewDeliveryCycle<R, S> {
+/// Daily half of [`ReviewDeliveryKind`]: delivers yesterday's review.
+pub struct DailyReviewDelivery<R> {
     journal_entries: JournalRepository,
     daily_reviews: DailyReviewRepository,
     review_runner: R,
-    sender: S,
     config: DailyReviewDeliveryWorkerConfig,
 }
 
-pub type DailyReviewDeliveryWorker<R, S> = DailyReviewDeliveryCycle<R, S>;
+pub type DailyReviewDeliveryWorker<R, S> = ReviewDeliveryCycle<DailyReviewDelivery<R>, S>;
 
-impl<R, S> DailyReviewDeliveryCycle<R, S>
+impl<R, S> DailyReviewDeliveryWorker<R, S>
 where
     R: DailyReviewRunner,
-    S: DailyReviewSender,
+    S: ReviewSender,
 {
     pub fn new(
         journal_entries: JournalRepository,
@@ -73,114 +49,15 @@ where
         sender: S,
         config: DailyReviewDeliveryWorkerConfig,
     ) -> Self {
-        Self {
-            journal_entries,
-            daily_reviews,
-            review_runner,
+        ReviewDeliveryCycle::from_parts(
+            DailyReviewDelivery {
+                journal_entries,
+                daily_reviews,
+                review_runner,
+                config,
+            },
             sender,
-            config,
-        }
-    }
-
-    pub async fn run_once(
-        &self,
-        now: DateTime<Utc>,
-    ) -> Result<DailyReviewDeliveryResult, DailyReviewDeliveryWorkerError> {
-        let review_date = yesterday_utc(now);
-        self.run_once_for_date(review_date).await
-    }
-
-    pub async fn run_once_for_date(
-        &self,
-        review_date: NaiveDate,
-    ) -> Result<DailyReviewDeliveryResult, DailyReviewDeliveryWorkerError> {
-        let targets = self
-            .journal_entries
-            .conversations_with_entries_for_date(&MessageSource::Telegram, review_date)
-            .await?;
-
-        let mut result = DailyReviewDeliveryResult {
-            attempted: targets.len(),
-            delivered: 0,
-            skipped: 0,
-            failed: 0,
-        };
-
-        for target in targets {
-            let review = match self.review_runner.review_day(review_date).await {
-                Ok(DailyReviewResult::Existing(review) | DailyReviewResult::Generated(review)) => {
-                    review
-                }
-                Ok(DailyReviewResult::EmptyDay) => {
-                    result.skipped += 1;
-                    continue;
-                }
-                Ok(DailyReviewResult::GenerationFailed(failure)) => {
-                    warn!(
-                        review_date = %failure.review_date,
-                        error = %failure.error_message,
-                        "daily review generation failed during delivery"
-                    );
-                    result.failed += 1;
-                    continue;
-                }
-                Err(error) => {
-                    self.record_review_runner_error(review_date, error).await?;
-                    result.failed += 1;
-                    continue;
-                }
-            };
-
-            if review.delivered_at.is_some() {
-                result.skipped += 1;
-                continue;
-            }
-
-            let text = format_daily_review_for_date(&review, review_date);
-            match self
-                .sender
-                .send_daily_review(&target.source_conversation_id, &text)
-                .await
-            {
-                Ok(ReviewSendOutcome::Sent) => {
-                    self.daily_reviews.mark_delivered(review_date).await?;
-                    result.delivered += 1;
-                }
-                Ok(ReviewSendOutcome::Skipped) => {
-                    result.skipped += 1;
-                }
-                Err(error) => {
-                    self.daily_reviews
-                        .mark_delivery_failed(review_date, &error)
-                        .await?;
-                    warn!(
-                        source_conversation_id = %target.source_conversation_id,
-                        review_date = %review_date,
-                        error = %error,
-                        "failed to deliver daily review"
-                    );
-                    result.failed += 1;
-                }
-            }
-        }
-
-        Ok(result)
-    }
-
-    async fn record_review_runner_error(
-        &self,
-        review_date: NaiveDate,
-        error: DailyReviewServiceError,
-    ) -> Result<(), DailyReviewDeliveryWorkerError> {
-        warn!(
-            review_date = %review_date,
-            error = %error,
-            "daily review runner failed during delivery"
-        );
-        self.daily_reviews
-            .mark_delivery_failed(review_date, &error.to_string())
-            .await?;
-        Ok(())
+        )
     }
 
     pub async fn run_forever(self, shutdown: CancellationToken)
@@ -188,10 +65,11 @@ where
         R: Send + Sync + 'static,
         S: Send + Sync + 'static,
     {
+        let config = &self.kind().config;
         let worker_config = ReconciliationWorkerConfig {
-            enabled: self.config.enabled,
+            enabled: config.enabled,
             batch_size: 1,
-            interval: self.config.interval,
+            interval: config.interval,
         };
         ReconciliationWorker::new(self, worker_config)
             .run_forever(shutdown)
@@ -199,16 +77,18 @@ where
     }
 }
 
-impl<R, S> ReconciliationCycle for DailyReviewDeliveryCycle<R, S>
+#[async_trait]
+impl<R> ReviewDeliveryKind for DailyReviewDelivery<R>
 where
-    R: DailyReviewRunner + Send + Sync + 'static,
-    S: DailyReviewSender + Send + Sync + 'static,
+    R: DailyReviewRunner + Send + Sync,
 {
-    type Outcome = DailyReviewDeliveryResult;
-    type Error = DailyReviewDeliveryWorkerError;
+    type Review = DailyReview;
 
-    fn worker_label(&self) -> &'static str {
-        "daily_review_delivery"
+    const WORKER_LABEL: &'static str = "daily_review_delivery";
+    const KIND: &'static str = "daily review";
+
+    fn due_period(&self, now: DateTime<Utc>) -> Option<NaiveDate> {
+        Some(yesterday_utc(now))
     }
 
     fn log_startup(&self, config: &ReconciliationWorkerConfig) {
@@ -219,20 +99,67 @@ where
         );
     }
 
-    fn log_cycle_complete(&self, outcome: &Self::Outcome) {
-        if outcome.attempted > 0 && (outcome.delivered > 0 || outcome.failed > 0) {
-            info!(
-                attempted = outcome.attempted,
-                delivered = outcome.delivered,
-                skipped = outcome.skipped,
-                failed = outcome.failed,
-                "daily review delivery cycle completed"
-            );
+    async fn targets(
+        &self,
+        period: NaiveDate,
+    ) -> Result<Vec<JournalConversation>, ReviewDeliveryError> {
+        Ok(self
+            .journal_entries
+            .conversations_with_entries_for_date(&MessageSource::Telegram, period)
+            .await?)
+    }
+
+    async fn run_review(
+        &self,
+        period: NaiveDate,
+    ) -> Result<ReviewStep<DailyReview>, ReviewDeliveryError> {
+        match self.review_runner.review_day(period).await {
+            Ok(DailyReviewResult::Existing(review) | DailyReviewResult::Generated(review)) => {
+                Ok(ReviewStep::Ready(review))
+            }
+            Ok(DailyReviewResult::EmptyDay) => Ok(ReviewStep::Skipped),
+            Ok(DailyReviewResult::GenerationFailed(failure)) => {
+                warn!(
+                    review_date = %failure.review_date,
+                    error = %failure.error_message,
+                    "daily review generation failed during delivery"
+                );
+                Ok(ReviewStep::Failed)
+            }
+            Err(error) => {
+                warn!(
+                    review_date = %period,
+                    error = %error,
+                    "daily review runner failed during delivery"
+                );
+                self.mark_delivery_failed(period, &error.to_string())
+                    .await?;
+                Ok(ReviewStep::Failed)
+            }
         }
     }
 
-    async fn run_once(&self, _batch_size: u32) -> Result<Self::Outcome, Self::Error> {
-        self.run_once(Utc::now()).await
+    fn delivered_at(review: &DailyReview) -> Option<DateTime<Utc>> {
+        review.delivered_at
+    }
+
+    fn format(review: &DailyReview, period: NaiveDate) -> String {
+        format_daily_review_for_date(review, period)
+    }
+
+    async fn mark_delivered(&self, period: NaiveDate) -> Result<(), ReviewDeliveryError> {
+        Ok(self.daily_reviews.mark_delivered(period).await?)
+    }
+
+    async fn mark_delivery_failed(
+        &self,
+        period: NaiveDate,
+        error: &str,
+    ) -> Result<(), ReviewDeliveryError> {
+        Ok(self
+            .daily_reviews
+            .mark_delivery_failed(period, error)
+            .await?)
     }
 }
 
@@ -242,8 +169,6 @@ fn yesterday_utc(now: DateTime<Utc>) -> NaiveDate {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use chrono::TimeZone;
 
     use crate::{
@@ -258,57 +183,10 @@ mod tests {
             },
         },
         messages::IncomingMessage,
+        workers::{review_delivery::ReviewDeliveryResult, test_support::FakeSender},
     };
 
     use super::*;
-
-    #[derive(Debug, Clone)]
-    struct FakeSender {
-        sent: Arc<Mutex<Vec<(String, String)>>>,
-        result: Result<ReviewSendOutcome, String>,
-    }
-
-    impl FakeSender {
-        fn succeeding() -> Self {
-            Self {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                result: Ok(ReviewSendOutcome::Sent),
-            }
-        }
-
-        fn skipped() -> Self {
-            Self {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                result: Ok(ReviewSendOutcome::Skipped),
-            }
-        }
-
-        fn failing(error: &str) -> Self {
-            Self {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                result: Err(error.to_string()),
-            }
-        }
-
-        fn sent(&self) -> Vec<(String, String)> {
-            self.sent.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait]
-    impl DailyReviewSender for FakeSender {
-        async fn send_daily_review(
-            &self,
-            source_conversation_id: &str,
-            text: &str,
-        ) -> Result<ReviewSendOutcome, String> {
-            self.sent
-                .lock()
-                .unwrap()
-                .push((source_conversation_id.to_string(), text.to_string()));
-            self.result.clone()
-        }
-    }
 
     async fn setup(
         generator: FakeReviewGenerator,
@@ -415,13 +293,7 @@ mod tests {
     }
 
     fn at_date(source_message_id: &str, text: &str) -> IncomingMessage {
-        IncomingMessage {
-            source: MessageSource::Telegram,
-            source_conversation_id: "42".to_string(),
-            source_message_id: source_message_id.to_string(),
-            text: text.to_string(),
-            received_at: Utc.with_ymd_and_hms(2026, 4, 28, 12, 0, 0).unwrap(),
-        }
+        entry_for("42", source_message_id, text)
     }
 
     #[tokio::test]
@@ -441,7 +313,7 @@ mod tests {
 
         assert_eq!(
             result,
-            DailyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 1,
                 skipped: 0,
@@ -478,11 +350,11 @@ mod tests {
             .unwrap();
         daily_reviews.mark_delivered(date()).await.unwrap();
 
-        let result = worker.run_once_for_date(date()).await.unwrap();
+        let result = worker.run_once_for(date()).await.unwrap();
 
         assert_eq!(
             result,
-            DailyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 1,
@@ -502,11 +374,11 @@ mod tests {
             .await
             .unwrap();
 
-        let result = worker.run_once_for_date(date()).await.unwrap();
+        let result = worker.run_once_for(date()).await.unwrap();
 
         assert_eq!(
             result,
-            DailyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 0,
@@ -537,11 +409,11 @@ mod tests {
             .await
             .unwrap();
 
-        let result = worker.run_once_for_date(date()).await.unwrap();
+        let result = worker.run_once_for(date()).await.unwrap();
 
         assert_eq!(
             result,
-            DailyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 1,
@@ -567,11 +439,11 @@ mod tests {
         )
         .await;
 
-        let result = worker.run_once_for_date(date()).await.unwrap();
+        let result = worker.run_once_for(date()).await.unwrap();
 
         assert_eq!(
             result,
-            DailyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 0,
                 delivered: 0,
                 skipped: 0,
@@ -590,11 +462,11 @@ mod tests {
             .await
             .unwrap();
 
-        let result = worker.run_once_for_date(date()).await.unwrap();
+        let result = worker.run_once_for(date()).await.unwrap();
 
         assert_eq!(
             result,
-            DailyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 1,
@@ -614,11 +486,11 @@ mod tests {
             .await
             .unwrap();
 
-        let result = worker.run_once_for_date(date()).await.unwrap();
+        let result = worker.run_once_for(date()).await.unwrap();
 
         assert_eq!(
             result,
-            DailyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 0,
@@ -645,11 +517,11 @@ mod tests {
             .await
             .unwrap();
 
-        let result = worker.run_once_for_date(date()).await.unwrap();
+        let result = worker.run_once_for(date()).await.unwrap();
 
         assert_eq!(
             result,
-            DailyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 0,
@@ -679,11 +551,11 @@ mod tests {
             .await
             .unwrap();
 
-        let result = worker.run_once_for_date(date()).await.unwrap();
+        let result = worker.run_once_for(date()).await.unwrap();
 
         assert_eq!(
             result,
-            DailyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 2,
                 delivered: 1,
                 skipped: 1,
@@ -694,15 +566,6 @@ mod tests {
         assert_eq!(sent.len(), 1);
         let chat_ids: Vec<&str> = sent.iter().map(|(id, _)| id.as_str()).collect();
         assert!(chat_ids.contains(&"42"));
-        assert!(
-            daily_reviews
-                .find_by_user_and_date(date())
-                .await
-                .unwrap()
-                .unwrap()
-                .delivered_at
-                .is_some()
-        );
         assert!(
             daily_reviews
                 .find_by_user_and_date(date())

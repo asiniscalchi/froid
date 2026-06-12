@@ -4,19 +4,22 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::workers::{
-    ReconciliationWorker, ReviewSendOutcome, config::ReconciliationWorkerConfig,
-    reconciliation::ReconciliationCycle,
+    ReconciliationWorker,
+    config::ReconciliationWorkerConfig,
+    review_delivery::{
+        ReviewDeliveryCycle, ReviewDeliveryError, ReviewDeliveryKind, ReviewSender, ReviewStep,
+    },
 };
 
 use crate::{
     errors::from_error_string,
     journal::{
-        repository::JournalRepository,
+        repository::{JournalConversation, JournalRepository},
         responses::format_weekly_review_for_week,
         week_review::{
-            WeeklyReviewDeliveryWorkerConfig,
+            WeeklyReview, WeeklyReviewDeliveryWorkerConfig,
             repository::{WeeklyReviewRepository, WeeklyReviewRepositoryError},
-            service::{WeeklyReviewResult, WeeklyReviewRunner, WeeklyReviewServiceError},
+            service::{WeeklyReviewResult, WeeklyReviewRunner},
         },
     },
     messages::MessageSource,
@@ -24,49 +27,23 @@ use crate::{
 
 const DAYS_PER_WEEK: i64 = 7;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WeeklyReviewDeliveryResult {
-    pub attempted: usize,
-    pub delivered: usize,
-    pub skipped: usize,
-    pub failed: usize,
-}
+from_error_string!(ReviewDeliveryError::Storage, WeeklyReviewRepositoryError);
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum WeeklyReviewDeliveryWorkerError {
-    #[error("{0}")]
-    Storage(String),
-}
-
-from_error_string!(
-    WeeklyReviewDeliveryWorkerError::Storage,
-    sqlx::Error,
-    WeeklyReviewRepositoryError,
-);
-
-#[async_trait]
-pub trait WeeklyReviewSender: Send + Sync {
-    async fn send_weekly_review(
-        &self,
-        source_conversation_id: &str,
-        text: &str,
-    ) -> Result<ReviewSendOutcome, String>;
-}
-
-pub struct WeeklyReviewDeliveryCycle<R, S> {
+/// Weekly half of [`ReviewDeliveryKind`]: delivers last ISO week's review on
+/// the configured kickoff weekday.
+pub struct WeeklyReviewDelivery<R> {
     journal_entries: JournalRepository,
     weekly_reviews: WeeklyReviewRepository,
     review_runner: R,
-    sender: S,
     config: WeeklyReviewDeliveryWorkerConfig,
 }
 
-pub type WeeklyReviewDeliveryWorker<R, S> = WeeklyReviewDeliveryCycle<R, S>;
+pub type WeeklyReviewDeliveryWorker<R, S> = ReviewDeliveryCycle<WeeklyReviewDelivery<R>, S>;
 
-impl<R, S> WeeklyReviewDeliveryCycle<R, S>
+impl<R, S> WeeklyReviewDeliveryWorker<R, S>
 where
     R: WeeklyReviewRunner,
-    S: WeeklyReviewSender,
+    S: ReviewSender,
 {
     pub fn new(
         journal_entries: JournalRepository,
@@ -75,124 +52,15 @@ where
         sender: S,
         config: WeeklyReviewDeliveryWorkerConfig,
     ) -> Self {
-        Self {
-            journal_entries,
-            weekly_reviews,
-            review_runner,
+        ReviewDeliveryCycle::from_parts(
+            WeeklyReviewDelivery {
+                journal_entries,
+                weekly_reviews,
+                review_runner,
+                config,
+            },
             sender,
-            config,
-        }
-    }
-
-    pub async fn run_once(
-        &self,
-        now: DateTime<Utc>,
-    ) -> Result<WeeklyReviewDeliveryResult, WeeklyReviewDeliveryWorkerError> {
-        if now.date_naive().weekday() != self.config.kickoff_weekday {
-            return Ok(WeeklyReviewDeliveryResult {
-                attempted: 0,
-                delivered: 0,
-                skipped: 0,
-                failed: 0,
-            });
-        }
-
-        let week_start = previous_iso_week_monday(now);
-        self.run_once_for_week(week_start).await
-    }
-
-    pub async fn run_once_for_week(
-        &self,
-        week_start: NaiveDate,
-    ) -> Result<WeeklyReviewDeliveryResult, WeeklyReviewDeliveryWorkerError> {
-        let week_end = week_start + Duration::days(DAYS_PER_WEEK);
-        let targets = self
-            .journal_entries
-            .conversations_with_entries_in_range(&MessageSource::Telegram, week_start, week_end)
-            .await?;
-
-        let mut result = WeeklyReviewDeliveryResult {
-            attempted: targets.len(),
-            delivered: 0,
-            skipped: 0,
-            failed: 0,
-        };
-
-        for target in targets {
-            let review = match self.review_runner.review_week(week_start).await {
-                Ok(
-                    WeeklyReviewResult::Existing(review) | WeeklyReviewResult::Generated(review),
-                ) => review,
-                Ok(WeeklyReviewResult::SparseWeek) => {
-                    result.skipped += 1;
-                    continue;
-                }
-                Ok(WeeklyReviewResult::GenerationFailed(failure)) => {
-                    warn!(
-                        week_start = %failure.week_start_date,
-                        error = %failure.error_message,
-                        "weekly review generation failed during delivery"
-                    );
-                    result.failed += 1;
-                    continue;
-                }
-                Err(error) => {
-                    self.record_review_runner_error(week_start, error).await?;
-                    result.failed += 1;
-                    continue;
-                }
-            };
-
-            if review.delivered_at.is_some() {
-                result.skipped += 1;
-                continue;
-            }
-
-            let text = format_weekly_review_for_week(&review, week_start);
-            match self
-                .sender
-                .send_weekly_review(&target.source_conversation_id, &text)
-                .await
-            {
-                Ok(ReviewSendOutcome::Sent) => {
-                    self.weekly_reviews.mark_delivered(week_start).await?;
-                    result.delivered += 1;
-                }
-                Ok(ReviewSendOutcome::Skipped) => {
-                    result.skipped += 1;
-                }
-                Err(error) => {
-                    self.weekly_reviews
-                        .mark_delivery_failed(week_start, &error)
-                        .await?;
-                    warn!(
-                        source_conversation_id = %target.source_conversation_id,
-                        week_start = %week_start,
-                        error = %error,
-                        "failed to deliver weekly review"
-                    );
-                    result.failed += 1;
-                }
-            }
-        }
-
-        Ok(result)
-    }
-
-    async fn record_review_runner_error(
-        &self,
-        week_start: NaiveDate,
-        error: WeeklyReviewServiceError,
-    ) -> Result<(), WeeklyReviewDeliveryWorkerError> {
-        warn!(
-            week_start = %week_start,
-            error = %error,
-            "weekly review runner failed during delivery"
-        );
-        self.weekly_reviews
-            .mark_delivery_failed(week_start, &error.to_string())
-            .await?;
-        Ok(())
+        )
     }
 
     pub async fn run_forever(self, shutdown: CancellationToken)
@@ -200,10 +68,11 @@ where
         R: Send + Sync + 'static,
         S: Send + Sync + 'static,
     {
+        let config = &self.kind().config;
         let worker_config = ReconciliationWorkerConfig {
-            enabled: self.config.enabled,
+            enabled: config.enabled,
             batch_size: 1,
-            interval: self.config.interval,
+            interval: config.interval,
         };
         ReconciliationWorker::new(self, worker_config)
             .run_forever(shutdown)
@@ -211,16 +80,19 @@ where
     }
 }
 
-impl<R, S> ReconciliationCycle for WeeklyReviewDeliveryCycle<R, S>
+#[async_trait]
+impl<R> ReviewDeliveryKind for WeeklyReviewDelivery<R>
 where
-    R: WeeklyReviewRunner + Send + Sync + 'static,
-    S: WeeklyReviewSender + Send + Sync + 'static,
+    R: WeeklyReviewRunner + Send + Sync,
 {
-    type Outcome = WeeklyReviewDeliveryResult;
-    type Error = WeeklyReviewDeliveryWorkerError;
+    type Review = WeeklyReview;
 
-    fn worker_label(&self) -> &'static str {
-        "weekly_review_delivery"
+    const WORKER_LABEL: &'static str = "weekly_review_delivery";
+    const KIND: &'static str = "weekly review";
+
+    fn due_period(&self, now: DateTime<Utc>) -> Option<NaiveDate> {
+        (now.date_naive().weekday() == self.config.kickoff_weekday)
+            .then(|| previous_iso_week_monday(now))
     }
 
     fn log_startup(&self, config: &ReconciliationWorkerConfig) {
@@ -232,20 +104,68 @@ where
         );
     }
 
-    fn log_cycle_complete(&self, outcome: &Self::Outcome) {
-        if outcome.attempted > 0 && (outcome.delivered > 0 || outcome.failed > 0) {
-            info!(
-                attempted = outcome.attempted,
-                delivered = outcome.delivered,
-                skipped = outcome.skipped,
-                failed = outcome.failed,
-                "weekly review delivery cycle completed"
-            );
+    async fn targets(
+        &self,
+        period: NaiveDate,
+    ) -> Result<Vec<JournalConversation>, ReviewDeliveryError> {
+        let week_end = period + Duration::days(DAYS_PER_WEEK);
+        Ok(self
+            .journal_entries
+            .conversations_with_entries_in_range(&MessageSource::Telegram, period, week_end)
+            .await?)
+    }
+
+    async fn run_review(
+        &self,
+        period: NaiveDate,
+    ) -> Result<ReviewStep<WeeklyReview>, ReviewDeliveryError> {
+        match self.review_runner.review_week(period).await {
+            Ok(WeeklyReviewResult::Existing(review) | WeeklyReviewResult::Generated(review)) => {
+                Ok(ReviewStep::Ready(review))
+            }
+            Ok(WeeklyReviewResult::SparseWeek) => Ok(ReviewStep::Skipped),
+            Ok(WeeklyReviewResult::GenerationFailed(failure)) => {
+                warn!(
+                    week_start = %failure.week_start_date,
+                    error = %failure.error_message,
+                    "weekly review generation failed during delivery"
+                );
+                Ok(ReviewStep::Failed)
+            }
+            Err(error) => {
+                warn!(
+                    week_start = %period,
+                    error = %error,
+                    "weekly review runner failed during delivery"
+                );
+                self.mark_delivery_failed(period, &error.to_string())
+                    .await?;
+                Ok(ReviewStep::Failed)
+            }
         }
     }
 
-    async fn run_once(&self, _batch_size: u32) -> Result<Self::Outcome, Self::Error> {
-        self.run_once(Utc::now()).await
+    fn delivered_at(review: &WeeklyReview) -> Option<DateTime<Utc>> {
+        review.delivered_at
+    }
+
+    fn format(review: &WeeklyReview, period: NaiveDate) -> String {
+        format_weekly_review_for_week(review, period)
+    }
+
+    async fn mark_delivered(&self, period: NaiveDate) -> Result<(), ReviewDeliveryError> {
+        Ok(self.weekly_reviews.mark_delivered(period).await?)
+    }
+
+    async fn mark_delivery_failed(
+        &self,
+        period: NaiveDate,
+        error: &str,
+    ) -> Result<(), ReviewDeliveryError> {
+        Ok(self
+            .weekly_reviews
+            .mark_delivery_failed(period, error)
+            .await?)
     }
 }
 
@@ -271,8 +191,6 @@ pub fn weekday_from_str(value: &str) -> Option<Weekday> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use chrono::TimeZone;
 
     use super::*;
@@ -288,55 +206,8 @@ mod tests {
             },
         },
         messages::IncomingMessage,
+        workers::{review_delivery::ReviewDeliveryResult, test_support::FakeSender},
     };
-
-    #[derive(Debug, Clone)]
-    struct FakeSender {
-        sent: Arc<Mutex<Vec<(String, String)>>>,
-        result: Result<ReviewSendOutcome, String>,
-    }
-
-    impl FakeSender {
-        fn succeeding() -> Self {
-            Self {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                result: Ok(ReviewSendOutcome::Sent),
-            }
-        }
-
-        fn skipped() -> Self {
-            Self {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                result: Ok(ReviewSendOutcome::Skipped),
-            }
-        }
-
-        fn failing(error: &str) -> Self {
-            Self {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                result: Err(error.to_string()),
-            }
-        }
-
-        fn sent(&self) -> Vec<(String, String)> {
-            self.sent.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait]
-    impl WeeklyReviewSender for FakeSender {
-        async fn send_weekly_review(
-            &self,
-            source_conversation_id: &str,
-            text: &str,
-        ) -> Result<ReviewSendOutcome, String> {
-            self.sent
-                .lock()
-                .unwrap()
-                .push((source_conversation_id.to_string(), text.to_string()));
-            self.result.clone()
-        }
-    }
 
     fn config() -> WeeklyReviewDeliveryWorkerConfig {
         WeeklyReviewDeliveryWorkerConfig {
@@ -433,7 +304,8 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 4, 27).unwrap()
         );
 
-        // Sun 2026-05-10 → previous Mon = 2026-04-27 (still last week relative to its own Monday)
+        // Sun 2026-05-03 → previous Mon = 2026-04-20 (still last week relative
+        // to its own Monday)
         let now = Utc.with_ymd_and_hms(2026, 5, 3, 23, 0, 0).unwrap();
         assert_eq!(
             previous_iso_week_monday(now),
@@ -458,7 +330,7 @@ mod tests {
 
         assert_eq!(
             result,
-            WeeklyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 0,
                 delivered: 0,
                 skipped: 0,
@@ -486,7 +358,7 @@ mod tests {
 
         assert_eq!(
             result,
-            WeeklyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 1,
                 skipped: 0,
@@ -523,11 +395,11 @@ mod tests {
         }
         journal.store(&entry("42", "1", 0)).await.unwrap();
 
-        let result = worker.run_once_for_week(week_start()).await.unwrap();
+        let result = worker.run_once_for(week_start()).await.unwrap();
 
         assert_eq!(
             result,
-            WeeklyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 1,
@@ -545,11 +417,11 @@ mod tests {
         seed_three_daily_reviews(&daily).await;
         journal.store(&entry("42", "1", 0)).await.unwrap();
 
-        let result = worker.run_once_for_week(week_start()).await.unwrap();
+        let result = worker.run_once_for(week_start()).await.unwrap();
 
         assert_eq!(
             result,
-            WeeklyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 0,
@@ -578,11 +450,11 @@ mod tests {
         seed_three_daily_reviews(&daily).await;
         journal.store(&entry("42", "1", 0)).await.unwrap();
 
-        let result = worker.run_once_for_week(week_start()).await.unwrap();
+        let result = worker.run_once_for(week_start()).await.unwrap();
 
         assert_eq!(
             result,
-            WeeklyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 1,
@@ -613,11 +485,11 @@ mod tests {
             .unwrap();
         weekly_reviews.mark_delivered(week_start()).await.unwrap();
 
-        let result = worker.run_once_for_week(week_start()).await.unwrap();
+        let result = worker.run_once_for(week_start()).await.unwrap();
 
         assert_eq!(
             result,
-            WeeklyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 1,
@@ -635,11 +507,11 @@ mod tests {
         )
         .await;
 
-        let result = worker.run_once_for_week(week_start()).await.unwrap();
+        let result = worker.run_once_for(week_start()).await.unwrap();
 
         assert_eq!(
             result,
-            WeeklyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 0,
                 delivered: 0,
                 skipped: 0,
@@ -659,11 +531,11 @@ mod tests {
         seed_three_daily_reviews(&daily).await;
         journal.store(&entry("42", "1", 0)).await.unwrap();
 
-        let result = worker.run_once_for_week(week_start()).await.unwrap();
+        let result = worker.run_once_for(week_start()).await.unwrap();
 
         assert_eq!(
             result,
-            WeeklyReviewDeliveryResult {
+            ReviewDeliveryResult {
                 attempted: 1,
                 delivered: 0,
                 skipped: 0,

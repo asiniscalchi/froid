@@ -1,15 +1,13 @@
-//! Shared Telegram delivery for the review workers.
+//! Telegram delivery for the review workers.
 //!
-//! The daily and weekly delivery workers send their reviews the same way:
-//! parse the conversation id into a chat id, skip chats outside the
-//! configured user scope, and send the text. This module holds that logic
-//! once; each worker keeps its own sender trait for test doubles.
+//! Parses the conversation id into a chat id, skips chats outside the
+//! configured user scope, and sends the text.
 
 use async_trait::async_trait;
 use teloxide::{prelude::*, types::ChatId};
 use tracing::info;
 
-use crate::workers::{daily_review::DailyReviewSender, weekly_review::WeeklyReviewSender};
+use crate::workers::review_delivery::ReviewSender;
 
 /// Outcome of attempting to deliver a review to a conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +29,10 @@ impl TelegramReviewSender {
             allowed_user_ids,
         }
     }
+}
 
+#[async_trait]
+impl ReviewSender for TelegramReviewSender {
     async fn send_review(
         &self,
         review_kind: &'static str,
@@ -59,29 +60,5 @@ impl TelegramReviewSender {
             .await
             .map(|_| ReviewSendOutcome::Sent)
             .map_err(|error| error.to_string())
-    }
-}
-
-#[async_trait]
-impl DailyReviewSender for TelegramReviewSender {
-    async fn send_daily_review(
-        &self,
-        source_conversation_id: &str,
-        text: &str,
-    ) -> Result<ReviewSendOutcome, String> {
-        self.send_review("daily review", source_conversation_id, text)
-            .await
-    }
-}
-
-#[async_trait]
-impl WeeklyReviewSender for TelegramReviewSender {
-    async fn send_weekly_review(
-        &self,
-        source_conversation_id: &str,
-        text: &str,
-    ) -> Result<ReviewSendOutcome, String> {
-        self.send_review("weekly review", source_conversation_id, text)
-            .await
     }
 }
