@@ -410,17 +410,11 @@ mod tests {
         NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
     }
 
-    fn entry_for(
-        user_id: &str,
-        conversation_id: &str,
-        message_id: &str,
-        text: &str,
-    ) -> IncomingMessage {
+    fn entry_for(conversation_id: &str, message_id: &str, text: &str) -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: conversation_id.to_string(),
             source_message_id: message_id.to_string(),
-            user_id: user_id.to_string(),
             text: text.to_string(),
             received_at: Utc.with_ymd_and_hms(2026, 4, 28, 12, 0, 0).unwrap(),
         }
@@ -431,7 +425,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: source_message_id.to_string(),
-            user_id: "7".to_string(),
             text: text.to_string(),
             received_at: Utc.with_ymd_and_hms(2026, 4, 28, 12, 0, 0).unwrap(),
         }
@@ -684,11 +677,11 @@ mod tests {
         let (worker, daily_reviews, journal_entries, sender) =
             setup(FakeReviewGenerator::succeeding("review text"), sender).await;
         journal_entries
-            .store(&entry_for("7", "42", "1", "first"))
+            .store(&entry_for("42", "1", "first"))
             .await
             .unwrap();
         journal_entries
-            .store(&entry_for("8", "99", "2", "second"))
+            .store(&entry_for("99", "2", "second"))
             .await
             .unwrap();
 

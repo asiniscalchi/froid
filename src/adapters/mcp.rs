@@ -486,7 +486,7 @@ mod tests {
             self.name
         }
         fn description(&self) -> &'static str {
-            "echoes its arguments and the user_id"
+            "echoes its arguments"
         }
         fn input_schema(&self) -> Value {
             json!({"type": "object", "properties": {"x": {"type": "integer"}}})
@@ -634,10 +634,7 @@ mod tests {
             .iter()
             .find(|t| t.name == "echo")
             .expect("echo tool present");
-        assert_eq!(
-            echo.description.as_deref(),
-            Some("echoes its arguments and the user_id")
-        );
+        assert_eq!(echo.description.as_deref(), Some("echoes its arguments"));
         let schema = serde_json::Value::Object((*echo.input_schema).clone());
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["x"].is_object());

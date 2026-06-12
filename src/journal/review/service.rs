@@ -256,7 +256,6 @@ mod tests {
     }
 
     fn incoming(
-        user_id: &str,
         source_message_id: &str,
         text: &str,
         received_at: chrono::DateTime<Utc>,
@@ -265,7 +264,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: source_message_id.to_string(),
-            user_id: user_id.to_string(),
             text: text.to_string(),
             received_at,
         }
@@ -273,7 +271,6 @@ mod tests {
 
     fn at_date(day: u32, source_message_id: &str, text: &str) -> IncomingMessage {
         incoming(
-            "user-1",
             source_message_id,
             text,
             Utc.with_ymd_and_hms(2026, 4, day, 10, 0, 0).unwrap(),
@@ -478,7 +475,6 @@ mod tests {
             .await;
         journal_entries
             .store(&incoming(
-                "user-1",
                 "1",
                 "user one entry",
                 Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
@@ -487,7 +483,6 @@ mod tests {
             .unwrap();
         journal_entries
             .store(&incoming(
-                "user-2",
                 "2",
                 "user two entry",
                 Utc.with_ymd_and_hms(2026, 4, 28, 11, 0, 0).unwrap(),
@@ -653,7 +648,6 @@ mod tests {
 
         let entry_id = journal_entries
             .store(&incoming(
-                "user-1",
                 "1",
                 "entry with extraction",
                 Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
@@ -663,7 +657,6 @@ mod tests {
             .unwrap();
         journal_entries
             .store(&incoming(
-                "user-1",
                 "2",
                 "entry without extraction",
                 Utc.with_ymd_and_hms(2026, 4, 28, 10, 1, 0).unwrap(),

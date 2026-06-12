@@ -23,11 +23,8 @@ use crate::journal::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DailyReviewSignalServiceError {
-    #[error("no completed daily review found for user '{user_id}' on {review_date}")]
-    NoDailyReview {
-        user_id: String,
-        review_date: NaiveDate,
-    },
+    #[error("no completed daily review found on {review_date}")]
+    NoDailyReview { review_date: NaiveDate },
     #[error("{0}")]
     Storage(String),
 }
@@ -183,7 +180,6 @@ impl DailyReviewSignalService {
 
     pub async fn fetch_signals(
         &self,
-        _user_id: &str,
         review_date: NaiveDate,
     ) -> Result<Vec<DailyReviewSignal>, DailyReviewSignalServiceError> {
         Ok(self.signals.find_by_user_and_date(review_date).await?)
@@ -276,12 +272,11 @@ mod tests {
         NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
     }
 
-    fn incoming(user_id: &str, text: &str) -> IncomingMessage {
+    fn incoming(text: &str) -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: "1".to_string(),
-            user_id: user_id.to_string(),
             text: text.to_string(),
             received_at: Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
         }
@@ -342,10 +337,7 @@ mod tests {
     async fn generates_and_stores_signals_for_completed_review() {
         let generator = FakeSignalGenerator::succeeding(output_with(vec![theme_signal()]));
         let (service, reviews, entries) = setup(generator).await;
-        entries
-            .store(&incoming("user-1", "entry text"))
-            .await
-            .unwrap();
+        entries.store(&incoming("entry text")).await.unwrap();
         reviews
             .upsert_completed(date(), "review text", "model", "v1")
             .await
@@ -355,7 +347,7 @@ mod tests {
 
         assert_eq!(result, DailyReviewSignalResult::Generated { count: 1 });
 
-        let signals = service.fetch_signals("user-1", date()).await.unwrap();
+        let signals = service.fetch_signals(date()).await.unwrap();
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0].signal_type, SignalType::Theme);
         assert_eq!(signals[0].label, "physical appearance");
@@ -373,7 +365,7 @@ mod tests {
         service.generate_signals_for_review(date()).await.unwrap();
         service.generate_signals_for_review(date()).await.unwrap();
 
-        let signals = service.fetch_signals("user-1", date()).await.unwrap();
+        let signals = service.fetch_signals(date()).await.unwrap();
         assert_eq!(signals.len(), 1, "second run must not duplicate signals");
     }
 
@@ -395,7 +387,7 @@ mod tests {
             }
         );
 
-        let signals = service.fetch_signals("user-1", date()).await.unwrap();
+        let signals = service.fetch_signals(date()).await.unwrap();
         assert!(signals.is_empty());
     }
 
@@ -416,7 +408,7 @@ mod tests {
 
         assert_eq!(result, DailyReviewSignalResult::Generated { count: 1 });
 
-        let signals = service.fetch_signals("user-1", date()).await.unwrap();
+        let signals = service.fetch_signals(date()).await.unwrap();
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0].signal_type, SignalType::Need);
     }
@@ -437,10 +429,10 @@ mod tests {
         service.generate_signals_for_review(date()).await.unwrap();
         service.generate_signals_for_review(date()).await.unwrap();
 
-        let user_one = service.fetch_signals("user-1", date()).await.unwrap();
-        let user_two = service.fetch_signals("user-2", date()).await.unwrap();
+        let user_one = service.fetch_signals(date()).await.unwrap();
+        let user_two = service.fetch_signals(date()).await.unwrap();
         let user_one_other_date = service
-            .fetch_signals("user-1", NaiveDate::from_ymd_opt(2026, 4, 29).unwrap())
+            .fetch_signals(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap())
             .await
             .unwrap();
 
@@ -465,7 +457,7 @@ mod tests {
         service.generate_signals_for_review(date()).await.unwrap();
         assert_eq!(generator.calls(), 2);
 
-        let signals = service.fetch_signals("user-1", date()).await.unwrap();
+        let signals = service.fetch_signals(date()).await.unwrap();
         assert_eq!(signals.len(), 1);
     }
 }

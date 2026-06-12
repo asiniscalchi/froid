@@ -134,7 +134,6 @@ mod tests {
             .command(&JournalCommandRequest {
                 source: MessageSource::Telegram,
                 source_conversation_id: "42".to_string(),
-                user_id: "7".to_string(),
                 received_at: Utc::now(),
                 command: JournalCommand::DayReviewLast,
             })
@@ -217,7 +216,6 @@ mod tests {
             .command(&JournalCommandRequest {
                 source: MessageSource::Telegram,
                 source_conversation_id: "42".to_string(),
-                user_id: "7".to_string(),
                 received_at: Utc::now(),
                 command: JournalCommand::DayReviewLast,
             })
@@ -266,7 +264,6 @@ mod tests {
             .command(&JournalCommandRequest {
                 source: MessageSource::Telegram,
                 source_conversation_id: "42".to_string(),
-                user_id: "7".to_string(),
                 received_at: Utc::now(),
                 command: JournalCommand::Status,
             })

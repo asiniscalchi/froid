@@ -12,7 +12,7 @@ use crate::{
     handler::MessageHandler,
     journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
     journal::transfer::{TransferError, TransferService},
-    messages::{IncomingMessage, MessageSource, SINGLE_USER_ID},
+    messages::{IncomingMessage, MessageSource},
     tokens::TokenIssuer,
 };
 
@@ -272,7 +272,6 @@ async fn handle_message<H: MessageHandler>(
                 let request = JournalCommandRequest {
                     source: MessageSource::Telegram,
                     source_conversation_id: message.chat.id.to_string(),
-                    user_id: SINGLE_USER_ID.to_string(),
                     received_at: message.date,
                     command,
                 };
@@ -360,7 +359,6 @@ fn incoming_from_text_message(message: &Message) -> IncomingMessage {
         source: MessageSource::Telegram,
         source_conversation_id: message.chat.id.to_string(),
         source_message_id: message.id.to_string(),
-        user_id: SINGLE_USER_ID.to_string(),
         text: message.text().unwrap_or_default().to_string(),
         received_at: message.date,
     }
@@ -577,7 +575,6 @@ mod tests {
         assert_eq!(incoming.source, MessageSource::Telegram);
         assert_eq!(incoming.source_conversation_id, "42");
         assert_eq!(incoming.source_message_id, "100");
-        assert_eq!(incoming.user_id, SINGLE_USER_ID);
         assert_eq!(incoming.text, "hello froid");
         assert_eq!(
             incoming.received_at,

@@ -168,7 +168,6 @@ mod tests {
     async fn seed(
         signals: &DailyReviewSignalRepository,
         reviews: &DailyReviewRepository,
-        _user_id: &str,
         date: NaiveDate,
         candidates: &[DailyReviewSignalCandidate],
     ) {
@@ -192,16 +191,9 @@ mod tests {
     #[tokio::test]
     async fn search_returns_signals_in_date_then_id_order() {
         let (service, signals, reviews) = setup().await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 27), &[theme()]).await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 28), &[need()]).await;
-        seed(
-            &signals,
-            &reviews,
-            "user-1",
-            ymd(2026, 4, 29),
-            &[behavior()],
-        )
-        .await;
+        seed(&signals, &reviews, ymd(2026, 4, 27), &[theme()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 28), &[need()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 29), &[behavior()]).await;
 
         let result = service.search(req(10)).await.unwrap();
 
@@ -216,16 +208,9 @@ mod tests {
     #[tokio::test]
     async fn search_applies_filters() {
         let (service, signals, reviews) = setup().await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 27), &[theme()]).await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 28), &[need()]).await;
-        seed(
-            &signals,
-            &reviews,
-            "user-1",
-            ymd(2026, 4, 29),
-            &[behavior()],
-        )
-        .await;
+        seed(&signals, &reviews, ymd(2026, 4, 27), &[theme()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 28), &[need()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 29), &[behavior()]).await;
 
         let result = service
             .search(SearchSignalsRequest {
@@ -244,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn search_trims_label_contains_and_rejects_blank() {
         let (service, signals, reviews) = setup().await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 27), &[theme()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 27), &[theme()]).await;
 
         let result = service
             .search(SearchSignalsRequest {
@@ -311,8 +296,8 @@ mod tests {
     #[tokio::test]
     async fn search_uses_single_user_scope() {
         let (service, signals, reviews) = setup().await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 27), &[theme()]).await;
-        seed(&signals, &reviews, "user-2", ymd(2026, 4, 27), &[theme()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 27), &[theme()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 27), &[theme()]).await;
 
         let result = service.search(req(10)).await.unwrap();
 
@@ -322,7 +307,7 @@ mod tests {
     #[tokio::test]
     async fn search_view_preserves_signal_fields() {
         let (service, signals, reviews) = setup().await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 28), &[need()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 28), &[need()]).await;
 
         let result = service.search(req(10)).await.unwrap();
 

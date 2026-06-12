@@ -30,7 +30,6 @@ fn incoming_for_conversation(
         source: MessageSource::Telegram,
         source_conversation_id: source_conversation_id.to_string(),
         source_message_id: source_message_id.to_string(),
-        user_id: "7".to_string(),
         text: text.to_string(),
         received_at,
     }
@@ -498,7 +497,6 @@ async fn fetch_in_range_returns_all_entries_in_single_user_journal() {
         source: MessageSource::Telegram,
         source_conversation_id: "99".to_string(),
         source_message_id: "2".to_string(),
-        user_id: "other_user".to_string(),
         text: "theirs".to_string(),
         received_at: at_on(2026, 4, 28, 11, 0),
     })
@@ -637,7 +635,6 @@ async fn search_text_returns_matches_from_the_single_user_journal() {
         source: MessageSource::Telegram,
         source_conversation_id: "99".to_string(),
         source_message_id: "2".to_string(),
-        user_id: "other_user".to_string(),
         text: "theirs matches too".to_string(),
         received_at: at(11, 0),
     })
@@ -688,7 +685,7 @@ async fn search_text_returns_empty_when_no_match() {
 }
 
 #[tokio::test]
-async fn search_text_ignores_caller_user_id() {
+async fn search_text_matches_any_stored_entry() {
     let repo = setup().await;
 
     repo.store(&incoming("1", "match", at(10, 0)))
@@ -715,7 +712,6 @@ async fn conversations_with_entries_for_date_returns_distinct_source_conversatio
         source: MessageSource::Telegram,
         source_conversation_id: "99".to_string(),
         source_message_id: "3".to_string(),
-        user_id: "8".to_string(),
         text: "other user".to_string(),
         received_at: at(12, 0),
     })
@@ -725,7 +721,6 @@ async fn conversations_with_entries_for_date_returns_distinct_source_conversatio
         source: MessageSource::Telegram,
         source_conversation_id: "100".to_string(),
         source_message_id: "4".to_string(),
-        user_id: "9".to_string(),
         text: "tomorrow".to_string(),
         received_at: Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
     })
@@ -799,7 +794,6 @@ async fn fetch_by_ids_returns_all_matching_entries_in_single_user_journal() {
         source: MessageSource::Telegram,
         source_conversation_id: "99".to_string(),
         source_message_id: "2".to_string(),
-        user_id: "other_user".to_string(),
         text: "theirs".to_string(),
         received_at: at(11, 0),
     };

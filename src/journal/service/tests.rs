@@ -309,7 +309,6 @@ fn incoming_for_conversation(
         source: MessageSource::Telegram,
         source_conversation_id: source_conversation_id.to_string(),
         source_message_id: source_message_id.to_string(),
-        user_id: "7".to_string(),
         text: text.to_string(),
         received_at,
     }
@@ -323,7 +322,6 @@ fn command(command: JournalCommand) -> JournalCommandRequest {
     JournalCommandRequest {
         source: MessageSource::Telegram,
         source_conversation_id: "42".to_string(),
-        user_id: "7".to_string(),
         received_at: at(12, 0),
         command,
     }
@@ -541,7 +539,6 @@ async fn status_uses_single_user_journal_stats_and_command_received_at_date() {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: "3".to_string(),
-            user_id: "8".to_string(),
             text: "other user".to_string(),
             received_at: Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
         })
@@ -552,7 +549,6 @@ async fn status_uses_single_user_journal_stats_and_command_received_at_date() {
         .command(&JournalCommandRequest {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
-            user_id: "7".to_string(),
             received_at: Utc.with_ymd_and_hms(2026, 4, 29, 12, 0, 0).unwrap(),
             command: JournalCommand::Status,
         })
@@ -615,7 +611,6 @@ async fn status_reports_configured_embedding_status_and_single_user_pending_coun
         source: MessageSource::Telegram,
         source_conversation_id: "42".to_string(),
         source_message_id: "3".to_string(),
-        user_id: "8".to_string(),
         text: "other user pending entry".to_string(),
         received_at: at(12, 0),
     })
@@ -985,7 +980,6 @@ async fn undo_deletes_latest_entry_for_current_conversation() {
         .command(&JournalCommandRequest {
             source: MessageSource::Telegram,
             source_conversation_id: "99".to_string(),
-            user_id: "7".to_string(),
             received_at: at(12, 0),
             command: JournalCommand::Last,
         })

@@ -9,7 +9,6 @@ pub const MAX_RECENT_LIMIT: u32 = 50;
 pub struct JournalCommandRequest {
     pub source: MessageSource,
     pub source_conversation_id: String,
-    pub user_id: String,
     pub received_at: DateTime<Utc>,
     pub command: JournalCommand,
 }

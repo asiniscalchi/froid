@@ -3,7 +3,7 @@
 //! Each tool exposes a stable name, a JSON schema for inputs, and a dispatch
 //! method that takes JSON in and returns JSON out. The analyzer agent loop
 //! looks tools up by name in [`ToolRegistry`] and invokes them with the
-//! per-tenant database — `user_id` is never part of the tool input.
+//! per-tenant database — user identity is never part of the tool input.
 
 pub mod journal;
 pub mod review;

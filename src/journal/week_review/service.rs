@@ -328,7 +328,6 @@ mod tests {
 
     async fn seed_completed_daily(
         daily_reviews: &DailyReviewRepository,
-        _user_id: &str,
         date: NaiveDate,
         text: &str,
     ) -> i64 {
@@ -365,8 +364,8 @@ mod tests {
     async fn sparse_week_skips_generation_when_below_min_daily_reviews() {
         let (service, _weekly, daily, _signals, generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("ignored")).await;
-        seed_completed_daily(&daily, "user-1", day(0), "monday").await;
-        seed_completed_daily(&daily, "user-1", day(2), "wednesday").await;
+        seed_completed_daily(&daily, day(0), "monday").await;
+        seed_completed_daily(&daily, day(2), "wednesday").await;
 
         let result = service.review_week(week_start()).await.unwrap();
 
@@ -378,9 +377,9 @@ mod tests {
     async fn generates_review_when_threshold_met() {
         let (service, weekly_reviews, daily, _signals, generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("week review")).await;
-        seed_completed_daily(&daily, "user-1", day(0), "monday").await;
-        seed_completed_daily(&daily, "user-1", day(1), "tuesday").await;
-        seed_completed_daily(&daily, "user-1", day(2), "wednesday").await;
+        seed_completed_daily(&daily, day(0), "monday").await;
+        seed_completed_daily(&daily, day(1), "tuesday").await;
+        seed_completed_daily(&daily, day(2), "wednesday").await;
 
         let review = generated(service.review_week(week_start()).await.unwrap());
 
@@ -407,9 +406,9 @@ mod tests {
     async fn passes_signals_grouped_by_day_to_generator() {
         let (service, _weekly, daily, signals_repo, generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("text")).await;
-        let monday_review = seed_completed_daily(&daily, "user-1", day(0), "monday").await;
-        let tuesday_review = seed_completed_daily(&daily, "user-1", day(1), "tuesday").await;
-        seed_completed_daily(&daily, "user-1", day(2), "wednesday").await;
+        let monday_review = seed_completed_daily(&daily, day(0), "monday").await;
+        let tuesday_review = seed_completed_daily(&daily, day(1), "tuesday").await;
+        seed_completed_daily(&daily, day(2), "wednesday").await;
 
         signals_repo
             .replace_in_transaction(monday_review, day(0), &[theme_candidate()], "model", "v1")
@@ -441,11 +440,11 @@ mod tests {
     async fn excludes_dailies_and_signals_outside_the_week() {
         let (service, _weekly, daily, signals_repo, generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("text")).await;
-        let prior_review = seed_completed_daily(&daily, "user-1", day(-1), "previous sunday").await;
-        seed_completed_daily(&daily, "user-1", day(0), "monday").await;
-        seed_completed_daily(&daily, "user-1", day(1), "tuesday").await;
-        seed_completed_daily(&daily, "user-1", day(2), "wednesday").await;
-        seed_completed_daily(&daily, "user-1", day(7), "next monday").await;
+        let prior_review = seed_completed_daily(&daily, day(-1), "previous sunday").await;
+        seed_completed_daily(&daily, day(0), "monday").await;
+        seed_completed_daily(&daily, day(1), "tuesday").await;
+        seed_completed_daily(&daily, day(2), "wednesday").await;
+        seed_completed_daily(&daily, day(7), "next monday").await;
 
         signals_repo
             .replace_in_transaction(prior_review, day(-1), &[theme_candidate()], "m", "v1")
@@ -467,7 +466,7 @@ mod tests {
         let (service, weekly_reviews, daily, _signals, generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("   \n\t")).await;
         for offset in 0..3 {
-            seed_completed_daily(&daily, "user-1", day(offset), "text").await;
+            seed_completed_daily(&daily, day(offset), "text").await;
         }
 
         let result = service.review_week(week_start()).await.unwrap();
@@ -498,7 +497,7 @@ mod tests {
         let (service, weekly_reviews, daily, _signals, _generator) =
             setup(FakeWeeklyReviewGenerator::failing("provider down")).await;
         for offset in 0..3 {
-            seed_completed_daily(&daily, "user-1", day(offset), "text").await;
+            seed_completed_daily(&daily, day(offset), "text").await;
         }
 
         let result = service.review_week(week_start()).await.unwrap();
@@ -530,7 +529,7 @@ mod tests {
         ]);
         let (service, weekly_reviews, daily, _signals, generator) = setup(generator).await;
         for offset in 0..3 {
-            seed_completed_daily(&daily, "user-1", day(offset), "text").await;
+            seed_completed_daily(&daily, day(offset), "text").await;
         }
 
         assert!(matches!(
@@ -560,7 +559,7 @@ mod tests {
         let (service, weekly_reviews, daily, _signals, generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("regenerated")).await;
         for offset in 0..3 {
-            seed_completed_daily(&daily, "user-1", day(offset), "text").await;
+            seed_completed_daily(&daily, day(offset), "text").await;
         }
         let existing = weekly_reviews
             .upsert_completed(week_start(), "", "old-model", "v0", "{}")
@@ -584,8 +583,8 @@ mod tests {
             ]))
             .await;
         for offset in 0..3 {
-            seed_completed_daily(&daily, "user-1", day(offset), "user one").await;
-            seed_completed_daily(&daily, "user-2", day(offset), "user two").await;
+            seed_completed_daily(&daily, day(offset), "user one").await;
+            seed_completed_daily(&daily, day(offset), "user two").await;
         }
 
         let one = generated(service.review_week(week_start()).await.unwrap());
@@ -641,9 +640,9 @@ mod tests {
     async fn generated_review_persists_serialized_inputs_snapshot() {
         let (service, weekly_reviews, daily, signals_repo, _generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("week review")).await;
-        let monday_review = seed_completed_daily(&daily, "user-1", day(0), "monday text").await;
-        seed_completed_daily(&daily, "user-1", day(1), "tuesday text").await;
-        seed_completed_daily(&daily, "user-1", day(2), "wednesday text").await;
+        let monday_review = seed_completed_daily(&daily, day(0), "monday text").await;
+        seed_completed_daily(&daily, day(1), "tuesday text").await;
+        seed_completed_daily(&daily, day(2), "wednesday text").await;
         signals_repo
             .replace_in_transaction(monday_review, day(0), &[theme_candidate()], "model", "v1")
             .await

@@ -494,8 +494,8 @@ mod tests {
         let result = sqlx::query(
             r#"
             INSERT INTO weekly_reviews
-                (user_id, week_start_date, review_text, model, prompt_version, status, error_message)
-            VALUES ('user-1', '2026-04-27', 'second', 'm', 'v1', 'completed', NULL)
+                (week_start_date, review_text, model, prompt_version, status, error_message)
+            VALUES ('2026-04-27', 'second', 'm', 'v1', 'completed', NULL)
             "#,
         )
         .execute(&repo.pool)
@@ -598,7 +598,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_completed_in_range_ignores_caller_user_id() {
+    async fn fetch_completed_in_range_returns_review_in_window() {
         let repo = setup().await;
         let w = week_start();
 

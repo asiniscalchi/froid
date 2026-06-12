@@ -382,12 +382,10 @@ mod tests {
     }
 
     async fn insert_daily_review(pool: &SqlitePool) -> i64 {
-        let user_id = "user-1";
         let msg = IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: "1".to_string(),
-            user_id: user_id.to_string(),
             text: "entry text".to_string(),
             received_at: chrono::Utc::now(),
         };
@@ -516,7 +514,7 @@ mod tests {
         assert_eq!(candidates.len(), 1);
     }
 
-    async fn insert_daily_review_for(pool: &SqlitePool, _user_id: &str, date: NaiveDate) -> i64 {
+    async fn insert_daily_review_for(pool: &SqlitePool, date: NaiveDate) -> i64 {
         let review_repo = DailyReviewRepository::new(pool.clone());
         review_repo
             .upsert_completed(date, "review text", "model", "v1")
@@ -532,9 +530,9 @@ mod tests {
         let wednesday = NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
         let outside = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
 
-        let monday_review = insert_daily_review_for(&pool, "user-1", monday).await;
-        let wednesday_review = insert_daily_review_for(&pool, "user-1", wednesday).await;
-        let outside_review = insert_daily_review_for(&pool, "user-1", outside).await;
+        let monday_review = insert_daily_review_for(&pool, monday).await;
+        let wednesday_review = insert_daily_review_for(&pool, wednesday).await;
+        let outside_review = insert_daily_review_for(&pool, outside).await;
 
         repo.replace_in_transaction(monday_review, monday, &[theme_candidate()], "m", "v1")
             .await
@@ -578,9 +576,9 @@ mod tests {
         let tuesday = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
         let wednesday = NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
 
-        let monday_review = insert_daily_review_for(pool, "user-1", monday).await;
-        let tuesday_review = insert_daily_review_for(pool, "user-1", tuesday).await;
-        let wednesday_review = insert_daily_review_for(pool, "user-1", wednesday).await;
+        let monday_review = insert_daily_review_for(pool, monday).await;
+        let tuesday_review = insert_daily_review_for(pool, tuesday).await;
+        let wednesday_review = insert_daily_review_for(pool, wednesday).await;
 
         let repo = DailyReviewSignalRepository::new(pool.clone());
         repo.replace_in_transaction(monday_review, monday, &[theme_candidate()], "m", "v1")
@@ -739,8 +737,8 @@ mod tests {
     async fn search_uses_single_user_scope() {
         let (repo, _reviews, pool) = setup().await;
         let target = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
-        let user_one_review = insert_daily_review_for(&pool, "user-1", target).await;
-        let user_two_review = insert_daily_review_for(&pool, "user-2", target).await;
+        let user_one_review = insert_daily_review_for(&pool, target).await;
+        let user_two_review = insert_daily_review_for(&pool, target).await;
 
         repo.replace_in_transaction(user_one_review, target, &[theme_candidate()], "m", "v1")
             .await
@@ -793,8 +791,8 @@ mod tests {
     async fn find_by_user_in_range_uses_single_user_scope() {
         let (repo, _reviews, pool) = setup().await;
         let target = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
-        let user_one_review = insert_daily_review_for(&pool, "user-1", target).await;
-        let user_two_review = insert_daily_review_for(&pool, "user-2", target).await;
+        let user_one_review = insert_daily_review_for(&pool, target).await;
+        let user_two_review = insert_daily_review_for(&pool, target).await;
 
         repo.replace_in_transaction(user_one_review, target, &[theme_candidate()], "m", "v1")
             .await
