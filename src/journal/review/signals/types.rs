@@ -61,6 +61,14 @@ pub struct DailyReviewSignalsOutput {
     pub signals: Vec<DailyReviewSignalCandidate>,
 }
 
+/// A label already used by stored signals, offered to the generator so new
+/// signals reuse existing vocabulary instead of minting near-duplicates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownSignalLabel {
+    pub signal_type: SignalType,
+    pub label: String,
+}
+
 /// A persisted signal, linked to its source daily review.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DailyReviewSignal {

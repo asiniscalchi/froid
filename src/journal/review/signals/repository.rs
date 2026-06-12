@@ -6,7 +6,7 @@ use crate::errors::from_error_string;
 
 use crate::journal::extraction::{BehaviorValence, NeedStatus};
 
-use super::types::{DailyReviewSignal, DailyReviewSignalCandidate, SignalType};
+use super::types::{DailyReviewSignal, DailyReviewSignalCandidate, KnownSignalLabel, SignalType};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DailyReviewSignalRepositoryError {
@@ -158,6 +158,46 @@ impl DailyReviewSignalRepository {
         .await?;
 
         Ok(count as u32)
+    }
+
+    /// Distinct labels used by signals in the `days_back` days before
+    /// `before_date` (exclusive), most-used first. Feeds label reuse during
+    /// signal generation.
+    pub async fn find_recent_labels(
+        &self,
+        before_date: NaiveDate,
+        days_back: u32,
+        limit: u32,
+    ) -> Result<Vec<KnownSignalLabel>, DailyReviewSignalRepositoryError> {
+        let window_start = before_date - chrono::Duration::days(i64::from(days_back));
+        let rows = sqlx::query(
+            r#"
+            SELECT signal_type, label, COUNT(*) AS uses, MAX(review_date) AS last_seen
+            FROM daily_review_signals
+            WHERE review_date < ? AND review_date >= ?
+            GROUP BY signal_type, label
+            ORDER BY uses DESC, last_seen DESC, label ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(before_date.to_string())
+        .bind(window_start.to_string())
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let raw_type = row.get::<String, _>("signal_type");
+                let signal_type = SignalType::from_str(&raw_type).ok_or(
+                    DailyReviewSignalRepositoryError::InvalidSignalType(raw_type),
+                )?;
+                Ok(KnownSignalLabel {
+                    signal_type,
+                    label: row.get("label"),
+                })
+            })
+            .collect()
     }
 
     pub async fn find_by_user_and_date(
@@ -431,6 +471,117 @@ mod tests {
             confidence: 0.85,
             evidence: "Review notes repeated attempts to regain control.".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn find_recent_labels_orders_by_use_count_and_excludes_the_target_date() {
+        let pool = crate::database::test_pool().await;
+        let repo = DailyReviewSignalRepository::new(pool.clone());
+        let today = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
+
+        // "plan switching" appears on two prior days, "control" on one.
+        for offset in [3i64, 2] {
+            let date = today - chrono::Duration::days(offset);
+            let review_id = insert_daily_review_for(&pool, date).await;
+            repo.replace_in_transaction(
+                review_id,
+                date,
+                &[DailyReviewSignalCandidate {
+                    signal_type: SignalType::Behavior,
+                    label: "plan switching".to_string(),
+                    status: None,
+                    valence: Some(BehaviorValence::Negative),
+                    strength: 0.5,
+                    confidence: 0.8,
+                    evidence: "evidence".to_string(),
+                }],
+                "m",
+                "v1",
+            )
+            .await
+            .unwrap();
+        }
+        let yesterday = today - chrono::Duration::days(1);
+        let review_id = insert_daily_review_for(&pool, yesterday).await;
+        repo.replace_in_transaction(
+            review_id,
+            yesterday,
+            &[DailyReviewSignalCandidate {
+                signal_type: SignalType::Need,
+                label: "control".to_string(),
+                status: Some(NeedStatus::Unmet),
+                valence: None,
+                strength: 0.5,
+                confidence: 0.8,
+                evidence: "evidence".to_string(),
+            }],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+        // A signal on the target date itself must not be offered.
+        let todays_review = insert_daily_review_for(&pool, today).await;
+        repo.replace_in_transaction(
+            todays_review,
+            today,
+            &[DailyReviewSignalCandidate {
+                signal_type: SignalType::Theme,
+                label: "same day".to_string(),
+                status: None,
+                valence: None,
+                strength: 0.5,
+                confidence: 0.8,
+                evidence: "evidence".to_string(),
+            }],
+            "m",
+            "v1",
+        )
+        .await
+        .unwrap();
+
+        let labels = repo.find_recent_labels(today, 90, 10).await.unwrap();
+
+        assert_eq!(
+            labels,
+            vec![
+                KnownSignalLabel {
+                    signal_type: SignalType::Behavior,
+                    label: "plan switching".to_string(),
+                },
+                KnownSignalLabel {
+                    signal_type: SignalType::Need,
+                    label: "control".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn find_recent_labels_respects_the_limit() {
+        let pool = crate::database::test_pool().await;
+        let repo = DailyReviewSignalRepository::new(pool.clone());
+        let today = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
+        let yesterday = today - chrono::Duration::days(1);
+        let review_id = insert_daily_review_for(&pool, yesterday).await;
+        let candidates: Vec<DailyReviewSignalCandidate> = (0..5)
+            .map(|i| DailyReviewSignalCandidate {
+                signal_type: SignalType::Theme,
+                label: format!("theme {i}"),
+                status: None,
+                valence: None,
+                strength: 0.5,
+                confidence: 0.8,
+                evidence: "evidence".to_string(),
+            })
+            .collect();
+        repo.replace_in_transaction(review_id, yesterday, &candidates, "m", "v1")
+            .await
+            .unwrap();
+
+        let labels = repo.find_recent_labels(today, 90, 2).await.unwrap();
+
+        assert_eq!(labels.len(), 2);
     }
 
     #[tokio::test]
