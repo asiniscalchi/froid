@@ -1,18 +1,13 @@
+use std::marker::PhantomData;
+
 use async_trait::async_trait;
-use chrono::{NaiveDate, TimeZone, Utc};
-use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use sqlx::{Row, SqlitePool};
 use thiserror::Error;
 
 use crate::errors::from_error_string;
 
 use super::{Embedding, EmbeddingCandidate, EmbeddingSearchResult};
-
-fn map_search_result(row: SqliteRow) -> EmbeddingSearchResult<String> {
-    EmbeddingSearchResult {
-        id: row.get("journal_entry_id"),
-        distance: row.get("distance"),
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum EmbeddingRepositoryError {
@@ -74,94 +69,173 @@ pub trait PendingEmbeddingCounter: Send + Sync {
     ) -> Result<i64, EmbeddingRepositoryError>;
 }
 
-#[derive(Debug, Clone)]
-pub struct SqliteEmbeddingRepository {
-    pub(crate) pool: SqlitePool,
+/// Describes the SQLite tables one vector index is built over: the metadata /
+/// vec0 table pair plus the owning rows (journal entries, daily reviews, …)
+/// that get embedded.
+pub trait EmbeddingSchema: Send + Sync + 'static {
+    /// Primary-key type of the owning row.
+    type Id: Clone
+        + Send
+        + Sync
+        + Unpin
+        + 'static
+        + sqlx::Type<sqlx::Sqlite>
+        + for<'q> sqlx::Encode<'q, sqlx::Sqlite>
+        + for<'r> sqlx::Decode<'r, sqlx::Sqlite>;
+
+    /// How dates are compared against [`Self::DATE_COLUMN`] (RFC 3339
+    /// timestamps bind a `DateTime<Utc>`, date-only columns bind a string).
+    type DateBound: Send + sqlx::Type<sqlx::Sqlite> + for<'q> sqlx::Encode<'q, sqlx::Sqlite>;
+
+    const METADATA_TABLE: &'static str;
+    const VEC_TABLE: &'static str;
+    /// Column of `METADATA_TABLE` referencing the owning row.
+    const OWNER_ID_COLUMN: &'static str;
+    /// Table holding the rows to embed.
+    const OWNER_TABLE: &'static str;
+    /// Column of `OWNER_TABLE` with the text to embed.
+    const TEXT_COLUMN: &'static str;
+    /// Extra predicate ANDed into the candidate / count queries ("1=1" when
+    /// every owner row qualifies).
+    const CANDIDATE_PREDICATE: &'static str;
+    /// Column of `OWNER_TABLE` used for date-range filtering and candidate
+    /// ordering.
+    const DATE_COLUMN: &'static str;
+
+    fn date_bound(date: NaiveDate) -> Self::DateBound;
 }
 
-impl SqliteEmbeddingRepository {
+/// Schema of the journal-entry embeddings.
+pub struct JournalEntryEmbeddings;
+
+impl EmbeddingSchema for JournalEntryEmbeddings {
+    type Id = String;
+    type DateBound = DateTime<Utc>;
+
+    const METADATA_TABLE: &'static str = "journal_entry_embedding_metadata";
+    const VEC_TABLE: &'static str = "journal_entry_embedding_vec";
+    const OWNER_ID_COLUMN: &'static str = "journal_entry_id";
+    const OWNER_TABLE: &'static str = "journal_entries";
+    const TEXT_COLUMN: &'static str = "raw_text";
+    const CANDIDATE_PREDICATE: &'static str = "1=1";
+    const DATE_COLUMN: &'static str = "received_at";
+
+    fn date_bound(date: NaiveDate) -> DateTime<Utc> {
+        Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
+    }
+}
+
+/// SQLite-backed vector index over the tables described by `S`.
+pub struct SqliteVectorIndex<S: EmbeddingSchema> {
+    pub(crate) pool: SqlitePool,
+    _schema: PhantomData<fn() -> S>,
+}
+
+pub type SqliteEmbeddingRepository = SqliteVectorIndex<JournalEntryEmbeddings>;
+
+impl<S: EmbeddingSchema> Clone for SqliteVectorIndex<S> {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            _schema: PhantomData,
+        }
+    }
+}
+
+impl<S: EmbeddingSchema> std::fmt::Debug for SqliteVectorIndex<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqliteVectorIndex")
+            .field("metadata_table", &S::METADATA_TABLE)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S: EmbeddingSchema> SqliteVectorIndex<S> {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            _schema: PhantomData,
+        }
     }
 
     pub async fn record_embedding_failure(
         &self,
-        id: &str,
+        id: &S::Id,
         embedding_model: &str,
         error_message: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            INSERT OR IGNORE INTO journal_entry_embedding_metadata
-                (journal_entry_id, embedding_model, embedding_dim, status, error_message)
-            VALUES (?, ?, 0, 'failed', ?)
-            "#,
-        )
-        .bind(id)
-        .bind(embedding_model)
-        .bind(error_message)
-        .execute(&self.pool)
-        .await?;
+        let sql = format!(
+            "INSERT OR IGNORE INTO {metadata} ({owner_id}, embedding_model, embedding_dim, status, error_message)
+             VALUES (?, ?, 0, 'failed', ?)",
+            metadata = S::METADATA_TABLE,
+            owner_id = S::OWNER_ID_COLUMN,
+        );
+        sqlx::query(&sql)
+            .bind(id.clone())
+            .bind(embedding_model)
+            .bind(error_message)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
 
     pub async fn delete_failed_embedding(
         &self,
-        id: &str,
+        id: &S::Id,
         embedding_model: &str,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            r#"
-            DELETE FROM journal_entry_embedding_metadata
-            WHERE journal_entry_id = ? AND embedding_model = ? AND status = 'failed'
-            "#,
-        )
-        .bind(id)
-        .bind(embedding_model)
-        .execute(&self.pool)
-        .await?;
+        let sql = format!(
+            "DELETE FROM {metadata}
+             WHERE {owner_id} = ? AND embedding_model = ? AND status = 'failed'",
+            metadata = S::METADATA_TABLE,
+            owner_id = S::OWNER_ID_COLUMN,
+        );
+        let result = sqlx::query(&sql)
+            .bind(id.clone())
+            .bind(embedding_model)
+            .execute(&self.pool)
+            .await?;
 
         Ok(result.rows_affected() > 0)
     }
 
     pub async fn store_embedding(
         &self,
-        id: &str,
+        id: &S::Id,
         embedding_model: &str,
         embedding_dim: usize,
         embedding: &Embedding,
     ) -> Result<bool, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
-        let result = sqlx::query(
-            r#"
-            INSERT OR IGNORE INTO journal_entry_embedding_metadata
-                (journal_entry_id, embedding_model, embedding_dim)
-            VALUES (?, ?, ?)
-            "#,
-        )
-        .bind(id)
-        .bind(embedding_model)
-        .bind(embedding_dim as i64)
-        .execute(&mut *tx)
-        .await?;
+        let sql = format!(
+            "INSERT OR IGNORE INTO {metadata} ({owner_id}, embedding_model, embedding_dim)
+             VALUES (?, ?, ?)",
+            metadata = S::METADATA_TABLE,
+            owner_id = S::OWNER_ID_COLUMN,
+        );
+        let result = sqlx::query(&sql)
+            .bind(id.clone())
+            .bind(embedding_model)
+            .bind(embedding_dim as i64)
+            .execute(&mut *tx)
+            .await?;
 
         if result.rows_affected() == 0 {
             tx.commit().await?;
             return Ok(false);
         }
 
-        sqlx::query(
-            r#"
-            INSERT INTO journal_entry_embedding_vec(rowid, embedding)
-            VALUES (?, ?)
-            "#,
-        )
-        .bind(result.last_insert_rowid())
-        .bind(embedding.to_blob())
-        .execute(&mut *tx)
-        .await?;
+        let sql = format!(
+            "INSERT INTO {vec}(rowid, embedding) VALUES (?, ?)",
+            vec = S::VEC_TABLE,
+        );
+        sqlx::query(&sql)
+            .bind(result.last_insert_rowid())
+            .bind(embedding.to_blob())
+            .execute(&mut *tx)
+            .await?;
 
         tx.commit().await?;
 
@@ -171,23 +245,19 @@ impl SqliteEmbeddingRepository {
     #[cfg(test)]
     pub(crate) async fn has_embedding(
         &self,
-        id: &str,
+        id: &S::Id,
         embedding_model: &str,
     ) -> Result<bool, sqlx::Error> {
-        let exists: bool = sqlx::query_scalar(
-            r#"
-            SELECT EXISTS(
-                SELECT 1
-                FROM journal_entry_embedding_metadata
-                WHERE journal_entry_id = ?
-                  AND embedding_model = ?
-            )
-            "#,
-        )
-        .bind(id)
-        .bind(embedding_model)
-        .fetch_one(&self.pool)
-        .await?;
+        let sql = format!(
+            "SELECT EXISTS(SELECT 1 FROM {metadata} WHERE {owner_id} = ? AND embedding_model = ?)",
+            metadata = S::METADATA_TABLE,
+            owner_id = S::OWNER_ID_COLUMN,
+        );
+        let exists: bool = sqlx::query_scalar(&sql)
+            .bind(id.clone())
+            .bind(embedding_model)
+            .fetch_one(&self.pool)
+            .await?;
 
         Ok(exists)
     }
@@ -196,30 +266,35 @@ impl SqliteEmbeddingRepository {
         &self,
         embedding_model: &str,
         limit: u32,
-    ) -> Result<Vec<EmbeddingCandidate<String>>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT journal_entries.id, journal_entries.raw_text
-            FROM journal_entries
-            LEFT JOIN journal_entry_embedding_metadata
-              ON journal_entry_embedding_metadata.journal_entry_id = journal_entries.id
-             AND journal_entry_embedding_metadata.embedding_model = ?
-            WHERE journal_entry_embedding_metadata.id IS NULL
-               OR journal_entry_embedding_metadata.status = 'failed'
-            ORDER BY journal_entries.received_at ASC, journal_entries.id ASC
-            LIMIT ?
-            "#,
-        )
-        .bind(embedding_model)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+    ) -> Result<Vec<EmbeddingCandidate<S::Id>>, sqlx::Error> {
+        let sql = format!(
+            "SELECT {owner}.id, {owner}.{text}
+             FROM {owner}
+             LEFT JOIN {metadata}
+               ON {metadata}.{owner_id} = {owner}.id
+              AND {metadata}.embedding_model = ?
+             WHERE {predicate}
+               AND ({metadata}.id IS NULL OR {metadata}.status = 'failed')
+             ORDER BY {owner}.{date} ASC, {owner}.id ASC
+             LIMIT ?",
+            owner = S::OWNER_TABLE,
+            text = S::TEXT_COLUMN,
+            metadata = S::METADATA_TABLE,
+            owner_id = S::OWNER_ID_COLUMN,
+            predicate = S::CANDIDATE_PREDICATE,
+            date = S::DATE_COLUMN,
+        );
+        let rows = sqlx::query(&sql)
+            .bind(embedding_model)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(rows
             .into_iter()
             .map(|row| EmbeddingCandidate {
                 id: row.get("id"),
-                raw_text: row.get("raw_text"),
+                raw_text: row.get(S::TEXT_COLUMN),
             })
             .collect())
     }
@@ -228,42 +303,25 @@ impl SqliteEmbeddingRepository {
         &self,
         embedding_model: &str,
     ) -> Result<u32, sqlx::Error> {
-        let count: i32 = sqlx::query_scalar(
-            r#"
-            SELECT COUNT(*)
-            FROM journal_entries
-            LEFT JOIN journal_entry_embedding_metadata
-              ON journal_entry_embedding_metadata.journal_entry_id = journal_entries.id
-             AND journal_entry_embedding_metadata.embedding_model = ?
-            WHERE journal_entry_embedding_metadata.id IS NULL
-               OR journal_entry_embedding_metadata.status = 'failed'
-            "#,
-        )
-        .bind(embedding_model)
-        .fetch_one(&self.pool)
-        .await?;
+        let sql = format!(
+            "SELECT COUNT(*)
+             FROM {owner}
+             LEFT JOIN {metadata}
+               ON {metadata}.{owner_id} = {owner}.id
+              AND {metadata}.embedding_model = ?
+             WHERE {predicate}
+               AND ({metadata}.id IS NULL OR {metadata}.status = 'failed')",
+            owner = S::OWNER_TABLE,
+            metadata = S::METADATA_TABLE,
+            owner_id = S::OWNER_ID_COLUMN,
+            predicate = S::CANDIDATE_PREDICATE,
+        );
+        let count: i32 = sqlx::query_scalar(&sql)
+            .bind(embedding_model)
+            .fetch_one(&self.pool)
+            .await?;
 
         Ok(count as u32)
-    }
-
-    pub async fn count_entries_missing_embedding(
-        &self,
-        embedding_model: &str,
-    ) -> Result<i64, sqlx::Error> {
-        sqlx::query_scalar(
-            r#"
-            SELECT COUNT(*)
-            FROM journal_entries
-            LEFT JOIN journal_entry_embedding_metadata
-              ON journal_entry_embedding_metadata.journal_entry_id = journal_entries.id
-             AND journal_entry_embedding_metadata.embedding_model = ?
-            WHERE journal_entry_embedding_metadata.id IS NULL
-               OR journal_entry_embedding_metadata.status = 'failed'
-            "#,
-        )
-        .bind(embedding_model)
-        .fetch_one(&self.pool)
-        .await
     }
 
     pub async fn search(
@@ -273,23 +331,23 @@ impl SqliteEmbeddingRepository {
         from_date: Option<NaiveDate>,
         to_date_exclusive: Option<NaiveDate>,
         limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult<String>>, sqlx::Error> {
-        let mut sql = String::from(
-            r#"
-            SELECT
-                m.journal_entry_id,
-                vec_distance_cosine(v.embedding, ?) AS distance
-            FROM journal_entry_embedding_metadata m
-            JOIN journal_entry_embedding_vec v ON v.rowid = m.id
-            JOIN journal_entries j ON j.id = m.journal_entry_id
-            WHERE m.embedding_model = ?
-            "#,
+    ) -> Result<Vec<EmbeddingSearchResult<S::Id>>, sqlx::Error> {
+        let mut sql = format!(
+            "SELECT m.{owner_id}, vec_distance_cosine(v.embedding, ?) AS distance
+             FROM {metadata} m
+             JOIN {vec} v ON v.rowid = m.id
+             JOIN {owner} o ON o.id = m.{owner_id}
+             WHERE m.embedding_model = ?",
+            owner_id = S::OWNER_ID_COLUMN,
+            metadata = S::METADATA_TABLE,
+            vec = S::VEC_TABLE,
+            owner = S::OWNER_TABLE,
         );
         if from_date.is_some() {
-            sql.push_str(" AND j.received_at >= ?");
+            sql.push_str(&format!(" AND o.{} >= ?", S::DATE_COLUMN));
         }
         if to_date_exclusive.is_some() {
-            sql.push_str(" AND j.received_at < ?");
+            sql.push_str(&format!(" AND o.{} < ?", S::DATE_COLUMN));
         }
         sql.push_str(" ORDER BY distance ASC LIMIT ?");
 
@@ -297,46 +355,48 @@ impl SqliteEmbeddingRepository {
             .bind(embedding.to_blob())
             .bind(embedding_model);
         if let Some(date) = from_date {
-            query = query.bind(Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap()));
+            query = query.bind(S::date_bound(date));
         }
         if let Some(date) = to_date_exclusive {
-            query = query.bind(Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap()));
+            query = query.bind(S::date_bound(date));
         }
         let rows = query.bind(limit as i64).fetch_all(&self.pool).await?;
 
-        Ok(rows.into_iter().map(map_search_result).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| EmbeddingSearchResult {
+                id: row.get(S::OWNER_ID_COLUMN),
+                distance: row.get("distance"),
+            })
+            .collect())
     }
 
     #[cfg(test)]
     pub(crate) async fn stored_embedding(
         &self,
-        id: &str,
+        id: &S::Id,
         embedding_model: &str,
-    ) -> Result<Option<StoredEmbedding>, sqlx::Error> {
-        let row = sqlx::query(
-            r#"
-            SELECT
-                metadata.id,
-                metadata.journal_entry_id,
-                metadata.embedding_model,
-                metadata.embedding_dim,
-                vec.embedding
-            FROM journal_entry_embedding_metadata metadata
-            JOIN journal_entry_embedding_vec vec
-              ON vec.rowid = metadata.id
-            WHERE metadata.journal_entry_id = ?
-              AND metadata.embedding_model = ?
-            "#,
-        )
-        .bind(id)
-        .bind(embedding_model)
-        .fetch_optional(&self.pool)
-        .await?;
+    ) -> Result<Option<StoredEmbedding<S::Id>>, sqlx::Error> {
+        let sql = format!(
+            "SELECT metadata.id, metadata.{owner_id}, metadata.embedding_model,
+                    metadata.embedding_dim, vec.embedding
+             FROM {metadata} metadata
+             JOIN {vec} vec ON vec.rowid = metadata.id
+             WHERE metadata.{owner_id} = ? AND metadata.embedding_model = ?",
+            owner_id = S::OWNER_ID_COLUMN,
+            metadata = S::METADATA_TABLE,
+            vec = S::VEC_TABLE,
+        );
+        let row = sqlx::query(&sql)
+            .bind(id.clone())
+            .bind(embedding_model)
+            .fetch_optional(&self.pool)
+            .await?;
 
         row.map(|row| {
             Ok(StoredEmbedding {
                 metadata_id: row.get("id"),
-                id: row.get("journal_entry_id"),
+                id: row.get(S::OWNER_ID_COLUMN),
                 embedding_model: row.get("embedding_model"),
                 embedding_dim: row.get("embedding_dim"),
                 embedding: Embedding::from_blob(&row.get::<Vec<u8>, _>("embedding")),
@@ -347,47 +407,36 @@ impl SqliteEmbeddingRepository {
 }
 
 #[async_trait]
-impl EmbeddingIndex<String> for SqliteEmbeddingRepository {
+impl<S: EmbeddingSchema> EmbeddingIndex<S::Id> for SqliteVectorIndex<S> {
     async fn store_embedding(
         &self,
-        id: String,
+        id: S::Id,
         embedding_model: &str,
         embedding_dim: usize,
         embedding: &Embedding,
     ) -> Result<bool, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::store_embedding(
-            self,
-            &id,
-            embedding_model,
-            embedding_dim,
-            embedding,
-        )
-        .await
-        .map_err(Into::into)
+        SqliteVectorIndex::store_embedding(self, &id, embedding_model, embedding_dim, embedding)
+            .await
+            .map_err(Into::into)
     }
 
     async fn record_embedding_failure(
         &self,
-        id: String,
+        id: S::Id,
         embedding_model: &str,
         error_message: &str,
     ) -> Result<(), EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::record_embedding_failure(
-            self,
-            &id,
-            embedding_model,
-            error_message,
-        )
-        .await
-        .map_err(Into::into)
+        SqliteVectorIndex::record_embedding_failure(self, &id, embedding_model, error_message)
+            .await
+            .map_err(Into::into)
     }
 
     async fn delete_failed_embedding(
         &self,
-        id: String,
+        id: S::Id,
         embedding_model: &str,
     ) -> Result<bool, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::delete_failed_embedding(self, &id, embedding_model)
+        SqliteVectorIndex::delete_failed_embedding(self, &id, embedding_model)
             .await
             .map_err(Into::into)
     }
@@ -396,21 +445,17 @@ impl EmbeddingIndex<String> for SqliteEmbeddingRepository {
         &self,
         embedding_model: &str,
         limit: u32,
-    ) -> Result<Vec<EmbeddingCandidate<String>>, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::find_entries_missing_or_failed_embedding(
-            self,
-            embedding_model,
-            limit,
-        )
-        .await
-        .map_err(Into::into)
+    ) -> Result<Vec<EmbeddingCandidate<S::Id>>, EmbeddingRepositoryError> {
+        SqliteVectorIndex::find_entries_missing_or_failed_embedding(self, embedding_model, limit)
+            .await
+            .map_err(Into::into)
     }
 
     async fn count_entries_missing_or_failed_embedding(
         &self,
         embedding_model: &str,
     ) -> Result<u32, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::count_entries_missing_or_failed_embedding(self, embedding_model)
+        SqliteVectorIndex::count_entries_missing_or_failed_embedding(self, embedding_model)
             .await
             .map_err(Into::into)
     }
@@ -422,8 +467,8 @@ impl EmbeddingIndex<String> for SqliteEmbeddingRepository {
         from_date: Option<NaiveDate>,
         to_date_exclusive: Option<NaiveDate>,
         limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult<String>>, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::search(
+    ) -> Result<Vec<EmbeddingSearchResult<S::Id>>, EmbeddingRepositoryError> {
+        SqliteVectorIndex::search(
             self,
             embedding,
             embedding_model,
@@ -437,22 +482,23 @@ impl EmbeddingIndex<String> for SqliteEmbeddingRepository {
 }
 
 #[async_trait]
-impl PendingEmbeddingCounter for SqliteEmbeddingRepository {
+impl<S: EmbeddingSchema> PendingEmbeddingCounter for SqliteVectorIndex<S> {
     async fn count_entries_missing_embedding(
         &self,
         embedding_model: &str,
     ) -> Result<i64, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::count_entries_missing_embedding(self, embedding_model)
-            .await
-            .map_err(Into::into)
+        let count = self
+            .count_entries_missing_or_failed_embedding(embedding_model)
+            .await?;
+        Ok(i64::from(count))
     }
 }
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct StoredEmbedding {
+pub(crate) struct StoredEmbedding<ID> {
     pub(crate) metadata_id: i64,
-    pub(crate) id: String,
+    pub(crate) id: ID,
     pub(crate) embedding_model: String,
     pub(crate) embedding_dim: i64,
     pub(crate) embedding: Embedding,

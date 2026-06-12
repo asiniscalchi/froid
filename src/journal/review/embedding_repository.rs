@@ -1,288 +1,36 @@
-use async_trait::async_trait;
 use chrono::NaiveDate;
-use sqlx::{Row, SqlitePool};
 
-use crate::journal::embedding::{
-    Embedding, EmbeddingCandidate, EmbeddingIndex, EmbeddingRepositoryError, EmbeddingSearchResult,
-};
+use crate::journal::embedding::{EmbeddingSchema, SqliteVectorIndex};
 
-#[derive(Debug, Clone)]
-pub struct SqliteDailyReviewEmbeddingRepository {
-    pool: SqlitePool,
-}
+/// Schema of the daily-review embeddings.
+pub struct DailyReviewEmbeddings;
 
-impl SqliteDailyReviewEmbeddingRepository {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
+impl EmbeddingSchema for DailyReviewEmbeddings {
+    type Id = i64;
+    /// `review_date` is a date-only TEXT column, so bounds bind as strings.
+    type DateBound = String;
 
-    async fn record_embedding_failure(
-        &self,
-        daily_review_id: i64,
-        embedding_model: &str,
-        error_message: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            INSERT OR IGNORE INTO daily_review_embedding_metadata
-                (daily_review_id, embedding_model, embedding_dim, status, error_message)
-            VALUES (?, ?, 0, 'failed', ?)
-            "#,
-        )
-        .bind(daily_review_id)
-        .bind(embedding_model)
-        .bind(error_message)
-        .execute(&self.pool)
-        .await?;
+    const METADATA_TABLE: &'static str = "daily_review_embedding_metadata";
+    const VEC_TABLE: &'static str = "daily_review_embedding_vec";
+    const OWNER_ID_COLUMN: &'static str = "daily_review_id";
+    const OWNER_TABLE: &'static str = "daily_reviews";
+    const TEXT_COLUMN: &'static str = "review_text";
+    const CANDIDATE_PREDICATE: &'static str = "daily_reviews.review_text IS NOT NULL";
+    const DATE_COLUMN: &'static str = "review_date";
 
-        Ok(())
-    }
-
-    async fn delete_failed_embedding(
-        &self,
-        daily_review_id: i64,
-        embedding_model: &str,
-    ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            r#"
-            DELETE FROM daily_review_embedding_metadata
-            WHERE daily_review_id = ? AND embedding_model = ? AND status = 'failed'
-            "#,
-        )
-        .bind(daily_review_id)
-        .bind(embedding_model)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
-    }
-
-    async fn store_embedding(
-        &self,
-        daily_review_id: i64,
-        embedding_model: &str,
-        embedding_dim: usize,
-        embedding: &Embedding,
-    ) -> Result<bool, sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-
-        let result = sqlx::query(
-            r#"
-            INSERT OR IGNORE INTO daily_review_embedding_metadata
-                (daily_review_id, embedding_model, embedding_dim)
-            VALUES (?, ?, ?)
-            "#,
-        )
-        .bind(daily_review_id)
-        .bind(embedding_model)
-        .bind(embedding_dim as i64)
-        .execute(&mut *tx)
-        .await?;
-
-        if result.rows_affected() == 0 {
-            tx.commit().await?;
-            return Ok(false);
-        }
-
-        sqlx::query(
-            r#"
-            INSERT INTO daily_review_embedding_vec(rowid, embedding)
-            VALUES (?, ?)
-            "#,
-        )
-        .bind(result.last_insert_rowid())
-        .bind(embedding.to_blob())
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-
-        Ok(true)
-    }
-
-    async fn find_entries_missing_or_failed_embedding(
-        &self,
-        embedding_model: &str,
-        limit: u32,
-    ) -> Result<Vec<EmbeddingCandidate<i64>>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT daily_reviews.id, daily_reviews.review_text
-            FROM daily_reviews
-            LEFT JOIN daily_review_embedding_metadata
-              ON daily_review_embedding_metadata.daily_review_id = daily_reviews.id
-             AND daily_review_embedding_metadata.embedding_model = ?
-            WHERE daily_reviews.review_text IS NOT NULL
-              AND (daily_review_embedding_metadata.id IS NULL
-                   OR daily_review_embedding_metadata.status = 'failed')
-            ORDER BY daily_reviews.review_date ASC, daily_reviews.id ASC
-            LIMIT ?
-            "#,
-        )
-        .bind(embedding_model)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| EmbeddingCandidate {
-                id: row.get("id"),
-                raw_text: row.get("review_text"),
-            })
-            .collect())
-    }
-
-    async fn count_entries_missing_or_failed_embedding(
-        &self,
-        embedding_model: &str,
-    ) -> Result<u32, sqlx::Error> {
-        let count: i32 = sqlx::query_scalar(
-            r#"
-            SELECT COUNT(*)
-            FROM daily_reviews
-            LEFT JOIN daily_review_embedding_metadata
-              ON daily_review_embedding_metadata.daily_review_id = daily_reviews.id
-             AND daily_review_embedding_metadata.embedding_model = ?
-            WHERE daily_reviews.review_text IS NOT NULL
-              AND (daily_review_embedding_metadata.id IS NULL
-                   OR daily_review_embedding_metadata.status = 'failed')
-            "#,
-        )
-        .bind(embedding_model)
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(count as u32)
-    }
-
-    async fn search(
-        &self,
-        embedding: &Embedding,
-        embedding_model: &str,
-        from_date: Option<NaiveDate>,
-        to_date_exclusive: Option<NaiveDate>,
-        limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult<i64>>, sqlx::Error> {
-        let mut sql = String::from(
-            r#"
-            SELECT
-                m.daily_review_id,
-                vec_distance_cosine(v.embedding, ?) AS distance
-            FROM daily_review_embedding_metadata m
-            JOIN daily_review_embedding_vec v ON v.rowid = m.id
-            JOIN daily_reviews r ON r.id = m.daily_review_id
-            WHERE m.embedding_model = ?
-            "#,
-        );
-        if from_date.is_some() {
-            sql.push_str(" AND r.review_date >= ?");
-        }
-        if to_date_exclusive.is_some() {
-            sql.push_str(" AND r.review_date < ?");
-        }
-        sql.push_str(" ORDER BY distance ASC LIMIT ?");
-
-        let mut query = sqlx::query(&sql)
-            .bind(embedding.to_blob())
-            .bind(embedding_model);
-        if let Some(date) = from_date {
-            query = query.bind(date.to_string());
-        }
-        if let Some(date) = to_date_exclusive {
-            query = query.bind(date.to_string());
-        }
-        let rows = query.bind(limit as i64).fetch_all(&self.pool).await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| EmbeddingSearchResult {
-                id: row.get("daily_review_id"),
-                distance: row.get("distance"),
-            })
-            .collect())
+    fn date_bound(date: NaiveDate) -> String {
+        date.to_string()
     }
 }
 
-#[async_trait]
-impl EmbeddingIndex<i64> for SqliteDailyReviewEmbeddingRepository {
-    async fn store_embedding(
-        &self,
-        id: i64,
-        embedding_model: &str,
-        embedding_dim: usize,
-        embedding: &Embedding,
-    ) -> Result<bool, EmbeddingRepositoryError> {
-        self.store_embedding(id, embedding_model, embedding_dim, embedding)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn record_embedding_failure(
-        &self,
-        id: i64,
-        embedding_model: &str,
-        error_message: &str,
-    ) -> Result<(), EmbeddingRepositoryError> {
-        self.record_embedding_failure(id, embedding_model, error_message)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn delete_failed_embedding(
-        &self,
-        id: i64,
-        embedding_model: &str,
-    ) -> Result<bool, EmbeddingRepositoryError> {
-        self.delete_failed_embedding(id, embedding_model)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn find_entries_missing_or_failed_embedding(
-        &self,
-        embedding_model: &str,
-        limit: u32,
-    ) -> Result<Vec<EmbeddingCandidate<i64>>, EmbeddingRepositoryError> {
-        self.find_entries_missing_or_failed_embedding(embedding_model, limit)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn count_entries_missing_or_failed_embedding(
-        &self,
-        embedding_model: &str,
-    ) -> Result<u32, EmbeddingRepositoryError> {
-        self.count_entries_missing_or_failed_embedding(embedding_model)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn search(
-        &self,
-        embedding: &Embedding,
-        embedding_model: &str,
-        from_date: Option<NaiveDate>,
-        to_date_exclusive: Option<NaiveDate>,
-        limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
-        self.search(
-            embedding,
-            embedding_model,
-            from_date,
-            to_date_exclusive,
-            limit,
-        )
-        .await
-        .map_err(Into::into)
-    }
-}
+pub type SqliteDailyReviewEmbeddingRepository = SqliteVectorIndex<DailyReviewEmbeddings>;
 
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
 
     use super::*;
+    use crate::journal::embedding::Embedding;
     use crate::journal::{
         embedding::SUPPORTED_EMBEDDING_DIMENSIONS, review::repository::DailyReviewRepository,
     };
@@ -318,7 +66,7 @@ mod tests {
 
         let created = embedding_repo
             .store_embedding(
-                review.id,
+                &review.id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &embedding(1.0),
@@ -365,7 +113,7 @@ mod tests {
             .unwrap();
 
         embedding_repo
-            .record_embedding_failure(review.id, TEST_EMBEDDING_MODEL, "provider error")
+            .record_embedding_failure(&review.id, TEST_EMBEDDING_MODEL, "provider error")
             .await
             .unwrap();
 
@@ -388,12 +136,12 @@ mod tests {
             .unwrap();
 
         embedding_repo
-            .record_embedding_failure(review.id, TEST_EMBEDDING_MODEL, "provider error")
+            .record_embedding_failure(&review.id, TEST_EMBEDDING_MODEL, "provider error")
             .await
             .unwrap();
 
         let deleted = embedding_repo
-            .delete_failed_embedding(review.id, TEST_EMBEDDING_MODEL)
+            .delete_failed_embedding(&review.id, TEST_EMBEDDING_MODEL)
             .await
             .unwrap();
 
@@ -430,7 +178,7 @@ mod tests {
         // Directional embeddings: 1 is closest to query 1, then 2, then 3 is furthest.
         embedding_repo
             .store_embedding(
-                review1.id,
+                &review1.id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &directional_embedding(1),
@@ -439,7 +187,7 @@ mod tests {
             .unwrap();
         embedding_repo
             .store_embedding(
-                review2.id,
+                &review2.id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &directional_embedding(2),
@@ -448,7 +196,7 @@ mod tests {
             .unwrap();
         embedding_repo
             .store_embedding(
-                review3.id,
+                &review3.id,
                 TEST_EMBEDDING_MODEL,
                 TEST_EMBEDDING_DIMENSIONS,
                 &directional_embedding(3),

@@ -8,7 +8,8 @@ pub use backfill::{BackfillResult, EmbeddingBackfillError, EmbeddingBackfillServ
 pub use config::EmbeddingConfig;
 pub use provider::RigOpenAiEmbedder;
 pub use repository::{
-    EmbeddingIndex, EmbeddingRepositoryError, PendingEmbeddingCounter, SqliteEmbeddingRepository,
+    EmbeddingIndex, EmbeddingRepositoryError, EmbeddingSchema, PendingEmbeddingCounter,
+    SqliteEmbeddingRepository, SqliteVectorIndex,
 };
 pub use types::{Embedder, EmbedderError, Embedding, EmbeddingCandidate, EmbeddingSearchResult};
 
