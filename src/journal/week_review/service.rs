@@ -46,7 +46,6 @@ pub enum WeeklyReviewResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeeklyReviewFailure {
-    pub user_id: String,
     pub week_start_date: NaiveDate,
     pub model: String,
     pub prompt_version: String,
@@ -66,13 +65,11 @@ pub struct WeeklyReviewService {
 pub trait WeeklyReviewRunner: Send + Sync {
     async fn review_week(
         &self,
-        user_id: &str,
         week_start: NaiveDate,
     ) -> Result<WeeklyReviewResult, WeeklyReviewServiceError>;
 
     async fn fetch_review(
         &self,
-        user_id: &str,
         week_start: NaiveDate,
     ) -> Result<Option<WeeklyReview>, WeeklyReviewServiceError>;
 }
@@ -99,7 +96,6 @@ impl WeeklyReviewService {
 
     pub async fn review_week(
         &self,
-        user_id: &str,
         week_start: NaiveDate,
     ) -> Result<WeeklyReviewResult, WeeklyReviewServiceError> {
         let existing = self
@@ -163,13 +159,7 @@ impl WeeklyReviewService {
                 let trimmed = review_text.trim();
                 if trimmed.is_empty() {
                     return self
-                        .store_failed(
-                            user_id,
-                            week_start,
-                            model,
-                            &prompt_version,
-                            EMPTY_REVIEW_ERROR,
-                        )
+                        .store_failed(week_start, model, &prompt_version, EMPTY_REVIEW_ERROR)
                         .await;
                 }
 
@@ -194,7 +184,7 @@ impl WeeklyReviewService {
             Err(error) => {
                 let prompt_version = self.generator.prompt_version();
                 let message = error.to_string();
-                self.store_failed(user_id, week_start, model, &prompt_version, &message)
+                self.store_failed(week_start, model, &prompt_version, &message)
                     .await
             }
         }
@@ -202,7 +192,6 @@ impl WeeklyReviewService {
 
     pub async fn fetch_review(
         &self,
-        _user_id: &str,
         week_start: NaiveDate,
     ) -> Result<Option<WeeklyReview>, WeeklyReviewServiceError> {
         let review = self
@@ -219,7 +208,6 @@ impl WeeklyReviewService {
 
     async fn store_failed(
         &self,
-        user_id: &str,
         week_start: NaiveDate,
         model: &str,
         prompt_version: &str,
@@ -229,7 +217,6 @@ impl WeeklyReviewService {
             .upsert_failed(week_start, model, prompt_version, error_message)
             .await?;
         Ok(WeeklyReviewResult::GenerationFailed(WeeklyReviewFailure {
-            user_id: user_id.to_string(),
             week_start_date: week_start,
             model: model.to_string(),
             prompt_version: prompt_version.to_string(),
@@ -242,18 +229,16 @@ impl WeeklyReviewService {
 impl WeeklyReviewRunner for WeeklyReviewService {
     async fn review_week(
         &self,
-        user_id: &str,
         week_start: NaiveDate,
     ) -> Result<WeeklyReviewResult, WeeklyReviewServiceError> {
-        WeeklyReviewService::review_week(self, user_id, week_start).await
+        WeeklyReviewService::review_week(self, week_start).await
     }
 
     async fn fetch_review(
         &self,
-        user_id: &str,
         week_start: NaiveDate,
     ) -> Result<Option<WeeklyReview>, WeeklyReviewServiceError> {
-        WeeklyReviewService::fetch_review(self, user_id, week_start).await
+        WeeklyReviewService::fetch_review(self, week_start).await
     }
 }
 
@@ -370,7 +355,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service.review_week("user-1", week_start()).await.unwrap();
+        let result = service.review_week(week_start()).await.unwrap();
 
         assert_eq!(result, WeeklyReviewResult::Existing(existing));
         assert_eq!(generator.calls(), 0);
@@ -383,7 +368,7 @@ mod tests {
         seed_completed_daily(&daily, "user-1", day(0), "monday").await;
         seed_completed_daily(&daily, "user-1", day(2), "wednesday").await;
 
-        let result = service.review_week("user-1", week_start()).await.unwrap();
+        let result = service.review_week(week_start()).await.unwrap();
 
         assert_eq!(result, WeeklyReviewResult::SparseWeek);
         assert_eq!(generator.calls(), 0);
@@ -397,7 +382,7 @@ mod tests {
         seed_completed_daily(&daily, "user-1", day(1), "tuesday").await;
         seed_completed_daily(&daily, "user-1", day(2), "wednesday").await;
 
-        let review = generated(service.review_week("user-1", week_start()).await.unwrap());
+        let review = generated(service.review_week(week_start()).await.unwrap());
 
         assert_eq!(review.review_text, Some("week review".to_string()));
         assert_eq!(review.status, WeeklyReviewStatus::Completed);
@@ -441,7 +426,7 @@ mod tests {
             .await
             .unwrap();
 
-        service.review_week("user-1", week_start()).await.unwrap();
+        service.review_week(week_start()).await.unwrap();
 
         let inputs = generator.inputs_seen();
         let monday_slice = inputs[0].days.iter().find(|d| d.date == day(0)).unwrap();
@@ -467,7 +452,7 @@ mod tests {
             .await
             .unwrap();
 
-        service.review_week("user-1", week_start()).await.unwrap();
+        service.review_week(week_start()).await.unwrap();
 
         let inputs = generator.inputs_seen();
         let dates: Vec<_> = inputs[0].days.iter().map(|d| d.date).collect();
@@ -485,12 +470,11 @@ mod tests {
             seed_completed_daily(&daily, "user-1", day(offset), "text").await;
         }
 
-        let result = service.review_week("user-1", week_start()).await.unwrap();
+        let result = service.review_week(week_start()).await.unwrap();
 
         assert_eq!(
             result,
             WeeklyReviewResult::GenerationFailed(WeeklyReviewFailure {
-                user_id: "user-1".to_string(),
                 week_start_date: week_start(),
                 model: "fake-weekly-review-model".to_string(),
                 prompt_version: "fake-weekly-prompt-v1".to_string(),
@@ -517,12 +501,11 @@ mod tests {
             seed_completed_daily(&daily, "user-1", day(offset), "text").await;
         }
 
-        let result = service.review_week("user-1", week_start()).await.unwrap();
+        let result = service.review_week(week_start()).await.unwrap();
 
         assert_eq!(
             result,
             WeeklyReviewResult::GenerationFailed(WeeklyReviewFailure {
-                user_id: "user-1".to_string(),
                 week_start_date: week_start(),
                 model: "fake-weekly-review-model".to_string(),
                 prompt_version: "fake-weekly-prompt-v1".to_string(),
@@ -551,7 +534,7 @@ mod tests {
         }
 
         assert!(matches!(
-            service.review_week("user-1", week_start()).await.unwrap(),
+            service.review_week(week_start()).await.unwrap(),
             WeeklyReviewResult::GenerationFailed(_)
         ));
         let failed = weekly_reviews
@@ -561,7 +544,7 @@ mod tests {
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
 
-        let completed = generated(service.review_week("user-1", week_start()).await.unwrap());
+        let completed = generated(service.review_week(week_start()).await.unwrap());
 
         assert_eq!(generator.calls(), 2);
         assert_eq!(completed.id, failed.id);
@@ -584,7 +567,7 @@ mod tests {
             .await
             .unwrap();
 
-        let review = generated(service.review_week("user-1", week_start()).await.unwrap());
+        let review = generated(service.review_week(week_start()).await.unwrap());
 
         assert_eq!(generator.calls(), 1);
         assert_eq!(review.id, existing.id);
@@ -593,7 +576,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_week_reviews_share_single_user_scope() {
+    async fn repeated_review_week_returns_existing_without_regenerating() {
         let (service, _weekly, daily, _signals, generator) =
             setup(FakeWeeklyReviewGenerator::new(vec![
                 Ok("user one review".to_string()),
@@ -605,15 +588,14 @@ mod tests {
             seed_completed_daily(&daily, "user-2", day(offset), "user two").await;
         }
 
-        let one = generated(service.review_week("user-1", week_start()).await.unwrap());
-        let two = match service.review_week("user-2", week_start()).await.unwrap() {
+        let one = generated(service.review_week(week_start()).await.unwrap());
+        let two = match service.review_week(week_start()).await.unwrap() {
             WeeklyReviewResult::Existing(review) => review,
             other => panic!("expected existing review, got {other:?}"),
         };
 
         assert_eq!(one.review_text, Some("user one review".to_string()));
         assert_eq!(two.review_text, Some("user one review".to_string()));
-        assert_eq!(one.user_id, two.user_id);
         assert_eq!(generator.calls(), 1);
     }
 
@@ -626,7 +608,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service.fetch_review("user-1", week_start()).await.unwrap();
+        let result = service.fetch_review(week_start()).await.unwrap();
 
         assert_eq!(result.unwrap().review_text, Some("review text".to_string()));
     }
@@ -636,7 +618,7 @@ mod tests {
         let (service, _weekly, _daily, _signals, _generator) =
             setup(FakeWeeklyReviewGenerator::succeeding("any")).await;
 
-        let result = service.fetch_review("user-1", week_start()).await.unwrap();
+        let result = service.fetch_review(week_start()).await.unwrap();
 
         assert!(result.is_none());
     }
@@ -650,7 +632,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service.fetch_review("user-1", week_start()).await.unwrap();
+        let result = service.fetch_review(week_start()).await.unwrap();
 
         assert!(result.is_none());
     }
@@ -667,7 +649,7 @@ mod tests {
             .await
             .unwrap();
 
-        service.review_week("user-1", week_start()).await.unwrap();
+        service.review_week(week_start()).await.unwrap();
 
         let stored = weekly_reviews
             .find_by_user_and_week(week_start())

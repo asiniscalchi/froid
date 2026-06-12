@@ -4,10 +4,7 @@ use thiserror::Error;
 
 use crate::errors::from_error_string;
 
-use crate::{
-    journal::extraction::{BehaviorValence, NeedStatus},
-    messages::SINGLE_USER_ID,
-};
+use crate::journal::extraction::{BehaviorValence, NeedStatus};
 
 use super::types::{DailyReviewSignal, DailyReviewSignalCandidate, SignalType};
 
@@ -115,7 +112,7 @@ impl DailyReviewSignalRepository {
     pub async fn find_completed_reviews_missing_signals(
         &self,
         limit: u32,
-    ) -> Result<Vec<(i64, String, NaiveDate)>, DailyReviewSignalRepositoryError> {
+    ) -> Result<Vec<(i64, NaiveDate)>, DailyReviewSignalRepositoryError> {
         let rows = sqlx::query(
             r#"
             SELECT dr.id, dr.review_date
@@ -139,11 +136,7 @@ impl DailyReviewSignalRepository {
                     NaiveDate::parse_from_str(&review_date_str, "%Y-%m-%d").map_err(|_| {
                         DailyReviewSignalRepositoryError::InvalidReviewDate(review_date_str)
                     })?;
-                Ok((
-                    row.get::<i64, _>("id"),
-                    SINGLE_USER_ID.to_string(),
-                    review_date,
-                ))
+                Ok((row.get::<i64, _>("id"), review_date))
             })
             .collect()
     }
@@ -298,7 +291,6 @@ fn row_to_signal(row: SqliteRow) -> Result<DailyReviewSignal, DailyReviewSignalR
     Ok(DailyReviewSignal {
         id: row.get("id"),
         daily_review_id: row.get("daily_review_id"),
-        user_id: SINGLE_USER_ID.to_string(),
         review_date,
         signal_type,
         label: row.get("label"),
@@ -760,7 +752,6 @@ mod tests {
         let rows = repo.search(&filters(10)).await.unwrap();
 
         assert_eq!(rows.len(), 1);
-        assert!(rows.iter().all(|row| row.user_id == SINGLE_USER_ID));
     }
 
     #[tokio::test]
@@ -818,6 +809,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(rows.len(), 1);
-        assert!(rows.iter().all(|row| row.user_id == SINGLE_USER_ID));
     }
 }

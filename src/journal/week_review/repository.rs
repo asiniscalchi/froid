@@ -4,8 +4,6 @@ use thiserror::Error;
 
 use crate::errors::from_error_string;
 
-use crate::messages::SINGLE_USER_ID;
-
 use super::{WeeklyReview, WeeklyReviewStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -210,7 +208,6 @@ fn row_to_weekly_review(row: SqliteRow) -> Result<WeeklyReview, WeeklyReviewRepo
 
     Ok(WeeklyReview {
         id: row.get("id"),
-        user_id: SINGLE_USER_ID.to_string(),
         week_start_date,
         review_text: row.get("review_text"),
         model: row.get("model"),
@@ -253,7 +250,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(review.user_id, SINGLE_USER_ID);
         assert_eq!(review.week_start_date, week_start());
         assert_eq!(review.review_text, Some("review text".to_string()));
         assert_eq!(review.model, "test-model");
@@ -462,8 +458,8 @@ mod tests {
         let result = sqlx::query(
             r#"
             INSERT INTO weekly_reviews
-                (user_id, week_start_date, review_text, model, prompt_version, status, error_message)
-            VALUES ('user-1', '2026-04-27', NULL, 'm', 'v1', 'completed', NULL)
+                (week_start_date, review_text, model, prompt_version, status, error_message)
+            VALUES ('2026-04-27', NULL, 'm', 'v1', 'completed', NULL)
             "#,
         )
         .execute(&repo.pool)
@@ -478,8 +474,8 @@ mod tests {
         let result = sqlx::query(
             r#"
             INSERT INTO weekly_reviews
-                (user_id, week_start_date, review_text, model, prompt_version, status, error_message)
-            VALUES ('user-1', '2026-04-27', NULL, 'm', 'v1', 'failed', NULL)
+                (week_start_date, review_text, model, prompt_version, status, error_message)
+            VALUES ('2026-04-27', NULL, 'm', 'v1', 'failed', NULL)
             "#,
         )
         .execute(&repo.pool)

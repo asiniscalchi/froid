@@ -487,7 +487,6 @@ mod tests {
         DailyReviewSignal {
             id: 0,
             daily_review_id: 0,
-            user_id: "user-1".to_string(),
             review_date: day(0),
             signal_type,
             label: label.to_string(),

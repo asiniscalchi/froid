@@ -119,11 +119,7 @@ where
         };
 
         for target in targets {
-            let review = match self
-                .review_runner
-                .review_week(&target.user_id, week_start)
-                .await
-            {
+            let review = match self.review_runner.review_week(week_start).await {
                 Ok(
                     WeeklyReviewResult::Existing(review) | WeeklyReviewResult::Generated(review),
                 ) => review,
@@ -133,7 +129,6 @@ where
                 }
                 Ok(WeeklyReviewResult::GenerationFailed(failure)) => {
                     warn!(
-                        user_id = %failure.user_id,
                         week_start = %failure.week_start_date,
                         error = %failure.error_message,
                         "weekly review generation failed during delivery"
@@ -142,8 +137,7 @@ where
                     continue;
                 }
                 Err(error) => {
-                    self.record_review_runner_error(&target.user_id, week_start, error)
-                        .await?;
+                    self.record_review_runner_error(week_start, error).await?;
                     result.failed += 1;
                     continue;
                 }
@@ -172,7 +166,6 @@ where
                         .mark_delivery_failed(week_start, &error)
                         .await?;
                     warn!(
-                        user_id = %target.user_id,
                         source_conversation_id = %target.source_conversation_id,
                         week_start = %week_start,
                         error = %error,
@@ -188,12 +181,10 @@ where
 
     async fn record_review_runner_error(
         &self,
-        _user_id: &str,
         week_start: NaiveDate,
         error: WeeklyReviewServiceError,
     ) -> Result<(), WeeklyReviewDeliveryWorkerError> {
         warn!(
-            user_id = %_user_id,
             week_start = %week_start,
             error = %error,
             "weekly review runner failed during delivery"

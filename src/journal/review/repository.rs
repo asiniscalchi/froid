@@ -4,8 +4,6 @@ use thiserror::Error;
 
 use crate::errors::from_error_string;
 
-use crate::messages::SINGLE_USER_ID;
-
 use super::{DailyReview, DailyReviewStatus, SignalGenerationStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -361,7 +359,6 @@ fn row_to_daily_review(row: SqliteRow) -> Result<DailyReview, DailyReviewReposit
 
     Ok(DailyReview {
         id: row.get("id"),
-        user_id: SINGLE_USER_ID.to_string(),
         review_date,
         review_text: row.get("review_text"),
         model: row.get("model"),
@@ -408,7 +405,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(review.user_id, SINGLE_USER_ID);
         assert_eq!(review.review_date, date());
         assert_eq!(review.review_text, Some("review text".to_string()));
         assert_eq!(review.model, "test-model");
@@ -659,7 +655,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_completed_in_range_ignores_caller_user_id() {
+    async fn fetch_completed_in_range_keeps_one_review_per_date() {
         let repo = setup().await;
         let target = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
         repo.upsert_completed(target, "user one", "m", "v1")
@@ -675,7 +671,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].user_id, SINGLE_USER_ID);
         assert_eq!(rows[0].review_text, Some("user two".to_string()));
     }
 }

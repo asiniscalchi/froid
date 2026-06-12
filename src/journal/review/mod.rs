@@ -28,7 +28,6 @@ pub struct JournalEntryWithExtraction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyReview {
     pub id: i64,
-    pub user_id: String,
     pub review_date: NaiveDate,
     pub review_text: Option<String>,
     pub model: String,
@@ -75,7 +74,6 @@ pub enum DailyReviewResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyReviewFailure {
-    pub user_id: String,
     pub review_date: NaiveDate,
     pub model: String,
     pub prompt_version: String,

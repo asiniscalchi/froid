@@ -86,7 +86,6 @@ impl DailyReviewSignalService {
 
     pub async fn generate_signals_for_review(
         &self,
-        user_id: &str,
         review_date: NaiveDate,
     ) -> Result<DailyReviewSignalResult, DailyReviewSignalServiceError> {
         let review = self
@@ -112,9 +111,7 @@ impl DailyReviewSignalService {
             .mark_signals_pending(review.id, self.generator.model(), &pending_prompt_version)
             .await?;
 
-        let entries = self
-            .fetch_entries_with_extractions(user_id, review_date)
-            .await?;
+        let entries = self.fetch_entries_with_extractions(review_date).await?;
 
         let generation_result = self
             .generator
@@ -194,7 +191,6 @@ impl DailyReviewSignalService {
 
     async fn fetch_entries_with_extractions(
         &self,
-        _user_id: &str,
         date: NaiveDate,
     ) -> Result<
         Vec<crate::journal::review::JournalEntryWithExtraction>,
@@ -323,10 +319,7 @@ mod tests {
     async fn returns_no_daily_review_when_review_does_not_exist() {
         let (service, _, _) = setup(FakeSignalGenerator::succeeding(output_with(vec![]))).await;
 
-        let result = service
-            .generate_signals_for_review("user-1", date())
-            .await
-            .unwrap();
+        let result = service.generate_signals_for_review(date()).await.unwrap();
 
         assert_eq!(result, DailyReviewSignalResult::NoDailyReview);
     }
@@ -340,10 +333,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service
-            .generate_signals_for_review("user-1", date())
-            .await
-            .unwrap();
+        let result = service.generate_signals_for_review(date()).await.unwrap();
 
         assert_eq!(result, DailyReviewSignalResult::NoDailyReview);
     }
@@ -361,10 +351,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service
-            .generate_signals_for_review("user-1", date())
-            .await
-            .unwrap();
+        let result = service.generate_signals_for_review(date()).await.unwrap();
 
         assert_eq!(result, DailyReviewSignalResult::Generated { count: 1 });
 
@@ -383,14 +370,8 @@ mod tests {
             .await
             .unwrap();
 
-        service
-            .generate_signals_for_review("user-1", date())
-            .await
-            .unwrap();
-        service
-            .generate_signals_for_review("user-1", date())
-            .await
-            .unwrap();
+        service.generate_signals_for_review(date()).await.unwrap();
+        service.generate_signals_for_review(date()).await.unwrap();
 
         let signals = service.fetch_signals("user-1", date()).await.unwrap();
         assert_eq!(signals.len(), 1, "second run must not duplicate signals");
@@ -405,10 +386,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service
-            .generate_signals_for_review("user-1", date())
-            .await
-            .unwrap();
+        let result = service.generate_signals_for_review(date()).await.unwrap();
 
         assert_eq!(
             result,
@@ -434,10 +412,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service
-            .generate_signals_for_review("user-1", date())
-            .await
-            .unwrap();
+        let result = service.generate_signals_for_review(date()).await.unwrap();
 
         assert_eq!(result, DailyReviewSignalResult::Generated { count: 1 });
 
@@ -459,14 +434,8 @@ mod tests {
             .await
             .unwrap();
 
-        service
-            .generate_signals_for_review("user-1", date())
-            .await
-            .unwrap();
-        service
-            .generate_signals_for_review("user-2", date())
-            .await
-            .unwrap();
+        service.generate_signals_for_review(date()).await.unwrap();
+        service.generate_signals_for_review(date()).await.unwrap();
 
         let user_one = service.fetch_signals("user-1", date()).await.unwrap();
         let user_two = service.fetch_signals("user-2", date()).await.unwrap();
@@ -489,17 +458,11 @@ mod tests {
             .await
             .unwrap();
 
-        service
-            .generate_signals_for_review("user-1", date())
-            .await
-            .unwrap();
+        service.generate_signals_for_review(date()).await.unwrap();
         assert_eq!(generator.calls(), 1);
 
         // Second run replaces with same signals — still only 1 total
-        service
-            .generate_signals_for_review("user-1", date())
-            .await
-            .unwrap();
+        service.generate_signals_for_review(date()).await.unwrap();
         assert_eq!(generator.calls(), 2);
 
         let signals = service.fetch_signals("user-1", date()).await.unwrap();

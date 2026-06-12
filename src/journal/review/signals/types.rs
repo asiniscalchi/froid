@@ -66,7 +66,6 @@ pub struct DailyReviewSignalsOutput {
 pub struct DailyReviewSignal {
     pub id: i64,
     pub daily_review_id: i64,
-    pub user_id: String,
     pub review_date: NaiveDate,
     pub signal_type: SignalType,
     pub label: String,

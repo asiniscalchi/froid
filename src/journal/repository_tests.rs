@@ -741,11 +741,9 @@ async fn conversations_with_entries_for_date_returns_distinct_source_conversatio
         conversations,
         vec![
             JournalConversation {
-                user_id: crate::messages::SINGLE_USER_ID.to_string(),
                 source_conversation_id: "42".to_string(),
             },
             JournalConversation {
-                user_id: crate::messages::SINGLE_USER_ID.to_string(),
                 source_conversation_id: "99".to_string(),
             },
         ]
