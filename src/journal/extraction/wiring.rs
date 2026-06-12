@@ -1,5 +1,3 @@
-use std::env;
-
 use sqlx::SqlitePool;
 use tracing::warn;
 
@@ -20,16 +18,6 @@ pub struct JournalEntryExtractionRuntimeConfig {
     pub openai_api_key: Option<String>,
     pub extraction: JournalEntryExtractionConfig,
     pub prompt: JournalEntryExtractionPromptConfig,
-}
-
-impl JournalEntryExtractionRuntimeConfig {
-    pub fn from_env() -> Self {
-        Self {
-            openai_api_key: env::var("OPENAI_API_KEY").ok(),
-            extraction: JournalEntryExtractionConfig::from_env(),
-            prompt: JournalEntryExtractionPromptConfig::from_env(),
-        }
-    }
 }
 
 pub fn configure_journal_entry_extraction(

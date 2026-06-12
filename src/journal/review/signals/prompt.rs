@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf};
+use std::path::PathBuf;
 
 use crate::prompts::file::{self, PromptFile, PromptFileError};
 
@@ -24,10 +24,6 @@ impl Default for DailyReviewSignalPromptConfig {
 }
 
 impl DailyReviewSignalPromptConfig {
-    pub fn from_env() -> Self {
-        Self::from_values(env::var("FROID_SIGNAL_EXTRACTION_PROMPT_PATH").ok())
-    }
-
     pub(crate) fn from_values(path: Option<String>) -> Self {
         Self {
             path: file::resolve_path(path, DEFAULT_SIGNAL_EXTRACTION_PROMPT_PATH),

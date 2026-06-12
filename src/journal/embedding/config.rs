@@ -1,5 +1,3 @@
-use std::env;
-
 use super::DEFAULT_EMBEDDING_MODEL;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,10 +14,6 @@ impl Default for EmbeddingConfig {
 }
 
 impl EmbeddingConfig {
-    pub fn from_env() -> Self {
-        Self::from_values(env::var("FROID_EMBEDDING_MODEL").ok())
-    }
-
     pub(crate) fn from_values(model: Option<String>) -> Self {
         let model = model
             .filter(|value| !value.trim().is_empty())

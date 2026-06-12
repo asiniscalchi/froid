@@ -1,7 +1,4 @@
-use std::{
-    env,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use rig::{
@@ -34,10 +31,6 @@ impl Default for WeeklyReviewConfig {
 }
 
 impl WeeklyReviewConfig {
-    pub fn from_env() -> Self {
-        Self::from_values(env::var("FROID_WEEK_REVIEW_MODEL").ok())
-    }
-
     pub(crate) fn from_values(model: Option<String>) -> Self {
         let defaults = Self::default();
         Self {

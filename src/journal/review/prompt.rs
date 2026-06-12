@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf};
+use std::path::PathBuf;
 
 use crate::prompts::file::{self, PromptFile, PromptFileError};
 
@@ -23,10 +23,6 @@ impl Default for DailyReviewPromptConfig {
 }
 
 impl DailyReviewPromptConfig {
-    pub fn from_env() -> Self {
-        Self::from_values(env::var("FROID_REVIEW_PROMPT_PATH").ok())
-    }
-
     pub(crate) fn from_values(path: Option<String>) -> Self {
         Self {
             path: file::resolve_path(path, DEFAULT_REVIEW_PROMPT_PATH),

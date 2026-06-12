@@ -3,12 +3,7 @@ use froid::{
     cli::Cli,
     handler::MessageHandler,
     journal::command::{JournalCommand, JournalCommandRequest},
-    journal::{
-        extraction::JournalEntryExtractionRuntimeConfig, registry::JournalServiceRegistry,
-        registry::JournalServiceRegistryConfig, review::DailyReviewRuntimeConfig,
-        review::signals::wiring::DailyReviewSignalRuntimeConfig,
-        week_review::WeeklyReviewRuntimeConfig,
-    },
+    journal::{registry::JournalServiceRegistry, registry::JournalServiceRegistryConfig},
     messages::{IncomingMessage, MessageSource},
 };
 use tokio_util::sync::CancellationToken;
@@ -32,28 +27,14 @@ async fn test_multiuser_database_isolation_and_routing() {
     ])
     .unwrap();
 
-    let config = cli.serve_config().unwrap();
-
-    // Setup basic configs
-    let embedding_config = None; // No OpenAI embedder for tests to avoid API calls
-    let daily_review_config = DailyReviewRuntimeConfig::from_env();
-    let weekly_review_config = WeeklyReviewRuntimeConfig::from_env();
-    let entry_extraction_config = JournalEntryExtractionRuntimeConfig::from_env();
-    let signal_runtime_config = DailyReviewSignalRuntimeConfig::from_env();
+    // No OpenAI key: tests must not construct an embedder or call out.
+    let mut config = cli.serve_config().unwrap();
+    config.openai_api_key = None;
     let shutdown = CancellationToken::new();
 
     // 3. Instantiate the registry with the custom base directory
-    let registry = JournalServiceRegistry::new(JournalServiceRegistryConfig {
-        config,
-        embedding_config,
-        entry_extraction_config,
-        daily_review_config,
-        weekly_review_config,
-        signal_runtime_config,
-        delivery_configured: false,
-        shutdown,
-    })
-    .with_base_dir(temp_base_dir.clone());
+    let registry = JournalServiceRegistry::new(JournalServiceRegistryConfig { config, shutdown })
+        .with_base_dir(temp_base_dir.clone());
 
     // 4. Send message for User A (chat_id: "user_a")
     let msg_a = IncomingMessage {
@@ -153,14 +134,10 @@ async fn test_multiuser_database_isolation_and_routing() {
     // 7. Verify Startup Database Discovery
     // Create a new registry pointing to the same directory
     // This simulates starting up Froid with existing tenant databases on disk.
+    let mut restart_config = cli.serve_config().unwrap();
+    restart_config.openai_api_key = None;
     let registry_restart = JournalServiceRegistry::new(JournalServiceRegistryConfig {
-        config: cli.serve_config().unwrap(),
-        embedding_config: None,
-        entry_extraction_config: JournalEntryExtractionRuntimeConfig::from_env(),
-        daily_review_config: DailyReviewRuntimeConfig::from_env(),
-        weekly_review_config: WeeklyReviewRuntimeConfig::from_env(),
-        signal_runtime_config: DailyReviewSignalRuntimeConfig::from_env(),
-        delivery_configured: false,
+        config: restart_config,
         shutdown: CancellationToken::new(),
     })
     .with_base_dir(temp_base_dir.clone());
