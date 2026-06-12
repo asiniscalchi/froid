@@ -156,9 +156,8 @@ impl SqliteDailyReviewEmbeddingRepository {
         Ok(count as u32)
     }
 
-    async fn search_for_user(
+    async fn search(
         &self,
-        _user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
         from_date: Option<NaiveDate>,
@@ -259,17 +258,15 @@ impl EmbeddingIndex<i64> for SqliteDailyReviewEmbeddingRepository {
             .map_err(Into::into)
     }
 
-    async fn search_for_user(
+    async fn search(
         &self,
-        user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
         from_date: Option<NaiveDate>,
         to_date_exclusive: Option<NaiveDate>,
         limit: usize,
     ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
-        self.search_for_user(
-            user_id,
+        self.search(
             embedding,
             embedding_model,
             from_date,
@@ -467,7 +464,7 @@ mod tests {
 
         let query = directional_embedding(1);
         let results = embedding_repo
-            .search_for_user("user-1", &query, TEST_EMBEDDING_MODEL, None, None, 10)
+            .search(&query, TEST_EMBEDDING_MODEL, None, None, 10)
             .await
             .unwrap();
 

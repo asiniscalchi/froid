@@ -9,7 +9,7 @@ use froid::{
         review::signals::wiring::DailyReviewSignalRuntimeConfig,
         week_review::WeeklyReviewRuntimeConfig,
     },
-    messages::{IncomingMessage, MessageSource, SINGLE_USER_ID},
+    messages::{IncomingMessage, MessageSource},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -60,7 +60,6 @@ async fn test_multiuser_database_isolation_and_routing() {
         source: MessageSource::Telegram,
         source_conversation_id: "user_a".to_string(),
         source_message_id: "msg_1".to_string(),
-        user_id: SINGLE_USER_ID.to_string(),
         text: "Today was a productive day writing Rust integration tests.".to_string(),
         received_at: chrono::Utc::now(),
     };
@@ -86,7 +85,6 @@ async fn test_multiuser_database_isolation_and_routing() {
         source: MessageSource::Telegram,
         source_conversation_id: "user_b".to_string(),
         source_message_id: "msg_2".to_string(),
-        user_id: SINGLE_USER_ID.to_string(),
         text: "I spent the afternoon gardening in the backyard.".to_string(),
         received_at: chrono::Utc::now(),
     };
@@ -112,7 +110,6 @@ async fn test_multiuser_database_isolation_and_routing() {
     let cmd_a = JournalCommandRequest {
         source: MessageSource::Telegram,
         source_conversation_id: "user_a".to_string(),
-        user_id: SINGLE_USER_ID.to_string(),
         received_at: chrono::Utc::now(),
         command: JournalCommand::Recent {
             requested_limit: 10,
@@ -135,7 +132,6 @@ async fn test_multiuser_database_isolation_and_routing() {
     let cmd_b = JournalCommandRequest {
         source: MessageSource::Telegram,
         source_conversation_id: "user_b".to_string(),
-        user_id: SINGLE_USER_ID.to_string(),
         received_at: chrono::Utc::now(),
         command: JournalCommand::Recent {
             requested_limit: 10,

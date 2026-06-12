@@ -7,7 +7,7 @@ use crate::journal::repository::JournalRepository;
 use super::semantic::SemanticJournalSearcher;
 use super::types::{
     AnalyzerError, GetRecentRequest, JournalEntryView, MAX_RECENT_LIMIT, MAX_SEMANTIC_LIMIT,
-    MAX_TEXT_SEARCH_LIMIT, SearchSemanticRequest, SearchTextRequest, SemanticHit, UserContext,
+    MAX_TEXT_SEARCH_LIMIT, SearchSemanticRequest, SearchTextRequest, SemanticHit,
 };
 use super::validation::{validate_limit, validate_optional_range};
 
@@ -15,29 +15,22 @@ use super::validation::{validate_limit, validate_optional_range};
 pub trait JournalReadService: Send + Sync {
     async fn get_recent(
         &self,
-        ctx: &UserContext,
         request: GetRecentRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError>;
 
     async fn search_text(
         &self,
-        ctx: &UserContext,
         request: SearchTextRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError>;
 
     async fn search_semantic(
         &self,
-        ctx: &UserContext,
         request: SearchSemanticRequest,
     ) -> Result<Vec<SemanticHit>, AnalyzerError>;
 
     /// Return the journal entry with the given id, or `None` if it does not
     /// exist (or does not belong to this user).
-    async fn get_by_id(
-        &self,
-        ctx: &UserContext,
-        id: &str,
-    ) -> Result<Option<JournalEntryView>, AnalyzerError>;
+    async fn get_by_id(&self, id: &str) -> Result<Option<JournalEntryView>, AnalyzerError>;
 }
 
 #[derive(Clone)]
@@ -63,7 +56,6 @@ fn map_storage_error(err: sqlx::Error) -> AnalyzerError {
 impl JournalReadService for DefaultJournalReadService {
     async fn get_recent(
         &self,
-        _ctx: &UserContext,
         request: GetRecentRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_RECENT_LIMIT)?;
@@ -90,7 +82,6 @@ impl JournalReadService for DefaultJournalReadService {
 
     async fn search_text(
         &self,
-        _ctx: &UserContext,
         request: SearchTextRequest,
     ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_TEXT_SEARCH_LIMIT)?;
@@ -113,7 +104,6 @@ impl JournalReadService for DefaultJournalReadService {
 
     async fn search_semantic(
         &self,
-        ctx: &UserContext,
         request: SearchSemanticRequest,
     ) -> Result<Vec<SemanticHit>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_SEMANTIC_LIMIT)?;
@@ -128,7 +118,6 @@ impl JournalReadService for DefaultJournalReadService {
         let hits = self
             .semantic
             .search(
-                &ctx.user_id,
                 trimmed,
                 request.from_date,
                 request.to_date_exclusive,
@@ -139,11 +128,7 @@ impl JournalReadService for DefaultJournalReadService {
         Ok(hits)
     }
 
-    async fn get_by_id(
-        &self,
-        _ctx: &UserContext,
-        id: &str,
-    ) -> Result<Option<JournalEntryView>, AnalyzerError> {
+    async fn get_by_id(&self, id: &str) -> Result<Option<JournalEntryView>, AnalyzerError> {
         let mut rows = self
             .repository
             .fetch_by_ids(&[id.to_string()])
@@ -212,7 +197,6 @@ mod tests {
     impl SemanticJournalSearcher for StubSemanticSearcher {
         async fn search(
             &self,
-            _user_id: &str,
             _query: &str,
             from_date: Option<NaiveDate>,
             to_date_exclusive: Option<NaiveDate>,
@@ -249,10 +233,6 @@ mod tests {
         }
     }
 
-    fn ctx() -> UserContext {
-        UserContext::new("user-1")
-    }
-
     fn at(y: i32, m: u32, d: u32, h: u32, mi: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(y, m, d, h, mi, 0).unwrap()
     }
@@ -262,7 +242,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: source_message_id.to_string(),
-            user_id: "user-1".to_string(),
             text: text.to_string(),
             received_at,
         }
@@ -295,7 +274,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service.get_recent(&ctx(), recent(10)).await.unwrap();
+        let result = service.get_recent(recent(10)).await.unwrap();
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].text, "second");
@@ -321,7 +300,7 @@ mod tests {
             from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
             to_date_exclusive: Some(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()),
         };
-        let result = service.get_recent(&ctx(), req).await.unwrap();
+        let result = service.get_recent(req).await.unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "in");
@@ -342,7 +321,7 @@ mod tests {
             from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
             to_date_exclusive: None,
         };
-        let result = service.get_recent(&ctx(), req).await.unwrap();
+        let result = service.get_recent(req).await.unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "in");
@@ -351,7 +330,7 @@ mod tests {
     #[tokio::test]
     async fn get_recent_rejects_zero_limit() {
         let (service, _) = setup().await;
-        let err = service.get_recent(&ctx(), recent(0)).await.unwrap_err();
+        let err = service.get_recent(recent(0)).await.unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
     }
 
@@ -359,7 +338,7 @@ mod tests {
     async fn get_recent_rejects_limit_above_max() {
         let (service, _) = setup().await;
         let err = service
-            .get_recent(&ctx(), recent(MAX_RECENT_LIMIT + 1))
+            .get_recent(recent(MAX_RECENT_LIMIT + 1))
             .await
             .unwrap_err();
         assert!(matches!(err, AnalyzerError::LimitTooLarge { .. }));
@@ -373,7 +352,7 @@ mod tests {
             from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()),
             to_date_exclusive: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
         };
-        let err = service.get_recent(&ctx(), req).await.unwrap_err();
+        let err = service.get_recent(req).await.unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
     }
 
@@ -387,14 +366,13 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "99".to_string(),
             source_message_id: "2".to_string(),
-            user_id: "user-2".to_string(),
             text: "theirs".to_string(),
             received_at: at(2026, 4, 28, 11, 0),
         })
         .await
         .unwrap();
 
-        let result = service.get_recent(&ctx(), recent(10)).await.unwrap();
+        let result = service.get_recent(recent(10)).await.unwrap();
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].text, "theirs");
@@ -411,7 +389,7 @@ mod tests {
             .expect("entry stored");
 
         let result = service
-            .get_by_id(&ctx(), &id)
+            .get_by_id(&id)
             .await
             .unwrap()
             .expect("entry present");
@@ -423,7 +401,7 @@ mod tests {
     #[tokio::test]
     async fn get_by_id_returns_none_when_missing() {
         let (service, _) = setup().await;
-        let result = service.get_by_id(&ctx(), "missing").await.unwrap();
+        let result = service.get_by_id("missing").await.unwrap();
         assert!(result.is_none());
     }
 
@@ -441,10 +419,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service
-            .search_text(&ctx(), search("ANXIOUS", 10))
-            .await
-            .unwrap();
+        let result = service.search_text(search("ANXIOUS", 10)).await.unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "felt anxious before the call");
@@ -453,10 +428,7 @@ mod tests {
     #[tokio::test]
     async fn search_text_trims_whitespace_and_rejects_empty_query() {
         let (service, _) = setup().await;
-        let err = service
-            .search_text(&ctx(), search("   ", 10))
-            .await
-            .unwrap_err();
+        let err = service.search_text(search("   ", 10)).await.unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
     }
 
@@ -464,7 +436,7 @@ mod tests {
     async fn search_text_rejects_limit_above_max() {
         let (service, _) = setup().await;
         let err = service
-            .search_text(&ctx(), search("x", MAX_TEXT_SEARCH_LIMIT + 1))
+            .search_text(search("x", MAX_TEXT_SEARCH_LIMIT + 1))
             .await
             .unwrap_err();
         assert!(matches!(err, AnalyzerError::LimitTooLarge { .. }));
@@ -480,17 +452,13 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "99".to_string(),
             source_message_id: "2".to_string(),
-            user_id: "user-2".to_string(),
             text: "theirs matches".to_string(),
             received_at: at(2026, 4, 28, 11, 0),
         })
         .await
         .unwrap();
 
-        let result = service
-            .search_text(&ctx(), search("matches", 10))
-            .await
-            .unwrap();
+        let result = service.search_text(search("matches", 10)).await.unwrap();
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].text, "theirs matches");
@@ -513,7 +481,7 @@ mod tests {
             from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
             to_date_exclusive: Some(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()),
         };
-        let result = service.search_text(&ctx(), req).await.unwrap();
+        let result = service.search_text(req).await.unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "match within");
@@ -530,7 +498,7 @@ mod tests {
         let (service, _) = setup_with_semantic(Arc::new(stub.clone())).await;
 
         let result = service
-            .search_semantic(&ctx(), semantic_req("anxiety", 5))
+            .search_semantic(semantic_req("anxiety", 5))
             .await
             .unwrap();
 
@@ -543,7 +511,7 @@ mod tests {
     async fn search_semantic_rejects_zero_limit() {
         let (service, _) = setup().await;
         let err = service
-            .search_semantic(&ctx(), semantic_req("x", 0))
+            .search_semantic(semantic_req("x", 0))
             .await
             .unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
@@ -553,7 +521,7 @@ mod tests {
     async fn search_semantic_rejects_limit_above_max() {
         let (service, _) = setup().await;
         let err = service
-            .search_semantic(&ctx(), semantic_req("x", MAX_SEMANTIC_LIMIT + 1))
+            .search_semantic(semantic_req("x", MAX_SEMANTIC_LIMIT + 1))
             .await
             .unwrap_err();
         assert!(matches!(err, AnalyzerError::LimitTooLarge { .. }));
@@ -563,7 +531,7 @@ mod tests {
     async fn search_semantic_rejects_blank_query() {
         let (service, _) = setup().await;
         let err = service
-            .search_semantic(&ctx(), semantic_req("   ", 5))
+            .search_semantic(semantic_req("   ", 5))
             .await
             .unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
@@ -578,7 +546,7 @@ mod tests {
             from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()),
             to_date_exclusive: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
         };
-        let err = service.search_semantic(&ctx(), req).await.unwrap_err();
+        let err = service.search_semantic(req).await.unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
     }
 
@@ -598,7 +566,7 @@ mod tests {
             from_date: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
             to_date_exclusive: Some(NaiveDate::from_ymd_opt(2026, 4, 29).unwrap()),
         };
-        let result = service.search_semantic(&ctx(), req).await.unwrap();
+        let result = service.search_semantic(req).await.unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "in-1");
@@ -618,10 +586,7 @@ mod tests {
         let stub = StubSemanticSearcher::with_hits(vec![]);
         let (service, _) = setup_with_semantic(Arc::new(stub.clone())).await;
 
-        let _ = service
-            .search_semantic(&ctx(), semantic_req("x", 3))
-            .await
-            .unwrap();
+        let _ = service.search_semantic(semantic_req("x", 3)).await.unwrap();
 
         assert_eq!(stub.last_limit(), Some(3));
     }

@@ -80,7 +80,7 @@ mod tests {
 
     use super::*;
     use crate::database;
-    use crate::journal::analyzer::types::{AnalyzerError, SemanticHit, UserContext};
+    use crate::journal::analyzer::types::{AnalyzerError, SemanticHit};
 
     struct StubSemanticSearcher;
 
@@ -88,7 +88,6 @@ mod tests {
     impl SemanticJournalSearcher for StubSemanticSearcher {
         async fn search(
             &self,
-            _user_id: &str,
             _query: &str,
             _from_date: Option<chrono::NaiveDate>,
             _to_date_exclusive: Option<chrono::NaiveDate>,
@@ -133,11 +132,9 @@ mod tests {
     async fn registered_tools_are_dispatchable_by_name() {
         let pool = pool().await;
         let components = build_analyzer_mcp_components(pool, Arc::new(StubSemanticSearcher));
-        let ctx = UserContext::new("u");
-
         let result = components
             .registry
-            .dispatch("journal_get_recent", &ctx, serde_json::json!({"limit": 5}))
+            .dispatch("journal_get_recent", serde_json::json!({"limit": 5}))
             .await
             .unwrap();
         assert!(result["entries"].is_array());

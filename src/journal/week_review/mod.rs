@@ -16,7 +16,6 @@ use crate::journal::review::signals::types::DailyReviewSignal;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeeklyReview {
     pub id: i64,
-    pub user_id: String,
     pub week_start_date: NaiveDate,
     pub review_text: Option<String>,
     pub model: String,

@@ -47,43 +47,29 @@ impl JournalService {
             }),
             JournalCommand::Last => self.last(request).await,
             JournalCommand::Undo => self.undo(request).await,
-            JournalCommand::Recent { requested_limit } => {
-                self.recent(&request.user_id, *requested_limit).await
-            }
+            JournalCommand::Recent { requested_limit } => self.recent(*requested_limit).await,
             JournalCommand::RecentUsage => Ok(OutgoingMessage {
                 text: recent_usage_response(),
             }),
-            JournalCommand::Today => {
-                self.today(&request.user_id, request.received_at.date_naive())
-                    .await
+            JournalCommand::Today => self.today(request.received_at.date_naive()).await,
+            JournalCommand::Stats => self.stats(request.received_at.date_naive()).await,
+            JournalCommand::Status => self.status(request.received_at.date_naive()).await,
+            JournalCommand::DayReviewLast => {
+                Ok(self.day_review_last(request.received_at.date_naive()).await)
             }
-            JournalCommand::Stats => {
-                self.stats(&request.user_id, request.received_at.date_naive())
-                    .await
-            }
-            JournalCommand::Status => {
-                self.status(&request.user_id, request.received_at.date_naive())
-                    .await
-            }
-            JournalCommand::DayReviewLast => Ok(self
-                .day_review_last(&request.user_id, request.received_at.date_naive())
-                .await),
             JournalCommand::WeekReviewLast => Ok(self
-                .week_review_last(&request.user_id, request.received_at.date_naive())
+                .week_review_last(request.received_at.date_naive())
                 .await),
-            JournalCommand::Search { query } => {
-                Ok(self.search_command(&request.user_id, query).await)
-            }
+            JournalCommand::Search { query } => Ok(self.search_command(query).await),
             JournalCommand::SearchUsage => Ok(OutgoingMessage {
                 text: search_usage_response(),
             }),
         }
     }
 
-    async fn day_review_last(&self, user_id: &str, today: chrono::NaiveDate) -> OutgoingMessage {
+    async fn day_review_last(&self, today: chrono::NaiveDate) -> OutgoingMessage {
         let yesterday = today - Duration::days(1);
         self.run_review(
-            user_id,
             yesterday,
             |r| format_daily_review_for_date(r, yesterday),
             daily_review_not_available_for_date_response(yesterday),
@@ -93,7 +79,6 @@ impl JournalService {
 
     async fn run_review(
         &self,
-        user_id: &str,
         date: chrono::NaiveDate,
         format_review: impl Fn(&DailyReview) -> String,
         not_found_text: String,
@@ -104,7 +89,7 @@ impl JournalService {
             };
         };
 
-        match daily_review.fetch_review(user_id, date).await {
+        match daily_review.fetch_review(date).await {
             Ok(Some(review)) => OutgoingMessage {
                 text: format_review(&review),
             },
@@ -120,7 +105,7 @@ impl JournalService {
         }
     }
 
-    async fn week_review_last(&self, user_id: &str, today: NaiveDate) -> OutgoingMessage {
+    async fn week_review_last(&self, today: NaiveDate) -> OutgoingMessage {
         let Some(weekly_review) = &self.weekly_review else {
             return OutgoingMessage {
                 text: weekly_review_unavailable_response(),
@@ -129,7 +114,7 @@ impl JournalService {
 
         let week_start = previous_iso_week_monday(today);
 
-        match weekly_review.fetch_review(user_id, week_start).await {
+        match weekly_review.fetch_review(week_start).await {
             Ok(Some(review)) => OutgoingMessage {
                 text: format_weekly_review_for_week(&review, week_start),
             },
@@ -145,14 +130,14 @@ impl JournalService {
         }
     }
 
-    async fn search_command(&self, user_id: &str, query: &str) -> OutgoingMessage {
+    async fn search_command(&self, query: &str) -> OutgoingMessage {
         let Some(search) = &self.search else {
             return OutgoingMessage {
                 text: search_unavailable_response(),
             };
         };
 
-        match search.search(user_id, query).await {
+        match search.search(query).await {
             Ok(results) if results.is_empty() => OutgoingMessage {
                 text: search_empty_response(),
             },
@@ -197,7 +182,7 @@ impl JournalService {
         })
     }
 
-    async fn recent(&self, _user_id: &str, limit: u32) -> Result<OutgoingMessage, sqlx::Error> {
+    async fn recent(&self, limit: u32) -> Result<OutgoingMessage, sqlx::Error> {
         let limit = limit.min(MAX_RECENT_LIMIT);
         let entries = self.repository.fetch_recent(limit).await?;
 
@@ -212,11 +197,7 @@ impl JournalService {
         })
     }
 
-    async fn today(
-        &self,
-        _user_id: &str,
-        date: chrono::NaiveDate,
-    ) -> Result<OutgoingMessage, sqlx::Error> {
+    async fn today(&self, date: chrono::NaiveDate) -> Result<OutgoingMessage, sqlx::Error> {
         let entries = self.repository.fetch_today(date).await?;
 
         if entries.is_empty() {
@@ -230,11 +211,7 @@ impl JournalService {
         })
     }
 
-    async fn stats(
-        &self,
-        _user_id: &str,
-        today: chrono::NaiveDate,
-    ) -> Result<OutgoingMessage, sqlx::Error> {
+    async fn stats(&self, today: chrono::NaiveDate) -> Result<OutgoingMessage, sqlx::Error> {
         let stats = self.repository.stats(today).await?;
 
         Ok(OutgoingMessage {
@@ -242,13 +219,9 @@ impl JournalService {
         })
     }
 
-    async fn status(
-        &self,
-        user_id: &str,
-        today: chrono::NaiveDate,
-    ) -> Result<OutgoingMessage, sqlx::Error> {
+    async fn status(&self, today: chrono::NaiveDate) -> Result<OutgoingMessage, sqlx::Error> {
         let journal = self.repository.stats(today).await?;
-        let embeddings = self.embedding_status(user_id).await;
+        let embeddings = self.embedding_status().await;
         let daily_review = self.daily_review_status();
 
         Ok(OutgoingMessage {
@@ -260,7 +233,7 @@ impl JournalService {
         })
     }
 
-    async fn embedding_status(&self, user_id: &str) -> EmbeddingStatus {
+    async fn embedding_status(&self) -> EmbeddingStatus {
         let semantic_search = if self.search.is_some() && self.embedding_status_config.is_some() {
             SemanticSearchStatus::Enabled
         } else {
@@ -272,10 +245,7 @@ impl JournalService {
             self.pending_embedding_counter.as_ref(),
         ) {
             (Some(config), Some(counter)) => {
-                match counter
-                    .count_entries_missing_embedding_for_user(user_id, &config.model)
-                    .await
-                {
+                match counter.count_entries_missing_embedding(&config.model).await {
                     Ok(count) => Some(count),
                     Err(error) => {
                         warn!(%error, "failed to count pending embeddings for status");

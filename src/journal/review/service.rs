@@ -43,13 +43,11 @@ pub struct DailyReviewService {
 pub trait DailyReviewRunner: Send + Sync {
     async fn review_day(
         &self,
-        user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<DailyReviewResult, DailyReviewServiceError>;
 
     async fn fetch_review(
         &self,
-        user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<Option<DailyReview>, DailyReviewServiceError>;
 }
@@ -74,7 +72,6 @@ impl DailyReviewService {
 
     pub async fn review_day(
         &self,
-        user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<DailyReviewResult, DailyReviewServiceError> {
         let existing = self.daily_reviews.find_by_user_and_date(utc_date).await?;
@@ -89,9 +86,8 @@ impl DailyReviewService {
             return Ok(DailyReviewResult::Existing(review.clone()));
         }
 
-        let entries_with_extractions: Vec<JournalEntryWithExtraction> = self
-            .fetch_entries_with_extractions(user_id, utc_date)
-            .await?;
+        let entries_with_extractions: Vec<JournalEntryWithExtraction> =
+            self.fetch_entries_with_extractions(utc_date).await?;
         if entries_with_extractions.is_empty() {
             return Ok(DailyReviewResult::EmptyDay);
         }
@@ -108,13 +104,7 @@ impl DailyReviewService {
                 let review_text = review_text.trim();
                 if review_text.is_empty() {
                     return self
-                        .store_failed_review(
-                            user_id,
-                            utc_date,
-                            model,
-                            &prompt_version,
-                            EMPTY_REVIEW_ERROR,
-                        )
+                        .store_failed_review(utc_date, model, &prompt_version, EMPTY_REVIEW_ERROR)
                         .await;
                 }
 
@@ -127,7 +117,7 @@ impl DailyReviewService {
             Err(error) => {
                 let prompt_version = self.generator.prompt_version();
                 let error_message = error.to_string();
-                self.store_failed_review(user_id, utc_date, model, &prompt_version, &error_message)
+                self.store_failed_review(utc_date, model, &prompt_version, &error_message)
                     .await
             }
         }
@@ -135,7 +125,6 @@ impl DailyReviewService {
 
     pub async fn fetch_review(
         &self,
-        _user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
         let review = self.daily_reviews.find_by_user_and_date(utc_date).await?;
@@ -149,7 +138,6 @@ impl DailyReviewService {
 
     async fn fetch_entries_with_extractions(
         &self,
-        _user_id: &str,
         date: NaiveDate,
     ) -> Result<Vec<JournalEntryWithExtraction>, DailyReviewServiceError> {
         let entries = self.journal_entries.fetch_today(date).await?;
@@ -178,7 +166,6 @@ impl DailyReviewService {
 
     async fn store_failed_review(
         &self,
-        user_id: &str,
         utc_date: NaiveDate,
         model: &str,
         prompt_version: &str,
@@ -188,7 +175,6 @@ impl DailyReviewService {
             .upsert_failed(utc_date, model, prompt_version, error_message)
             .await?;
         Ok(DailyReviewResult::GenerationFailed(DailyReviewFailure {
-            user_id: user_id.to_string(),
             review_date: utc_date,
             model: model.to_string(),
             prompt_version: prompt_version.to_string(),
@@ -201,18 +187,16 @@ impl DailyReviewService {
 impl DailyReviewRunner for DailyReviewService {
     async fn review_day(
         &self,
-        user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<DailyReviewResult, DailyReviewServiceError> {
-        DailyReviewService::review_day(self, user_id, utc_date).await
+        DailyReviewService::review_day(self, utc_date).await
     }
 
     async fn fetch_review(
         &self,
-        user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
-        DailyReviewService::fetch_review(self, user_id, utc_date).await
+        DailyReviewService::fetch_review(self, utc_date).await
     }
 }
 
@@ -272,7 +256,6 @@ mod tests {
     }
 
     fn incoming(
-        user_id: &str,
         source_message_id: &str,
         text: &str,
         received_at: chrono::DateTime<Utc>,
@@ -281,7 +264,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: source_message_id.to_string(),
-            user_id: user_id.to_string(),
             text: text.to_string(),
             received_at,
         }
@@ -289,7 +271,6 @@ mod tests {
 
     fn at_date(day: u32, source_message_id: &str, text: &str) -> IncomingMessage {
         incoming(
-            "user-1",
             source_message_id,
             text,
             Utc.with_ymd_and_hms(2026, 4, day, 10, 0, 0).unwrap(),
@@ -312,7 +293,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service.review_day("user-1", date()).await.unwrap();
+        let result = service.review_day(date()).await.unwrap();
 
         assert_eq!(result, DailyReviewResult::Existing(existing));
         assert_eq!(generator.calls(), 0);
@@ -331,7 +312,7 @@ mod tests {
             .await
             .unwrap();
 
-        let review = generated_review(service.review_day("user-1", date()).await.unwrap());
+        let review = generated_review(service.review_day(date()).await.unwrap());
 
         assert_eq!(review.review_text, Some("generated review".to_string()));
         assert_eq!(review.status, DailyReviewStatus::Completed);
@@ -357,12 +338,11 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service.review_day("user-1", date()).await.unwrap();
+        let result = service.review_day(date()).await.unwrap();
 
         assert_eq!(
             result,
             DailyReviewResult::GenerationFailed(DailyReviewFailure {
-                user_id: "user-1".to_string(),
                 review_date: date(),
                 model: "fake-review-model".to_string(),
                 prompt_version: "fake-prompt-v1".to_string(),
@@ -397,7 +377,7 @@ mod tests {
             .await
             .unwrap();
 
-        let review = generated_review(service.review_day("user-1", date()).await.unwrap());
+        let review = generated_review(service.review_day(date()).await.unwrap());
 
         assert_eq!(generator.calls(), 1);
         assert_eq!(review.id, existing.id);
@@ -410,7 +390,7 @@ mod tests {
         let (service, _daily_reviews, _journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::succeeding("generated review")).await;
 
-        let result = service.review_day("user-1", date()).await.unwrap();
+        let result = service.review_day(date()).await.unwrap();
 
         assert_eq!(result, DailyReviewResult::EmptyDay);
         assert_eq!(generator.calls(), 0);
@@ -425,12 +405,11 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service.review_day("user-1", date()).await.unwrap();
+        let result = service.review_day(date()).await.unwrap();
 
         assert_eq!(
             result,
             DailyReviewResult::GenerationFailed(DailyReviewFailure {
-                user_id: "user-1".to_string(),
                 review_date: date(),
                 model: "fake-review-model".to_string(),
                 prompt_version: "fake-prompt-v1".to_string(),
@@ -465,7 +444,7 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            service.review_day("user-1", date()).await.unwrap(),
+            service.review_day(date()).await.unwrap(),
             DailyReviewResult::GenerationFailed(_)
         ));
         let failed = daily_reviews
@@ -475,7 +454,7 @@ mod tests {
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
 
-        let completed = generated_review(service.review_day("user-1", date()).await.unwrap());
+        let completed = generated_review(service.review_day(date()).await.unwrap());
 
         assert_eq!(generator.calls(), 2);
         assert_eq!(completed.id, failed.id);
@@ -487,7 +466,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_date_reviews_share_single_user_scope() {
+    async fn repeated_review_day_returns_existing_without_regenerating() {
         let (service, _daily_reviews, journal_entries, _extractions, generator) =
             setup(FakeReviewGenerator::new(vec![
                 Ok("user one review".to_string()),
@@ -496,7 +475,6 @@ mod tests {
             .await;
         journal_entries
             .store(&incoming(
-                "user-1",
                 "1",
                 "user one entry",
                 Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
@@ -505,7 +483,6 @@ mod tests {
             .unwrap();
         journal_entries
             .store(&incoming(
-                "user-2",
                 "2",
                 "user two entry",
                 Utc.with_ymd_and_hms(2026, 4, 28, 11, 0, 0).unwrap(),
@@ -513,15 +490,14 @@ mod tests {
             .await
             .unwrap();
 
-        let user_one = generated_review(service.review_day("user-1", date()).await.unwrap());
-        let user_two = match service.review_day("user-2", date()).await.unwrap() {
+        let first = generated_review(service.review_day(date()).await.unwrap());
+        let second = match service.review_day(date()).await.unwrap() {
             DailyReviewResult::Existing(review) => review,
             other => panic!("expected existing review, got {other:?}"),
         };
 
-        assert_eq!(user_one.review_text, Some("user one review".to_string()));
-        assert_eq!(user_two.review_text, Some("user one review".to_string()));
-        assert_eq!(user_one.user_id, user_two.user_id);
+        assert_eq!(first.review_text, Some("user one review".to_string()));
+        assert_eq!(second.review_text, Some("user one review".to_string()));
         assert_eq!(generator.calls(), 1);
     }
 
@@ -542,7 +518,7 @@ mod tests {
             .await
             .unwrap();
 
-        let review = generated_review(service.review_day("user-1", date()).await.unwrap());
+        let review = generated_review(service.review_day(date()).await.unwrap());
 
         assert_eq!(review.review_date, date());
         assert_eq!(generator.calls(), 1);
@@ -570,8 +546,8 @@ mod tests {
             .await
             .unwrap();
 
-        let first = generated_review(service.review_day("user-1", date()).await.unwrap());
-        let second = generated_review(service.review_day("user-1", next_date).await.unwrap());
+        let first = generated_review(service.review_day(date()).await.unwrap());
+        let second = generated_review(service.review_day(next_date).await.unwrap());
 
         assert_eq!(first.review_date, date());
         assert_eq!(second.review_date, next_date);
@@ -588,7 +564,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service.fetch_review("user-1", date()).await.unwrap();
+        let result = service.fetch_review(date()).await.unwrap();
 
         assert_eq!(result.unwrap().review_text, Some("review text".to_string()));
     }
@@ -598,7 +574,7 @@ mod tests {
         let (service, _daily_reviews, _journal_entries, _extractions, _generator) =
             setup(FakeReviewGenerator::succeeding("any")).await;
 
-        let result = service.fetch_review("user-1", date()).await.unwrap();
+        let result = service.fetch_review(date()).await.unwrap();
 
         assert!(result.is_none());
     }
@@ -612,7 +588,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service.fetch_review("user-1", date()).await.unwrap();
+        let result = service.fetch_review(date()).await.unwrap();
 
         assert!(result.is_none());
     }
@@ -637,7 +613,7 @@ mod tests {
             PoolClosingGenerator { pool },
         );
 
-        let error = service.review_day("user-1", date()).await.unwrap_err();
+        let error = service.review_day(date()).await.unwrap_err();
 
         assert!(matches!(error, DailyReviewServiceError::Storage(_)));
     }
@@ -672,7 +648,6 @@ mod tests {
 
         let entry_id = journal_entries
             .store(&incoming(
-                "user-1",
                 "1",
                 "entry with extraction",
                 Utc.with_ymd_and_hms(2026, 4, 28, 10, 0, 0).unwrap(),
@@ -682,7 +657,6 @@ mod tests {
             .unwrap();
         journal_entries
             .store(&incoming(
-                "user-1",
                 "2",
                 "entry without extraction",
                 Utc.with_ymd_and_hms(2026, 4, 28, 10, 1, 0).unwrap(),
@@ -712,7 +686,7 @@ mod tests {
             .await
             .unwrap();
 
-        service.review_day("user-1", date()).await.unwrap();
+        service.review_day(date()).await.unwrap();
 
         let seen = generator.entries_seen();
         assert_eq!(seen.len(), 1);

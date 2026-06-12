@@ -10,7 +10,6 @@ use super::{Tool, ToolError, deserialize_input, schema_value, serialize_output};
 use crate::journal::analyzer::journal::JournalReadService;
 use crate::journal::analyzer::types::{
     GetRecentRequest, JournalEntryView, SearchSemanticRequest, SearchTextRequest, SemanticHit,
-    UserContext,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -68,18 +67,15 @@ impl Tool for JournalGetRecentTool {
     fn input_schema(&self) -> Value {
         schema_value::<GetRecentInput>()
     }
-    async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
+    async fn dispatch(&self, args: Value) -> Result<Value, ToolError> {
         let input: GetRecentInput = deserialize_input(args)?;
         let entries = self
             .service
-            .get_recent(
-                ctx,
-                GetRecentRequest {
-                    limit: input.limit,
-                    from_date: input.from_date,
-                    to_date_exclusive: input.to_date_exclusive,
-                },
-            )
+            .get_recent(GetRecentRequest {
+                limit: input.limit,
+                from_date: input.from_date,
+                to_date_exclusive: input.to_date_exclusive,
+            })
             .await?;
         serialize_output(JournalEntriesOutput {
             entries: entries.into_iter().map(JournalEntryItem::from).collect(),
@@ -122,19 +118,16 @@ impl Tool for JournalSearchTextTool {
     fn input_schema(&self) -> Value {
         schema_value::<SearchTextInput>()
     }
-    async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
+    async fn dispatch(&self, args: Value) -> Result<Value, ToolError> {
         let input: SearchTextInput = deserialize_input(args)?;
         let entries = self
             .service
-            .search_text(
-                ctx,
-                SearchTextRequest {
-                    query: input.query,
-                    limit: input.limit,
-                    from_date: input.from_date,
-                    to_date_exclusive: input.to_date_exclusive,
-                },
-            )
+            .search_text(SearchTextRequest {
+                query: input.query,
+                limit: input.limit,
+                from_date: input.from_date,
+                to_date_exclusive: input.to_date_exclusive,
+            })
             .await?;
         serialize_output(JournalEntriesOutput {
             entries: entries.into_iter().map(JournalEntryItem::from).collect(),
@@ -202,19 +195,16 @@ impl Tool for JournalSearchSemanticTool {
     fn input_schema(&self) -> Value {
         schema_value::<SearchSemanticInput>()
     }
-    async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
+    async fn dispatch(&self, args: Value) -> Result<Value, ToolError> {
         let input: SearchSemanticInput = deserialize_input(args)?;
         let hits = self
             .service
-            .search_semantic(
-                ctx,
-                SearchSemanticRequest {
-                    query: input.query,
-                    limit: input.limit,
-                    from_date: input.from_date,
-                    to_date_exclusive: input.to_date_exclusive,
-                },
-            )
+            .search_semantic(SearchSemanticRequest {
+                query: input.query,
+                limit: input.limit,
+                from_date: input.from_date,
+                to_date_exclusive: input.to_date_exclusive,
+            })
             .await?;
         serialize_output(SemanticHitsOutput {
             hits: hits.into_iter().map(SemanticHitItem::from).collect(),
@@ -244,7 +234,6 @@ mod tests {
     impl JournalReadService for StubJournalService {
         async fn get_recent(
             &self,
-            _ctx: &UserContext,
             request: GetRecentRequest,
         ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
             *self.last_recent.lock().unwrap() = Some(request);
@@ -252,7 +241,6 @@ mod tests {
         }
         async fn search_text(
             &self,
-            _ctx: &UserContext,
             request: SearchTextRequest,
         ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
             *self.last_text.lock().unwrap() = Some(request);
@@ -260,23 +248,14 @@ mod tests {
         }
         async fn search_semantic(
             &self,
-            _ctx: &UserContext,
             request: SearchSemanticRequest,
         ) -> Result<Vec<SemanticHit>, AnalyzerError> {
             *self.last_semantic.lock().unwrap() = Some(request);
             Ok(self.semantic_response.lock().unwrap().clone())
         }
-        async fn get_by_id(
-            &self,
-            _ctx: &UserContext,
-            _id: &str,
-        ) -> Result<Option<JournalEntryView>, AnalyzerError> {
+        async fn get_by_id(&self, _id: &str) -> Result<Option<JournalEntryView>, AnalyzerError> {
             Ok(None)
         }
-    }
-
-    fn ctx() -> UserContext {
-        UserContext::new("user-1")
     }
 
     fn at(h: u32) -> DateTime<Utc> {
@@ -295,14 +274,11 @@ mod tests {
         let tool = JournalGetRecentTool::new(stub.clone());
 
         let out = tool
-            .dispatch(
-                &ctx(),
-                json!({
-                    "limit": 5,
-                    "from_date": "2026-04-28",
-                    "to_date_exclusive": "2026-04-29"
-                }),
-            )
+            .dispatch(json!({
+                "limit": 5,
+                "from_date": "2026-04-28",
+                "to_date_exclusive": "2026-04-29"
+            }))
             .await
             .unwrap();
 
@@ -322,7 +298,7 @@ mod tests {
         let stub = Arc::new(StubJournalService::default());
         let tool = JournalGetRecentTool::new(stub.clone());
 
-        let _ = tool.dispatch(&ctx(), json!({"limit": 3})).await.unwrap();
+        let _ = tool.dispatch(json!({"limit": 3})).await.unwrap();
 
         let captured = stub.last_recent.lock().unwrap().clone().unwrap();
         assert_eq!(captured.limit, 3);
@@ -335,7 +311,7 @@ mod tests {
         let tool = JournalGetRecentTool::new(Arc::new(StubJournalService::default()));
 
         let err = tool
-            .dispatch(&ctx(), json!({"limit": "not a number"}))
+            .dispatch(json!({"limit": "not a number"}))
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
@@ -348,39 +324,29 @@ mod tests {
         impl JournalReadService for FailingService {
             async fn get_recent(
                 &self,
-                _: &UserContext,
                 _: GetRecentRequest,
             ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
                 Err(AnalyzerError::LimitTooLarge { max: 50 })
             }
             async fn search_text(
                 &self,
-                _: &UserContext,
                 _: SearchTextRequest,
             ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
                 unreachable!()
             }
             async fn search_semantic(
                 &self,
-                _: &UserContext,
                 _: SearchSemanticRequest,
             ) -> Result<Vec<SemanticHit>, AnalyzerError> {
                 unreachable!()
             }
-            async fn get_by_id(
-                &self,
-                _: &UserContext,
-                _: &str,
-            ) -> Result<Option<JournalEntryView>, AnalyzerError> {
+            async fn get_by_id(&self, _: &str) -> Result<Option<JournalEntryView>, AnalyzerError> {
                 unreachable!()
             }
         }
         let tool = JournalGetRecentTool::new(Arc::new(FailingService));
 
-        let err = tool
-            .dispatch(&ctx(), json!({"limit": 999}))
-            .await
-            .unwrap_err();
+        let err = tool.dispatch(json!({"limit": 999})).await.unwrap_err();
 
         assert!(matches!(
             err,
@@ -399,7 +365,7 @@ mod tests {
         let tool = JournalSearchTextTool::new(stub.clone());
 
         let out = tool
-            .dispatch(&ctx(), json!({"query": "anxious", "limit": 5}))
+            .dispatch(json!({"query": "anxious", "limit": 5}))
             .await
             .unwrap();
 
@@ -421,7 +387,7 @@ mod tests {
         let tool = JournalSearchSemanticTool::new(stub.clone());
 
         let out = tool
-            .dispatch(&ctx(), json!({"query": "avoidance", "limit": 3}))
+            .dispatch(json!({"query": "avoidance", "limit": 3}))
             .await
             .unwrap();
 

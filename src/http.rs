@@ -27,7 +27,7 @@ use crate::{
     adapters::mcp::AnalyzerMcpServer,
     auth::{AuthenticatedTenant, TokenResolver, require_user_bearer},
     journal::{
-        analyzer::{DefaultSemanticJournalSearcher, UserContext, build_analyzer_mcp_components},
+        analyzer::{DefaultSemanticJournalSearcher, build_analyzer_mcp_components},
         embedding::{EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository},
         registry::JournalServiceRegistry,
         repository::JournalRepository,
@@ -59,8 +59,7 @@ fn build_tenant_router(pool: &SqlitePool, config: &TenantRouterConfig) -> Result
     ));
 
     let components = build_analyzer_mcp_components(pool.clone(), semantic);
-    let user = UserContext::new(crate::messages::SINGLE_USER_ID);
-    let server = AnalyzerMcpServer::new(components, user);
+    let server = AnalyzerMcpServer::new(components);
 
     let service = StreamableHttpService::new(
         {

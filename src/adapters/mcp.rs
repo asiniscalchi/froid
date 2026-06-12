@@ -5,9 +5,8 @@
 //! templates so a host can read a specific entry or review without going
 //! through a tool call.
 //!
-//! Every incoming MCP request is scoped to a single, fixed `UserContext`
-//! configured at startup. MCP serving is intended for local clients and the
-//! CLI rejects non-loopback bind addresses when MCP is enabled.
+//! Every incoming MCP request is served from one tenant's isolated database;
+//! the bearer token presented to the HTTP listener selects that tenant.
 
 use std::{borrow::Cow, sync::Arc};
 
@@ -25,7 +24,7 @@ use rmcp::{
 };
 
 use crate::journal::analyzer::{
-    AnalyzerMcpComponents, UserContext,
+    AnalyzerMcpComponents,
     journal::JournalReadService,
     review::ReviewReadService,
     tools::{ToolError, ToolRegistry},
@@ -43,7 +42,6 @@ pub struct AnalyzerMcpServer {
     registry: Arc<ToolRegistry>,
     journal_service: Arc<dyn JournalReadService>,
     review_service: Arc<dyn ReviewReadService>,
-    user: UserContext,
     server_info: ServerInfo,
     tools: Arc<[Tool]>,
     resource_templates: Arc<[rmcp::model::ResourceTemplate]>,
@@ -51,7 +49,7 @@ pub struct AnalyzerMcpServer {
 }
 
 impl AnalyzerMcpServer {
-    pub fn new(components: AnalyzerMcpComponents, user: UserContext) -> Self {
+    pub fn new(components: AnalyzerMcpComponents) -> Self {
         let AnalyzerMcpComponents {
             registry,
             journal_service,
@@ -99,7 +97,6 @@ impl AnalyzerMcpServer {
             registry,
             journal_service,
             review_service,
-            user,
             server_info,
             tools,
             resource_templates,
@@ -135,7 +132,7 @@ impl ServerHandler for AnalyzerMcpServer {
 
         let result = self
             .registry
-            .dispatch(request.name.as_ref(), &self.user, arguments)
+            .dispatch(request.name.as_ref(), arguments)
             .await;
         map_dispatch_result(result)
     }
@@ -199,7 +196,7 @@ impl AnalyzerMcpServer {
             ResourceRef::JournalEntry(id) => {
                 let entry = self
                     .journal_service
-                    .get_by_id(&self.user, &id)
+                    .get_by_id(&id)
                     .await
                     .map_err(analyzer_to_mcp)?
                     .ok_or_else(|| {
@@ -219,7 +216,7 @@ impl AnalyzerMcpServer {
             ResourceRef::DailyReview(date) => {
                 let review = self
                     .review_service
-                    .get_daily_review(&self.user, date)
+                    .get_daily_review(date)
                     .await
                     .map_err(analyzer_to_mcp)?
                     .ok_or_else(|| {
@@ -239,7 +236,7 @@ impl AnalyzerMcpServer {
             ResourceRef::WeeklyReview(week_start) => {
                 let review = self
                     .review_service
-                    .get_weekly_review(&self.user, week_start)
+                    .get_weekly_review(week_start)
                     .await
                     .map_err(analyzer_to_mcp)?
                     .ok_or_else(|| {
@@ -489,13 +486,13 @@ mod tests {
             self.name
         }
         fn description(&self) -> &'static str {
-            "echoes its arguments and the user_id"
+            "echoes its arguments"
         }
         fn input_schema(&self) -> Value {
             json!({"type": "object", "properties": {"x": {"type": "integer"}}})
         }
-        async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
-            Ok(json!({"user": ctx.user_id, "args": args}))
+        async fn dispatch(&self, args: Value) -> Result<Value, ToolError> {
+            Ok(json!({"args": args}))
         }
     }
 
@@ -512,7 +509,7 @@ mod tests {
         fn input_schema(&self) -> Value {
             json!({"type": "object"})
         }
-        async fn dispatch(&self, _ctx: &UserContext, _args: Value) -> Result<Value, ToolError> {
+        async fn dispatch(&self, _args: Value) -> Result<Value, ToolError> {
             Err(ToolError::Analyzer(AnalyzerError::InvalidArgument(
                 "limit must be > 0".into(),
             )))
@@ -529,30 +526,23 @@ mod tests {
     impl JournalReadService for StubJournalService {
         async fn get_recent(
             &self,
-            _ctx: &UserContext,
             _request: GetRecentRequest,
         ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
             Ok(Vec::new())
         }
         async fn search_text(
             &self,
-            _ctx: &UserContext,
             _request: SearchTextRequest,
         ) -> Result<Vec<JournalEntryView>, AnalyzerError> {
             Ok(Vec::new())
         }
         async fn search_semantic(
             &self,
-            _ctx: &UserContext,
             _request: SearchSemanticRequest,
         ) -> Result<Vec<SemanticHit>, AnalyzerError> {
             Ok(Vec::new())
         }
-        async fn get_by_id(
-            &self,
-            _ctx: &UserContext,
-            id: &str,
-        ) -> Result<Option<JournalEntryView>, AnalyzerError> {
+        async fn get_by_id(&self, id: &str) -> Result<Option<JournalEntryView>, AnalyzerError> {
             *self.last_id.lock().unwrap() = Some(id.to_string());
             Ok(self.get_by_id_response.lock().unwrap().clone())
         }
@@ -570,21 +560,18 @@ mod tests {
     impl ReviewReadService for StubReviewService {
         async fn get_daily_reviews(
             &self,
-            _ctx: &UserContext,
             _request: GetReviewsRequest,
         ) -> Result<Vec<DailyReviewView>, AnalyzerError> {
             Ok(Vec::new())
         }
         async fn get_weekly_reviews(
             &self,
-            _ctx: &UserContext,
             _request: GetReviewsRequest,
         ) -> Result<Vec<WeeklyReviewView>, AnalyzerError> {
             Ok(Vec::new())
         }
         async fn get_daily_review(
             &self,
-            _ctx: &UserContext,
             review_date: NaiveDate,
         ) -> Result<Option<DailyReviewView>, AnalyzerError> {
             *self.last_daily_date.lock().unwrap() = Some(review_date);
@@ -592,7 +579,6 @@ mod tests {
         }
         async fn get_weekly_review(
             &self,
-            _ctx: &UserContext,
             week_start: NaiveDate,
         ) -> Result<Option<WeeklyReviewView>, AnalyzerError> {
             *self.last_weekly_week.lock().unwrap() = Some(week_start);
@@ -623,13 +609,10 @@ mod tests {
     }
 
     fn server() -> AnalyzerMcpServer {
-        AnalyzerMcpServer::new(
-            components(
-                Arc::new(StubJournalService::default()),
-                Arc::new(StubReviewService::default()),
-            ),
-            UserContext::new("u-123"),
-        )
+        AnalyzerMcpServer::new(components(
+            Arc::new(StubJournalService::default()),
+            Arc::new(StubReviewService::default()),
+        ))
     }
 
     fn at(h: u32) -> DateTime<Utc> {
@@ -651,10 +634,7 @@ mod tests {
             .iter()
             .find(|t| t.name == "echo")
             .expect("echo tool present");
-        assert_eq!(
-            echo.description.as_deref(),
-            Some("echoes its arguments and the user_id")
-        );
+        assert_eq!(echo.description.as_deref(), Some("echoes its arguments"));
         let schema = serde_json::Value::Object((*echo.input_schema).clone());
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["x"].is_object());
@@ -829,7 +809,7 @@ mod tests {
         journal: Arc<StubJournalService>,
         review: Arc<StubReviewService>,
     ) -> AnalyzerMcpServer {
-        AnalyzerMcpServer::new(components(journal, review), UserContext::new("u-123"))
+        AnalyzerMcpServer::new(components(journal, review))
     }
 
     #[tokio::test]
@@ -943,17 +923,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_routes_to_registry_with_fixed_user() {
+    async fn dispatch_routes_arguments_to_registry() {
         let server = server();
         let mut args = serde_json::Map::new();
         args.insert("x".to_string(), json!(7));
         let result = server
             .registry
-            .dispatch("echo", &server.user, Value::Object(args.clone()))
+            .dispatch("echo", Value::Object(args.clone()))
             .await
             .expect("echo dispatch ok");
 
-        assert_eq!(result["user"], "u-123");
         assert_eq!(result["args"]["x"], 7);
     }
 
@@ -962,7 +941,7 @@ mod tests {
         let server = server();
         let err = server
             .registry
-            .dispatch("missing", &server.user, json!({}))
+            .dispatch("missing", json!({}))
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::UnknownTool(name) if name == "missing"));
@@ -973,7 +952,7 @@ mod tests {
         let server = server();
         let err = server
             .registry
-            .dispatch("failing", &server.user, json!({}))
+            .dispatch("failing", json!({}))
             .await
             .unwrap_err();
         assert!(matches!(

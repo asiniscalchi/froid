@@ -3,13 +3,12 @@ use std::sync::{Arc, Mutex};
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
-use crate::messages::{IncomingMessage, MessageSource, SINGLE_USER_ID};
+use crate::messages::{IncomingMessage, MessageSource};
 
 use super::entry::{JournalEntry, JournalStats, StoredJournalEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalConversation {
-    pub user_id: String,
     pub source_conversation_id: String,
 }
 
@@ -438,7 +437,6 @@ impl JournalRepository {
         Ok(rows
             .into_iter()
             .map(|row| JournalConversation {
-                user_id: SINGLE_USER_ID.to_string(),
                 source_conversation_id: row.get("source_conversation_id"),
             })
             .collect())
@@ -472,7 +470,6 @@ impl JournalRepository {
         Ok(rows
             .into_iter()
             .map(|row| JournalConversation {
-                user_id: SINGLE_USER_ID.to_string(),
                 source_conversation_id: row.get("source_conversation_id"),
             })
             .collect())

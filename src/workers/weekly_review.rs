@@ -119,11 +119,7 @@ where
         };
 
         for target in targets {
-            let review = match self
-                .review_runner
-                .review_week(&target.user_id, week_start)
-                .await
-            {
+            let review = match self.review_runner.review_week(week_start).await {
                 Ok(
                     WeeklyReviewResult::Existing(review) | WeeklyReviewResult::Generated(review),
                 ) => review,
@@ -133,7 +129,6 @@ where
                 }
                 Ok(WeeklyReviewResult::GenerationFailed(failure)) => {
                     warn!(
-                        user_id = %failure.user_id,
                         week_start = %failure.week_start_date,
                         error = %failure.error_message,
                         "weekly review generation failed during delivery"
@@ -142,8 +137,7 @@ where
                     continue;
                 }
                 Err(error) => {
-                    self.record_review_runner_error(&target.user_id, week_start, error)
-                        .await?;
+                    self.record_review_runner_error(week_start, error).await?;
                     result.failed += 1;
                     continue;
                 }
@@ -172,7 +166,6 @@ where
                         .mark_delivery_failed(week_start, &error)
                         .await?;
                     warn!(
-                        user_id = %target.user_id,
                         source_conversation_id = %target.source_conversation_id,
                         week_start = %week_start,
                         error = %error,
@@ -188,12 +181,10 @@ where
 
     async fn record_review_runner_error(
         &self,
-        _user_id: &str,
         week_start: NaiveDate,
         error: WeeklyReviewServiceError,
     ) -> Result<(), WeeklyReviewDeliveryWorkerError> {
         warn!(
-            user_id = %_user_id,
             week_start = %week_start,
             error = %error,
             "weekly review runner failed during delivery"
@@ -410,23 +401,17 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 4, 27, 12, 0, 0).unwrap() + Duration::days(offset)
     }
 
-    fn entry(
-        user_id: &str,
-        conversation_id: &str,
-        message_id: &str,
-        day_offset: i64,
-    ) -> IncomingMessage {
+    fn entry(conversation_id: &str, message_id: &str, day_offset: i64) -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: conversation_id.to_string(),
             source_message_id: message_id.to_string(),
-            user_id: user_id.to_string(),
             text: format!("entry on day {day_offset}"),
             received_at: day_within_week(day_offset),
         }
     }
 
-    async fn seed_three_daily_reviews(daily_reviews: &DailyReviewRepository, _user_id: &str) {
+    async fn seed_three_daily_reviews(daily_reviews: &DailyReviewRepository) {
         for offset in 0..3 {
             let date = week_start() + Duration::days(offset);
             daily_reviews
@@ -467,8 +452,8 @@ mod tests {
             FakeSender::succeeding(),
         )
         .await;
-        seed_three_daily_reviews(&daily, "7").await;
-        journal.store(&entry("7", "42", "1", 0)).await.unwrap();
+        seed_three_daily_reviews(&daily).await;
+        journal.store(&entry("42", "1", 0)).await.unwrap();
 
         // Tuesday — not the configured kickoff day (Monday).
         let tuesday = Utc.with_ymd_and_hms(2026, 5, 5, 9, 0, 0).unwrap();
@@ -495,8 +480,8 @@ mod tests {
             sender,
         )
         .await;
-        seed_three_daily_reviews(&daily, "7").await;
-        journal.store(&entry("7", "42", "1", 0)).await.unwrap();
+        seed_three_daily_reviews(&daily).await;
+        journal.store(&entry("42", "1", 0)).await.unwrap();
 
         // Monday after the target week.
         let monday = Utc.with_ymd_and_hms(2026, 5, 4, 6, 0, 0).unwrap();
@@ -540,7 +525,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        journal.store(&entry("7", "42", "1", 0)).await.unwrap();
+        journal.store(&entry("42", "1", 0)).await.unwrap();
 
         let result = worker.run_once_for_week(week_start()).await.unwrap();
 
@@ -561,8 +546,8 @@ mod tests {
         let sender = FakeSender::failing("telegram unavailable");
         let (worker, weekly_reviews, daily, journal, sender) =
             setup(FakeWeeklyReviewGenerator::succeeding("week review"), sender).await;
-        seed_three_daily_reviews(&daily, "7").await;
-        journal.store(&entry("7", "42", "1", 0)).await.unwrap();
+        seed_three_daily_reviews(&daily).await;
+        journal.store(&entry("42", "1", 0)).await.unwrap();
 
         let result = worker.run_once_for_week(week_start()).await.unwrap();
 
@@ -594,8 +579,8 @@ mod tests {
         let sender = FakeSender::skipped();
         let (worker, weekly_reviews, daily, journal, sender) =
             setup(FakeWeeklyReviewGenerator::succeeding("week review"), sender).await;
-        seed_three_daily_reviews(&daily, "7").await;
-        journal.store(&entry("7", "42", "1", 0)).await.unwrap();
+        seed_three_daily_reviews(&daily).await;
+        journal.store(&entry("42", "1", 0)).await.unwrap();
 
         let result = worker.run_once_for_week(week_start()).await.unwrap();
 
@@ -624,8 +609,8 @@ mod tests {
         let sender = FakeSender::succeeding();
         let (worker, weekly_reviews, daily, journal, sender) =
             setup(FakeWeeklyReviewGenerator::succeeding("ignored"), sender).await;
-        seed_three_daily_reviews(&daily, "7").await;
-        journal.store(&entry("7", "42", "1", 0)).await.unwrap();
+        seed_three_daily_reviews(&daily).await;
+        journal.store(&entry("42", "1", 0)).await.unwrap();
         weekly_reviews
             .upsert_completed(week_start(), "existing", "m", "v1", "{}")
             .await
@@ -675,8 +660,8 @@ mod tests {
             sender,
         )
         .await;
-        seed_three_daily_reviews(&daily, "7").await;
-        journal.store(&entry("7", "42", "1", 0)).await.unwrap();
+        seed_three_daily_reviews(&daily).await;
+        journal.store(&entry("42", "1", 0)).await.unwrap();
 
         let result = worker.run_once_for_week(week_start()).await.unwrap();
 

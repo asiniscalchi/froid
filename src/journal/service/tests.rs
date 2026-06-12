@@ -158,7 +158,7 @@ const TEST_MODEL: &str = "test-model";
 #[derive(Debug, Clone)]
 struct FakeDailyReviewRunner {
     fetch_result: Result<Option<DailyReview>, DailyReviewServiceError>,
-    calls: Arc<Mutex<Vec<(String, NaiveDate)>>>,
+    calls: Arc<Mutex<Vec<NaiveDate>>>,
 }
 
 impl FakeDailyReviewRunner {
@@ -175,7 +175,7 @@ impl FakeDailyReviewRunner {
         }
     }
 
-    fn calls(&self) -> Vec<(String, NaiveDate)> {
+    fn calls(&self) -> Vec<NaiveDate> {
         self.calls.lock().unwrap().clone()
     }
 }
@@ -184,7 +184,6 @@ impl FakeDailyReviewRunner {
 impl DailyReviewRunner for FakeDailyReviewRunner {
     async fn review_day(
         &self,
-        _user_id: &str,
         _utc_date: NaiveDate,
     ) -> Result<DailyReviewResult, DailyReviewServiceError> {
         Ok(DailyReviewResult::EmptyDay)
@@ -192,13 +191,9 @@ impl DailyReviewRunner for FakeDailyReviewRunner {
 
     async fn fetch_review(
         &self,
-        user_id: &str,
         utc_date: NaiveDate,
     ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((user_id.to_string(), utc_date));
+        self.calls.lock().unwrap().push(utc_date);
         self.fetch_result.clone()
     }
 }
@@ -286,9 +281,8 @@ struct FailingPendingEmbeddingCounter;
 
 #[async_trait::async_trait]
 impl PendingEmbeddingCounter for FailingPendingEmbeddingCounter {
-    async fn count_entries_missing_embedding_for_user(
+    async fn count_entries_missing_embedding(
         &self,
-        _user_id: &str,
         _embedding_model: &str,
     ) -> Result<i64, EmbeddingRepositoryError> {
         Err(EmbeddingRepositoryError::Database(
@@ -315,7 +309,6 @@ fn incoming_for_conversation(
         source: MessageSource::Telegram,
         source_conversation_id: source_conversation_id.to_string(),
         source_message_id: source_message_id.to_string(),
-        user_id: "7".to_string(),
         text: text.to_string(),
         received_at,
     }
@@ -329,7 +322,6 @@ fn command(command: JournalCommand) -> JournalCommandRequest {
     JournalCommandRequest {
         source: MessageSource::Telegram,
         source_conversation_id: "42".to_string(),
-        user_id: "7".to_string(),
         received_at: at(12, 0),
         command,
     }
@@ -338,7 +330,6 @@ fn command(command: JournalCommand) -> JournalCommandRequest {
 fn daily_review(review_text: &str) -> DailyReview {
     DailyReview {
         id: 1,
-        user_id: "7".to_string(),
         review_date: date(),
         review_text: Some(review_text.to_string()),
         model: "test-model".to_string(),
@@ -548,7 +539,6 @@ async fn status_uses_single_user_journal_stats_and_command_received_at_date() {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: "3".to_string(),
-            user_id: "8".to_string(),
             text: "other user".to_string(),
             received_at: Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
         })
@@ -559,7 +549,6 @@ async fn status_uses_single_user_journal_stats_and_command_received_at_date() {
         .command(&JournalCommandRequest {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
-            user_id: "7".to_string(),
             received_at: Utc.with_ymd_and_hms(2026, 4, 29, 12, 0, 0).unwrap(),
             command: JournalCommand::Status,
         })
@@ -622,7 +611,6 @@ async fn status_reports_configured_embedding_status_and_single_user_pending_coun
         source: MessageSource::Telegram,
         source_conversation_id: "42".to_string(),
         source_message_id: "3".to_string(),
-        user_id: "8".to_string(),
         text: "other user pending entry".to_string(),
         received_at: at(12, 0),
     })
@@ -758,7 +746,7 @@ async fn day_review_last_returns_existing_review() {
             yesterday.format("%Y-%m-%d")
         )
     );
-    assert_eq!(runner.calls(), vec![("7".to_string(), yesterday)]);
+    assert_eq!(runner.calls(), vec![yesterday]);
 }
 
 #[tokio::test]
@@ -992,7 +980,6 @@ async fn undo_deletes_latest_entry_for_current_conversation() {
         .command(&JournalCommandRequest {
             source: MessageSource::Telegram,
             source_conversation_id: "99".to_string(),
-            user_id: "7".to_string(),
             received_at: at(12, 0),
             command: JournalCommand::Last,
         })
@@ -1311,7 +1298,7 @@ async fn process_survives_panic_in_capture_time_extraction() {
 #[derive(Debug, Clone)]
 struct FakeWeeklyReviewRunner {
     fetch_result: Result<Option<WeeklyReview>, WeeklyReviewServiceError>,
-    calls: Arc<Mutex<Vec<(String, NaiveDate)>>>,
+    calls: Arc<Mutex<Vec<NaiveDate>>>,
 }
 
 impl FakeWeeklyReviewRunner {
@@ -1324,7 +1311,7 @@ impl FakeWeeklyReviewRunner {
         }
     }
 
-    fn calls(&self) -> Vec<(String, NaiveDate)> {
+    fn calls(&self) -> Vec<NaiveDate> {
         self.calls.lock().unwrap().clone()
     }
 }
@@ -1333,7 +1320,6 @@ impl FakeWeeklyReviewRunner {
 impl WeeklyReviewRunner for FakeWeeklyReviewRunner {
     async fn review_week(
         &self,
-        _user_id: &str,
         _week_start: NaiveDate,
     ) -> Result<WeeklyReviewResult, WeeklyReviewServiceError> {
         Ok(WeeklyReviewResult::SparseWeek)
@@ -1341,13 +1327,9 @@ impl WeeklyReviewRunner for FakeWeeklyReviewRunner {
 
     async fn fetch_review(
         &self,
-        user_id: &str,
         week_start: NaiveDate,
     ) -> Result<Option<WeeklyReview>, WeeklyReviewServiceError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((user_id.to_string(), week_start));
+        self.calls.lock().unwrap().push(week_start);
         self.fetch_result.clone()
     }
 }
@@ -1355,7 +1337,6 @@ impl WeeklyReviewRunner for FakeWeeklyReviewRunner {
 fn weekly_review(text: &str, week_start: NaiveDate) -> WeeklyReview {
     WeeklyReview {
         id: 1,
-        user_id: "7".to_string(),
         week_start_date: week_start,
         review_text: Some(text.to_string()),
         model: "test-model".to_string(),
@@ -1417,10 +1398,7 @@ async fn week_review_fetches_previous_iso_week_monday() {
         outgoing.text,
         "Weekly review for week of 2026-04-20\n\nstored weekly review"
     );
-    assert_eq!(
-        runner.calls(),
-        vec![("7".to_string(), previous_week_monday())]
-    );
+    assert_eq!(runner.calls(), vec![previous_week_monday()]);
 }
 
 #[tokio::test]

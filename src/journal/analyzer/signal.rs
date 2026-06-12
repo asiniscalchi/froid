@@ -4,18 +4,13 @@ use crate::journal::review::signals::repository::{
     DailyReviewSignalRepository, DailyReviewSignalRepositoryError, SignalSearchFilters,
 };
 
-use super::types::{
-    AnalyzerError, MAX_SIGNAL_LIMIT, SearchSignalsRequest, SignalView, UserContext,
-};
+use super::types::{AnalyzerError, MAX_SIGNAL_LIMIT, SearchSignalsRequest, SignalView};
 use super::validation::{validate_limit, validate_optional_range};
 
 #[async_trait]
 pub trait SignalReadService: Send + Sync {
-    async fn search(
-        &self,
-        ctx: &UserContext,
-        request: SearchSignalsRequest,
-    ) -> Result<Vec<SignalView>, AnalyzerError>;
+    async fn search(&self, request: SearchSignalsRequest)
+    -> Result<Vec<SignalView>, AnalyzerError>;
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +59,6 @@ fn normalize_label_contains(value: Option<String>) -> Result<Option<String>, Ana
 impl SignalReadService for DefaultSignalReadService {
     async fn search(
         &self,
-        _ctx: &UserContext,
         request: SearchSignalsRequest,
     ) -> Result<Vec<SignalView>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_SIGNAL_LIMIT)?;
@@ -131,10 +125,6 @@ mod tests {
         (service, signals, reviews)
     }
 
-    fn ctx() -> UserContext {
-        UserContext::new("user-1")
-    }
-
     fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
     }
@@ -178,7 +168,6 @@ mod tests {
     async fn seed(
         signals: &DailyReviewSignalRepository,
         reviews: &DailyReviewRepository,
-        _user_id: &str,
         date: NaiveDate,
         candidates: &[DailyReviewSignalCandidate],
     ) {
@@ -202,18 +191,11 @@ mod tests {
     #[tokio::test]
     async fn search_returns_signals_in_date_then_id_order() {
         let (service, signals, reviews) = setup().await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 27), &[theme()]).await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 28), &[need()]).await;
-        seed(
-            &signals,
-            &reviews,
-            "user-1",
-            ymd(2026, 4, 29),
-            &[behavior()],
-        )
-        .await;
+        seed(&signals, &reviews, ymd(2026, 4, 27), &[theme()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 28), &[need()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 29), &[behavior()]).await;
 
-        let result = service.search(&ctx(), req(10)).await.unwrap();
+        let result = service.search(req(10)).await.unwrap();
 
         assert_eq!(result.len(), 3);
         let dates: Vec<_> = result.iter().map(|s| s.review_date).collect();
@@ -226,26 +208,16 @@ mod tests {
     #[tokio::test]
     async fn search_applies_filters() {
         let (service, signals, reviews) = setup().await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 27), &[theme()]).await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 28), &[need()]).await;
-        seed(
-            &signals,
-            &reviews,
-            "user-1",
-            ymd(2026, 4, 29),
-            &[behavior()],
-        )
-        .await;
+        seed(&signals, &reviews, ymd(2026, 4, 27), &[theme()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 28), &[need()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 29), &[behavior()]).await;
 
         let result = service
-            .search(
-                &ctx(),
-                SearchSignalsRequest {
-                    signal_type: Some(SignalType::Behavior),
-                    valence: Some(BehaviorValence::Negative),
-                    ..req(10)
-                },
-            )
+            .search(SearchSignalsRequest {
+                signal_type: Some(SignalType::Behavior),
+                valence: Some(BehaviorValence::Negative),
+                ..req(10)
+            })
             .await
             .unwrap();
 
@@ -257,28 +229,22 @@ mod tests {
     #[tokio::test]
     async fn search_trims_label_contains_and_rejects_blank() {
         let (service, signals, reviews) = setup().await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 27), &[theme()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 27), &[theme()]).await;
 
         let result = service
-            .search(
-                &ctx(),
-                SearchSignalsRequest {
-                    label_contains: Some("  PHYSICAL  ".to_string()),
-                    ..req(10)
-                },
-            )
+            .search(SearchSignalsRequest {
+                label_contains: Some("  PHYSICAL  ".to_string()),
+                ..req(10)
+            })
             .await
             .unwrap();
         assert_eq!(result.len(), 1);
 
         let err = service
-            .search(
-                &ctx(),
-                SearchSignalsRequest {
-                    label_contains: Some("   ".to_string()),
-                    ..req(10)
-                },
-            )
+            .search(SearchSignalsRequest {
+                label_contains: Some("   ".to_string()),
+                ..req(10)
+            })
             .await
             .unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
@@ -289,13 +255,10 @@ mod tests {
         let (service, _, _) = setup().await;
         for invalid in [-0.1, 1.1] {
             let err = service
-                .search(
-                    &ctx(),
-                    SearchSignalsRequest {
-                        min_strength: Some(invalid),
-                        ..req(10)
-                    },
-                )
+                .search(SearchSignalsRequest {
+                    min_strength: Some(invalid),
+                    ..req(10)
+                })
                 .await
                 .unwrap_err();
             assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
@@ -305,17 +268,14 @@ mod tests {
     #[tokio::test]
     async fn search_rejects_zero_limit() {
         let (service, _, _) = setup().await;
-        let err = service.search(&ctx(), req(0)).await.unwrap_err();
+        let err = service.search(req(0)).await.unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
     }
 
     #[tokio::test]
     async fn search_rejects_limit_above_max() {
         let (service, _, _) = setup().await;
-        let err = service
-            .search(&ctx(), req(MAX_SIGNAL_LIMIT + 1))
-            .await
-            .unwrap_err();
+        let err = service.search(req(MAX_SIGNAL_LIMIT + 1)).await.unwrap_err();
         assert!(matches!(err, AnalyzerError::LimitTooLarge { .. }));
     }
 
@@ -323,14 +283,11 @@ mod tests {
     async fn search_rejects_inverted_range() {
         let (service, _, _) = setup().await;
         let err = service
-            .search(
-                &ctx(),
-                SearchSignalsRequest {
-                    from_date: Some(ymd(2026, 4, 29)),
-                    to_date_exclusive: Some(ymd(2026, 4, 28)),
-                    ..req(10)
-                },
-            )
+            .search(SearchSignalsRequest {
+                from_date: Some(ymd(2026, 4, 29)),
+                to_date_exclusive: Some(ymd(2026, 4, 28)),
+                ..req(10)
+            })
             .await
             .unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
@@ -339,10 +296,10 @@ mod tests {
     #[tokio::test]
     async fn search_uses_single_user_scope() {
         let (service, signals, reviews) = setup().await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 27), &[theme()]).await;
-        seed(&signals, &reviews, "user-2", ymd(2026, 4, 27), &[theme()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 27), &[theme()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 27), &[theme()]).await;
 
-        let result = service.search(&ctx(), req(10)).await.unwrap();
+        let result = service.search(req(10)).await.unwrap();
 
         assert_eq!(result.len(), 1);
     }
@@ -350,9 +307,9 @@ mod tests {
     #[tokio::test]
     async fn search_view_preserves_signal_fields() {
         let (service, signals, reviews) = setup().await;
-        seed(&signals, &reviews, "user-1", ymd(2026, 4, 28), &[need()]).await;
+        seed(&signals, &reviews, ymd(2026, 4, 28), &[need()]).await;
 
-        let result = service.search(&ctx(), req(10)).await.unwrap();
+        let result = service.search(req(10)).await.unwrap();
 
         assert_eq!(result.len(), 1);
         let s = &result[0];

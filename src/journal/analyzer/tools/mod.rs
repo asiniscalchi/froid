@@ -3,7 +3,7 @@
 //! Each tool exposes a stable name, a JSON schema for inputs, and a dispatch
 //! method that takes JSON in and returns JSON out. The analyzer agent loop
 //! looks tools up by name in [`ToolRegistry`] and invokes them with the
-//! authenticated [`UserContext`] — `user_id` is never part of the tool input.
+//! per-tenant database — user identity is never part of the tool input.
 
 pub mod journal;
 pub mod review;
@@ -16,7 +16,7 @@ use thiserror::Error;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::types::{AnalyzerError, UserContext};
+use super::types::AnalyzerError;
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -39,7 +39,7 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
     fn input_schema(&self) -> Value;
-    async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError>;
+    async fn dispatch(&self, args: Value) -> Result<Value, ToolError>;
 }
 
 /// Holds an ordered set of tools indexed by name.
@@ -74,16 +74,11 @@ impl ToolRegistry {
         &self.tools
     }
 
-    pub async fn dispatch(
-        &self,
-        name: &str,
-        ctx: &UserContext,
-        args: Value,
-    ) -> Result<Value, ToolError> {
+    pub async fn dispatch(&self, name: &str, args: Value) -> Result<Value, ToolError> {
         let tool = self
             .get(name)
             .ok_or_else(|| ToolError::UnknownTool(name.to_string()))?;
-        tool.dispatch(ctx, args).await
+        tool.dispatch(args).await
     }
 }
 
@@ -126,13 +121,9 @@ mod tests {
         fn input_schema(&self) -> Value {
             json!({"type": "object"})
         }
-        async fn dispatch(&self, _ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
+        async fn dispatch(&self, args: Value) -> Result<Value, ToolError> {
             Ok(args)
         }
-    }
-
-    fn ctx() -> UserContext {
-        UserContext::new("u")
     }
 
     #[tokio::test]
@@ -140,10 +131,7 @@ mod tests {
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(EchoTool));
 
-        let out = registry
-            .dispatch("echo", &ctx(), json!({"x": 1}))
-            .await
-            .unwrap();
+        let out = registry.dispatch("echo", json!({"x": 1})).await.unwrap();
 
         assert_eq!(out, json!({"x": 1}));
     }
@@ -152,10 +140,7 @@ mod tests {
     async fn registry_returns_unknown_tool_error() {
         let registry = ToolRegistry::new();
 
-        let err = registry
-            .dispatch("missing", &ctx(), json!({}))
-            .await
-            .unwrap_err();
+        let err = registry.dispatch("missing", json!({})).await.unwrap_err();
 
         assert!(matches!(err, ToolError::UnknownTool(name) if name == "missing"));
     }

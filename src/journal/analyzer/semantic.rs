@@ -12,10 +12,9 @@ use super::types::{AnalyzerError, SemanticHit};
 #[async_trait]
 pub trait SemanticJournalSearcher: Send + Sync {
     /// Returns up to `limit` journal entries semantically similar to `query`,
-    /// scoped to `user_id` and the optional date bounds.
+    /// scoped to the optional date bounds.
     async fn search(
         &self,
-        user_id: &str,
         query: &str,
         from_date: Option<NaiveDate>,
         to_date_exclusive: Option<NaiveDate>,
@@ -52,7 +51,6 @@ where
 {
     async fn search(
         &self,
-        user_id: &str,
         query: &str,
         from_date: Option<NaiveDate>,
         to_date_exclusive: Option<NaiveDate>,
@@ -68,14 +66,7 @@ where
 
         let index_results = self
             .index
-            .search_for_user(
-                user_id,
-                &embedding,
-                model,
-                from_date,
-                to_date_exclusive,
-                limit,
-            )
+            .search(&embedding, model, from_date, to_date_exclusive, limit)
             .await
             .map_err(|e| AnalyzerError::Internal(Box::new(e)))?;
 
@@ -154,7 +145,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: msg_id.to_string(),
-            user_id: "user-1".to_string(),
             text: text.to_string(),
             received_at,
         };
@@ -259,9 +249,8 @@ mod tests {
         ) -> Result<u32, EmbeddingRepositoryError> {
             unreachable!()
         }
-        async fn search_for_user(
+        async fn search(
             &self,
-            _user_id: &str,
             _embedding: &Embedding,
             _embedding_model: &str,
             _from_date: Option<NaiveDate>,
@@ -282,10 +271,7 @@ mod tests {
         let searcher =
             DefaultSemanticJournalSearcher::new(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
 
-        let hits = searcher
-            .search("user-1", "query", None, None, 10)
-            .await
-            .unwrap();
+        let hits = searcher.search("query", None, None, 10).await.unwrap();
 
         assert!(!hits.is_empty());
         assert_eq!(hits[0].text, "closest");
@@ -311,10 +297,7 @@ mod tests {
         let searcher =
             DefaultSemanticJournalSearcher::new(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
 
-        let hits = searcher
-            .search("user-1", "query", None, None, 3)
-            .await
-            .unwrap();
+        let hits = searcher.search("query", None, None, 3).await.unwrap();
 
         assert_eq!(hits.len(), 3);
     }
@@ -328,7 +311,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "99".to_string(),
             source_message_id: "2".to_string(),
-            user_id: "user-2".to_string(),
             text: "theirs".to_string(),
             received_at: at(11, 0),
         };
@@ -352,10 +334,7 @@ mod tests {
         let searcher =
             DefaultSemanticJournalSearcher::new(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
 
-        let hits = searcher
-            .search("user-1", "query", None, None, 10)
-            .await
-            .unwrap();
+        let hits = searcher.search("query", None, None, 10).await.unwrap();
 
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].text, "mine");
@@ -368,10 +347,7 @@ mod tests {
         let searcher =
             DefaultSemanticJournalSearcher::new(index, FakeEmbedder::fails(TEST_MODEL), repo);
 
-        let err = searcher
-            .search("user-1", "query", None, None, 5)
-            .await
-            .unwrap_err();
+        let err = searcher.search("query", None, None, 5).await.unwrap_err();
 
         assert!(matches!(err, AnalyzerError::Internal(_)));
     }
@@ -384,7 +360,6 @@ mod tests {
                 source: MessageSource::Telegram,
                 source_conversation_id: "42".to_string(),
                 source_message_id: "1".to_string(),
-                user_id: "user-1".to_string(),
                 text: "kept".to_string(),
                 received_at: at(10, 0),
             };
@@ -415,10 +390,7 @@ mod tests {
             repo,
         );
 
-        let hits = searcher
-            .search("user-1", "query", None, None, 5)
-            .await
-            .unwrap();
+        let hits = searcher.search("query", None, None, 5).await.unwrap();
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].text, "kept");

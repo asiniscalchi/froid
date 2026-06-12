@@ -11,19 +11,6 @@ pub const MAX_TEXT_SEARCH_LIMIT: u32 = 50;
 pub const MAX_SIGNAL_LIMIT: u32 = 50;
 pub const MAX_SEMANTIC_LIMIT: u32 = 20;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UserContext {
-    pub user_id: String,
-}
-
-impl UserContext {
-    pub fn new(user_id: impl Into<String>) -> Self {
-        Self {
-            user_id: user_id.into(),
-        }
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum AnalyzerError {
     #[error("invalid argument: {0}")]

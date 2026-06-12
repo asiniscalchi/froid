@@ -56,9 +56,8 @@ pub trait EmbeddingIndex<ID>: Send + Sync {
         embedding_model: &str,
     ) -> Result<u32, EmbeddingRepositoryError>;
 
-    async fn search_for_user(
+    async fn search(
         &self,
-        user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
         from_date: Option<NaiveDate>,
@@ -69,9 +68,8 @@ pub trait EmbeddingIndex<ID>: Send + Sync {
 
 #[async_trait]
 pub trait PendingEmbeddingCounter: Send + Sync {
-    async fn count_entries_missing_embedding_for_user(
+    async fn count_entries_missing_embedding(
         &self,
-        user_id: &str,
         embedding_model: &str,
     ) -> Result<i64, EmbeddingRepositoryError>;
 }
@@ -248,9 +246,8 @@ impl SqliteEmbeddingRepository {
         Ok(count as u32)
     }
 
-    pub async fn count_entries_missing_embedding_for_user(
+    pub async fn count_entries_missing_embedding(
         &self,
-        _user_id: &str,
         embedding_model: &str,
     ) -> Result<i64, sqlx::Error> {
         sqlx::query_scalar(
@@ -269,37 +266,8 @@ impl SqliteEmbeddingRepository {
         .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn search(
+    pub async fn search(
         &self,
-        embedding: &Embedding,
-        embedding_model: &str,
-        limit: usize,
-    ) -> Result<Vec<EmbeddingSearchResult<String>>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT
-                m.journal_entry_id,
-                vec_distance_cosine(v.embedding, ?) AS distance
-            FROM journal_entry_embedding_metadata m
-            JOIN journal_entry_embedding_vec v ON v.rowid = m.id
-            WHERE m.embedding_model = ?
-            ORDER BY distance ASC
-            LIMIT ?
-            "#,
-        )
-        .bind(embedding.to_blob())
-        .bind(embedding_model)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows.into_iter().map(map_search_result).collect())
-    }
-
-    pub async fn search_for_user(
-        &self,
-        _user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
         from_date: Option<NaiveDate>,
@@ -447,18 +415,16 @@ impl EmbeddingIndex<String> for SqliteEmbeddingRepository {
             .map_err(Into::into)
     }
 
-    async fn search_for_user(
+    async fn search(
         &self,
-        user_id: &str,
         embedding: &Embedding,
         embedding_model: &str,
         from_date: Option<NaiveDate>,
         to_date_exclusive: Option<NaiveDate>,
         limit: usize,
     ) -> Result<Vec<EmbeddingSearchResult<String>>, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::search_for_user(
+        SqliteEmbeddingRepository::search(
             self,
-            user_id,
             embedding,
             embedding_model,
             from_date,
@@ -472,18 +438,13 @@ impl EmbeddingIndex<String> for SqliteEmbeddingRepository {
 
 #[async_trait]
 impl PendingEmbeddingCounter for SqliteEmbeddingRepository {
-    async fn count_entries_missing_embedding_for_user(
+    async fn count_entries_missing_embedding(
         &self,
-        user_id: &str,
         embedding_model: &str,
     ) -> Result<i64, EmbeddingRepositoryError> {
-        SqliteEmbeddingRepository::count_entries_missing_embedding_for_user(
-            self,
-            user_id,
-            embedding_model,
-        )
-        .await
-        .map_err(Into::into)
+        SqliteEmbeddingRepository::count_entries_missing_embedding(self, embedding_model)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -529,7 +490,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: source_message_id.to_string(),
-            user_id: "7".to_string(),
             text: text.to_string(),
             received_at,
         }
@@ -961,7 +921,7 @@ mod tests {
 
         let query = directional_embedding(1, 1.0);
         let results = embedding_repository
-            .search(&query, TEST_EMBEDDING_MODEL, 3)
+            .search(&query, TEST_EMBEDDING_MODEL, None, None, 3)
             .await
             .unwrap();
 
@@ -991,7 +951,13 @@ mod tests {
         }
 
         let results = embedding_repository
-            .search(&directional_embedding(0, 1.0), TEST_EMBEDDING_MODEL, 2)
+            .search(
+                &directional_embedding(0, 1.0),
+                TEST_EMBEDDING_MODEL,
+                None,
+                None,
+                2,
+            )
             .await
             .unwrap();
 
@@ -1014,7 +980,7 @@ mod tests {
             .unwrap();
 
         let results = embedding_repository
-            .search(&embedding(1.0), "model-b", 10)
+            .search(&embedding(1.0), "model-b", None, None, 10)
             .await
             .unwrap();
 
@@ -1022,7 +988,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_for_user_applies_date_filter_before_limit() {
+    async fn search_applies_date_filter_before_limit() {
         let (journal_repository, embedding_repository) = setup().await;
         let outside = store_entry(
             &journal_repository,
@@ -1059,8 +1025,7 @@ mod tests {
             .unwrap();
 
         let results = embedding_repository
-            .search_for_user(
-                "user-1",
+            .search(
                 &directional_embedding(0, 1.0),
                 TEST_EMBEDDING_MODEL,
                 NaiveDate::from_ymd_opt(2026, 4, 28),
@@ -1079,7 +1044,7 @@ mod tests {
         let (_, embedding_repository) = setup().await;
 
         let results = embedding_repository
-            .search(&embedding(1.0), TEST_EMBEDDING_MODEL, 10)
+            .search(&embedding(1.0), TEST_EMBEDDING_MODEL, None, None, 10)
             .await
             .unwrap();
 

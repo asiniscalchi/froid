@@ -8,22 +8,18 @@ use crate::journal::week_review::repository::{
 };
 use crate::journal::week_review::{WeeklyReview, WeeklyReviewStatus};
 
-use super::types::{
-    AnalyzerError, DailyReviewView, GetReviewsRequest, UserContext, WeeklyReviewView,
-};
+use super::types::{AnalyzerError, DailyReviewView, GetReviewsRequest, WeeklyReviewView};
 use super::validation::validate_range;
 
 #[async_trait]
 pub trait ReviewReadService: Send + Sync {
     async fn get_daily_reviews(
         &self,
-        ctx: &UserContext,
         request: GetReviewsRequest,
     ) -> Result<Vec<DailyReviewView>, AnalyzerError>;
 
     async fn get_weekly_reviews(
         &self,
-        ctx: &UserContext,
         request: GetReviewsRequest,
     ) -> Result<Vec<WeeklyReviewView>, AnalyzerError>;
 
@@ -31,7 +27,6 @@ pub trait ReviewReadService: Send + Sync {
     /// completed review exists for that date.
     async fn get_daily_review(
         &self,
-        ctx: &UserContext,
         review_date: NaiveDate,
     ) -> Result<Option<DailyReviewView>, AnalyzerError>;
 
@@ -39,7 +34,6 @@ pub trait ReviewReadService: Send + Sync {
     /// or `None` if no completed review exists for that week.
     async fn get_weekly_review(
         &self,
-        ctx: &UserContext,
         week_start: NaiveDate,
     ) -> Result<Option<WeeklyReviewView>, AnalyzerError>;
 }
@@ -68,7 +62,6 @@ fn map_weekly_error(err: WeeklyReviewRepositoryError) -> AnalyzerError {
 impl ReviewReadService for DefaultReviewReadService {
     async fn get_daily_reviews(
         &self,
-        _ctx: &UserContext,
         request: GetReviewsRequest,
     ) -> Result<Vec<DailyReviewView>, AnalyzerError> {
         validate_range(request.from_date, request.to_date_exclusive)?;
@@ -91,7 +84,6 @@ impl ReviewReadService for DefaultReviewReadService {
 
     async fn get_weekly_reviews(
         &self,
-        _ctx: &UserContext,
         request: GetReviewsRequest,
     ) -> Result<Vec<WeeklyReviewView>, AnalyzerError> {
         validate_range(request.from_date, request.to_date_exclusive)?;
@@ -115,7 +107,6 @@ impl ReviewReadService for DefaultReviewReadService {
 
     async fn get_daily_review(
         &self,
-        _ctx: &UserContext,
         review_date: NaiveDate,
     ) -> Result<Option<DailyReviewView>, AnalyzerError> {
         let row = self
@@ -129,7 +120,6 @@ impl ReviewReadService for DefaultReviewReadService {
 
     async fn get_weekly_review(
         &self,
-        _ctx: &UserContext,
         week_start: NaiveDate,
     ) -> Result<Option<WeeklyReviewView>, AnalyzerError> {
         let row = self
@@ -195,10 +185,6 @@ mod tests {
         (service, daily, weekly)
     }
 
-    fn ctx() -> UserContext {
-        UserContext::new("user-1")
-    }
-
     fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
     }
@@ -227,7 +213,7 @@ mod tests {
             .unwrap();
 
         let result = service
-            .get_daily_reviews(&ctx(), req(ymd(2026, 4, 27), ymd(2026, 4, 29)))
+            .get_daily_reviews(req(ymd(2026, 4, 27), ymd(2026, 4, 29)))
             .await
             .unwrap();
 
@@ -251,7 +237,7 @@ mod tests {
             .unwrap();
 
         let result = service
-            .get_daily_reviews(&ctx(), req(ymd(2026, 4, 27), ymd(2026, 4, 29)))
+            .get_daily_reviews(req(ymd(2026, 4, 27), ymd(2026, 4, 29)))
             .await
             .unwrap();
 
@@ -272,7 +258,7 @@ mod tests {
             .unwrap();
 
         let result = service
-            .get_daily_reviews(&ctx(), req(ymd(2026, 4, 27), ymd(2026, 4, 28)))
+            .get_daily_reviews(req(ymd(2026, 4, 27), ymd(2026, 4, 28)))
             .await
             .unwrap();
 
@@ -284,7 +270,7 @@ mod tests {
     async fn get_daily_reviews_rejects_inverted_range() {
         let (service, _, _) = setup().await;
         let err = service
-            .get_daily_reviews(&ctx(), req(ymd(2026, 4, 28), ymd(2026, 4, 27)))
+            .get_daily_reviews(req(ymd(2026, 4, 28), ymd(2026, 4, 27)))
             .await
             .unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
@@ -294,7 +280,7 @@ mod tests {
     async fn get_daily_reviews_rejects_equal_bounds() {
         let (service, _, _) = setup().await;
         let err = service
-            .get_daily_reviews(&ctx(), req(ymd(2026, 4, 28), ymd(2026, 4, 28)))
+            .get_daily_reviews(req(ymd(2026, 4, 28), ymd(2026, 4, 28)))
             .await
             .unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));
@@ -316,7 +302,7 @@ mod tests {
             .unwrap();
 
         let result = service
-            .get_weekly_reviews(&ctx(), req(w1, ymd(2026, 5, 4)))
+            .get_weekly_reviews(req(w1, ymd(2026, 5, 4)))
             .await
             .unwrap();
 
@@ -341,7 +327,7 @@ mod tests {
         weekly.upsert_failed(w2, "m", "v1", "boom").await.unwrap();
 
         let result = service
-            .get_weekly_reviews(&ctx(), req(w1, ymd(2026, 5, 4)))
+            .get_weekly_reviews(req(w1, ymd(2026, 5, 4)))
             .await
             .unwrap();
 
@@ -363,7 +349,7 @@ mod tests {
             .unwrap();
 
         let result = service
-            .get_weekly_reviews(&ctx(), req(w, ymd(2026, 4, 27)))
+            .get_weekly_reviews(req(w, ymd(2026, 4, 27)))
             .await
             .unwrap();
 
@@ -380,7 +366,7 @@ mod tests {
             .unwrap();
 
         let result = service
-            .get_daily_review(&ctx(), ymd(2026, 4, 28))
+            .get_daily_review(ymd(2026, 4, 28))
             .await
             .unwrap()
             .expect("completed review present");
@@ -392,10 +378,7 @@ mod tests {
     #[tokio::test]
     async fn get_daily_review_returns_none_when_missing() {
         let (service, _, _) = setup().await;
-        let result = service
-            .get_daily_review(&ctx(), ymd(2026, 4, 28))
-            .await
-            .unwrap();
+        let result = service.get_daily_review(ymd(2026, 4, 28)).await.unwrap();
         assert!(result.is_none());
     }
 
@@ -407,10 +390,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service
-            .get_daily_review(&ctx(), ymd(2026, 4, 28))
-            .await
-            .unwrap();
+        let result = service.get_daily_review(ymd(2026, 4, 28)).await.unwrap();
         assert!(result.is_none());
     }
 
@@ -424,7 +404,7 @@ mod tests {
             .unwrap();
 
         let result = service
-            .get_weekly_review(&ctx(), w)
+            .get_weekly_review(w)
             .await
             .unwrap()
             .expect("completed review present");
@@ -437,10 +417,7 @@ mod tests {
     #[tokio::test]
     async fn get_weekly_review_returns_none_when_missing() {
         let (service, _, _) = setup().await;
-        let result = service
-            .get_weekly_review(&ctx(), ymd(2026, 4, 20))
-            .await
-            .unwrap();
+        let result = service.get_weekly_review(ymd(2026, 4, 20)).await.unwrap();
         assert!(result.is_none());
     }
 
@@ -450,7 +427,7 @@ mod tests {
         let w = ymd(2026, 4, 20);
         weekly.upsert_failed(w, "m", "v1", "boom").await.unwrap();
 
-        let result = service.get_weekly_review(&ctx(), w).await.unwrap();
+        let result = service.get_weekly_review(w).await.unwrap();
         assert!(result.is_none());
     }
 
@@ -458,7 +435,7 @@ mod tests {
     async fn get_weekly_reviews_rejects_inverted_range() {
         let (service, _, _) = setup().await;
         let err = service
-            .get_weekly_reviews(&ctx(), req(ymd(2026, 4, 28), ymd(2026, 4, 27)))
+            .get_weekly_reviews(req(ymd(2026, 4, 28), ymd(2026, 4, 27)))
             .await
             .unwrap_err();
         assert!(matches!(err, AnalyzerError::InvalidArgument(_)));

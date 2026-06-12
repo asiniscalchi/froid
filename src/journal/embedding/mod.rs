@@ -48,7 +48,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: source_message_id.to_string(),
-            user_id: "7".to_string(),
             text: text.to_string(),
             received_at,
         }
@@ -177,9 +176,8 @@ mod tests {
                 .map_err(Into::into)
         }
 
-        async fn search_for_user(
+        async fn search(
             &self,
-            user_id: &str,
             embedding: &Embedding,
             embedding_model: &str,
             from_date: Option<chrono::NaiveDate>,
@@ -187,8 +185,7 @@ mod tests {
             limit: usize,
         ) -> Result<Vec<EmbeddingSearchResult<String>>, EmbeddingRepositoryError> {
             self.inner
-                .search_for_user(
-                    user_id,
+                .search(
                     embedding,
                     embedding_model,
                     from_date,

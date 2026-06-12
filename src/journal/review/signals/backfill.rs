@@ -57,15 +57,11 @@ impl DailyReviewSignalBackfillService {
             remaining: 0,
         };
 
-        for (daily_review_id, user_id, review_date) in candidates {
-            if let Err(error) = self
-                .process_candidate(&user_id, review_date, daily_review_id)
-                .await
-            {
+        for (daily_review_id, review_date) in candidates {
+            if let Err(error) = self.process_candidate(review_date, daily_review_id).await {
                 result.errored += 1;
                 warn!(
                     daily_review_id,
-                    user_id = %user_id,
                     review_date = %review_date,
                     error = %error,
                     "signal backfill candidate failed"
@@ -83,13 +79,12 @@ impl DailyReviewSignalBackfillService {
 
     async fn process_candidate(
         &self,
-        user_id: &str,
         review_date: NaiveDate,
         daily_review_id: i64,
     ) -> Result<(), ProcessCandidateError> {
         let result = self
             .service
-            .generate_signals_for_review(user_id, review_date)
+            .generate_signals_for_review(review_date)
             .await
             .map_err(ProcessCandidateError::Service)?;
 
@@ -189,7 +184,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: msg_id.to_string(),
-            user_id: "user-1".to_string(),
             text: text.to_string(),
             received_at: chrono::Utc::now(),
         };

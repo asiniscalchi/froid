@@ -32,11 +32,7 @@ pub enum SemanticSearchError {
 
 #[async_trait]
 pub(crate) trait SearchService: Send + Sync {
-    async fn search(
-        &self,
-        user_id: &str,
-        query: &str,
-    ) -> Result<Vec<SemanticSearchResult>, SemanticSearchError>;
+    async fn search(&self, query: &str) -> Result<Vec<SemanticSearchResult>, SemanticSearchError>;
 }
 
 #[derive(Clone)]
@@ -66,11 +62,7 @@ where
     I: EmbeddingIndex<String> + Send + Sync,
     E: Embedder + Send + Sync,
 {
-    async fn search(
-        &self,
-        user_id: &str,
-        query: &str,
-    ) -> Result<Vec<SemanticSearchResult>, SemanticSearchError> {
+    async fn search(&self, query: &str) -> Result<Vec<SemanticSearchResult>, SemanticSearchError> {
         let embedding = self
             .embedder
             .embed(query)
@@ -81,7 +73,7 @@ where
 
         let index_results: Vec<EmbeddingSearchResult<String>> = self
             .index
-            .search_for_user(user_id, &embedding, model, None, None, MAX_SEARCH_LIMIT)
+            .search(&embedding, model, None, None, MAX_SEARCH_LIMIT)
             .await
             .map_err(SemanticSearchError::Index)?;
 
@@ -185,7 +177,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: msg_id.to_string(),
-            user_id: "7".to_string(),
             text: text.to_string(),
             received_at,
         }
@@ -304,9 +295,8 @@ mod tests {
             unreachable!("search tests do not count missing through FakeIndex")
         }
 
-        async fn search_for_user(
+        async fn search(
             &self,
-            _user_id: &str,
             _embedding: &Embedding,
             _embedding_model: &str,
             _from_date: Option<chrono::NaiveDate>,
@@ -360,7 +350,7 @@ mod tests {
 
         let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
 
-        let results = service.search("7", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert!(!results.is_empty());
         assert_eq!(results[0].journal_entry.text, "most relevant entry");
@@ -376,7 +366,7 @@ mod tests {
 
         let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
 
-        let results = service.search("7", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert!(results.is_empty());
     }
@@ -392,7 +382,7 @@ mod tests {
 
         let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
 
-        let results = service.search("7", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].journal_entry.text, "embedded entry");
@@ -404,7 +394,7 @@ mod tests {
 
         let service = make_service(index, FakeEmbedder::fails(TEST_MODEL), repo);
 
-        let error = service.search("7", "query").await.unwrap_err();
+        let error = service.search("query").await.unwrap_err();
 
         assert!(matches!(error, SemanticSearchError::Embedder(_)));
     }
@@ -419,7 +409,7 @@ mod tests {
         // Query with a model that has no stored embeddings.
         let service = make_service(index, FakeEmbedder::succeeds("other-model", 0), repo);
 
-        let results = service.search("7", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert!(results.is_empty());
     }
@@ -435,7 +425,7 @@ mod tests {
 
         let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
 
-        let results = service.search("7", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert_eq!(results[0].journal_entry.text, "entry B");
         for window in results.windows(2) {
@@ -455,7 +445,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "99".to_string(),
             source_message_id: "2".to_string(),
-            user_id: "other_user".to_string(),
             text: "other user entry".to_string(),
             received_at: at(11, 0),
         };
@@ -479,7 +468,7 @@ mod tests {
         // Query at dim 1: in single-user mode, every stored entry is part of the same journal.
         let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
 
-        let results = service.search("7", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].journal_entry.text, "other user entry");
@@ -497,7 +486,6 @@ mod tests {
                 source: MessageSource::Telegram,
                 source_conversation_id: format!("other-{i}"),
                 source_message_id: format!("other-{i}"),
-                user_id: "other_user".to_string(),
                 text: format!("other user entry {i}"),
                 received_at: at(11, i as u32),
             };
@@ -522,7 +510,7 @@ mod tests {
 
         let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 1), repo);
 
-        let results = service.search("7", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert_eq!(results.len(), DEFAULT_SEARCH_LIMIT);
         assert!(
@@ -558,7 +546,7 @@ mod tests {
         };
         let service = make_fake_index_service(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
 
-        let results = service.search("7", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].journal_entry.text, "kept entry");
@@ -583,7 +571,7 @@ mod tests {
 
         let service = make_service(index, FakeEmbedder::succeeds(TEST_MODEL, 0), repo);
 
-        let results = service.search("7", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert_eq!(results.len(), DEFAULT_SEARCH_LIMIT);
     }

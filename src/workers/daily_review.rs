@@ -107,11 +107,7 @@ where
         };
 
         for target in targets {
-            let review = match self
-                .review_runner
-                .review_day(&target.user_id, review_date)
-                .await
-            {
+            let review = match self.review_runner.review_day(review_date).await {
                 Ok(DailyReviewResult::Existing(review) | DailyReviewResult::Generated(review)) => {
                     review
                 }
@@ -121,7 +117,6 @@ where
                 }
                 Ok(DailyReviewResult::GenerationFailed(failure)) => {
                     warn!(
-                        user_id = %failure.user_id,
                         review_date = %failure.review_date,
                         error = %failure.error_message,
                         "daily review generation failed during delivery"
@@ -130,8 +125,7 @@ where
                     continue;
                 }
                 Err(error) => {
-                    self.record_review_runner_error(&target.user_id, review_date, error)
-                        .await?;
+                    self.record_review_runner_error(review_date, error).await?;
                     result.failed += 1;
                     continue;
                 }
@@ -160,7 +154,6 @@ where
                         .mark_delivery_failed(review_date, &error)
                         .await?;
                     warn!(
-                        user_id = %target.user_id,
                         source_conversation_id = %target.source_conversation_id,
                         review_date = %review_date,
                         error = %error,
@@ -176,12 +169,10 @@ where
 
     async fn record_review_runner_error(
         &self,
-        user_id: &str,
         review_date: NaiveDate,
         error: DailyReviewServiceError,
     ) -> Result<(), DailyReviewDeliveryWorkerError> {
         warn!(
-            user_id = %user_id,
             review_date = %review_date,
             error = %error,
             "daily review runner failed during delivery"
@@ -372,7 +363,6 @@ mod tests {
     impl DailyReviewRunner for FakeRunner {
         async fn review_day(
             &self,
-            _user_id: &str,
             _utc_date: NaiveDate,
         ) -> Result<DailyReviewResult, DailyReviewServiceError> {
             self.result.clone()
@@ -380,7 +370,6 @@ mod tests {
 
         async fn fetch_review(
             &self,
-            _user_id: &str,
             _utc_date: NaiveDate,
         ) -> Result<Option<DailyReview>, DailyReviewServiceError> {
             Ok(None)
@@ -421,17 +410,11 @@ mod tests {
         NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()
     }
 
-    fn entry_for(
-        user_id: &str,
-        conversation_id: &str,
-        message_id: &str,
-        text: &str,
-    ) -> IncomingMessage {
+    fn entry_for(conversation_id: &str, message_id: &str, text: &str) -> IncomingMessage {
         IncomingMessage {
             source: MessageSource::Telegram,
             source_conversation_id: conversation_id.to_string(),
             source_message_id: message_id.to_string(),
-            user_id: user_id.to_string(),
             text: text.to_string(),
             received_at: Utc.with_ymd_and_hms(2026, 4, 28, 12, 0, 0).unwrap(),
         }
@@ -442,7 +425,6 @@ mod tests {
             source: MessageSource::Telegram,
             source_conversation_id: "42".to_string(),
             source_message_id: source_message_id.to_string(),
-            user_id: "7".to_string(),
             text: text.to_string(),
             received_at: Utc.with_ymd_and_hms(2026, 4, 28, 12, 0, 0).unwrap(),
         }
@@ -695,11 +677,11 @@ mod tests {
         let (worker, daily_reviews, journal_entries, sender) =
             setup(FakeReviewGenerator::succeeding("review text"), sender).await;
         journal_entries
-            .store(&entry_for("7", "42", "1", "first"))
+            .store(&entry_for("42", "1", "first"))
             .await
             .unwrap();
         journal_entries
-            .store(&entry_for("8", "99", "2", "second"))
+            .store(&entry_for("99", "2", "second"))
             .await
             .unwrap();
 

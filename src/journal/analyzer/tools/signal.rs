@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::{Tool, ToolError, deserialize_input, schema_value, serialize_output};
 use crate::journal::analyzer::signal::SignalReadService;
-use crate::journal::analyzer::types::{SearchSignalsRequest, SignalView, UserContext};
+use crate::journal::analyzer::types::{SearchSignalsRequest, SignalView};
 use crate::journal::extraction::{BehaviorValence, NeedStatus};
 use crate::journal::review::signals::types::SignalType;
 
@@ -95,23 +95,20 @@ impl Tool for SignalsSearchTool {
     fn input_schema(&self) -> Value {
         schema_value::<SearchSignalsInput>()
     }
-    async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
+    async fn dispatch(&self, args: Value) -> Result<Value, ToolError> {
         let input: SearchSignalsInput = deserialize_input(args)?;
         let signals = self
             .service
-            .search(
-                ctx,
-                SearchSignalsRequest {
-                    signal_type: input.signal_type,
-                    label_contains: input.label_contains,
-                    status: input.status,
-                    valence: input.valence,
-                    from_date: input.from_date,
-                    to_date_exclusive: input.to_date_exclusive,
-                    min_strength: input.min_strength,
-                    limit: input.limit,
-                },
-            )
+            .search(SearchSignalsRequest {
+                signal_type: input.signal_type,
+                label_contains: input.label_contains,
+                status: input.status,
+                valence: input.valence,
+                from_date: input.from_date,
+                to_date_exclusive: input.to_date_exclusive,
+                min_strength: input.min_strength,
+                limit: input.limit,
+            })
             .await?;
         serialize_output(SignalsOutput {
             signals: signals.into_iter().map(SignalItem::from).collect(),
@@ -137,16 +134,11 @@ mod tests {
     impl SignalReadService for StubSignalService {
         async fn search(
             &self,
-            _ctx: &UserContext,
             request: SearchSignalsRequest,
         ) -> Result<Vec<SignalView>, AnalyzerError> {
             *self.last.lock().unwrap() = Some(request);
             Ok(self.response.lock().unwrap().clone())
         }
-    }
-
-    fn ctx() -> UserContext {
-        UserContext::new("user-1")
     }
 
     #[tokio::test]
@@ -166,17 +158,14 @@ mod tests {
         let tool = SignalsSearchTool::new(stub.clone());
 
         let out = tool
-            .dispatch(
-                &ctx(),
-                json!({
-                    "limit": 10,
-                    "signal_type": "need",
-                    "status": "unmet",
-                    "min_strength": 0.5,
-                    "from_date": "2026-04-01",
-                    "to_date_exclusive": "2026-05-01"
-                }),
-            )
+            .dispatch(json!({
+                "limit": 10,
+                "signal_type": "need",
+                "status": "unmet",
+                "min_strength": 0.5,
+                "from_date": "2026-04-01",
+                "to_date_exclusive": "2026-05-01"
+            }))
             .await
             .unwrap();
 
@@ -202,7 +191,7 @@ mod tests {
         let stub = Arc::new(StubSignalService::default());
         let tool = SignalsSearchTool::new(stub.clone());
 
-        let _ = tool.dispatch(&ctx(), json!({"limit": 5})).await.unwrap();
+        let _ = tool.dispatch(json!({"limit": 5})).await.unwrap();
 
         let captured = stub.last.lock().unwrap().clone().unwrap();
         assert_eq!(captured.limit, 5);
@@ -220,7 +209,7 @@ mod tests {
         let tool = SignalsSearchTool::new(Arc::new(StubSignalService::default()));
 
         let err = tool
-            .dispatch(&ctx(), json!({"limit": 5, "signal_type": "diagnosis"}))
+            .dispatch(json!({"limit": 5, "signal_type": "diagnosis"}))
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
