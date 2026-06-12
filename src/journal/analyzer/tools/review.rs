@@ -8,9 +8,7 @@ use serde_json::Value;
 
 use super::{Tool, ToolError, deserialize_input, schema_value, serialize_output};
 use crate::journal::analyzer::review::ReviewReadService;
-use crate::journal::analyzer::types::{
-    DailyReviewView, GetReviewsRequest, UserContext, WeeklyReviewView,
-};
+use crate::journal::analyzer::types::{DailyReviewView, GetReviewsRequest, WeeklyReviewView};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct GetReviewsInput {
@@ -64,17 +62,14 @@ impl Tool for DailyReviewGetRangeTool {
     fn input_schema(&self) -> Value {
         schema_value::<GetReviewsInput>()
     }
-    async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
+    async fn dispatch(&self, args: Value) -> Result<Value, ToolError> {
         let input: GetReviewsInput = deserialize_input(args)?;
         let reviews = self
             .service
-            .get_daily_reviews(
-                ctx,
-                GetReviewsRequest {
-                    from_date: input.from_date,
-                    to_date_exclusive: input.to_date_exclusive,
-                },
-            )
+            .get_daily_reviews(GetReviewsRequest {
+                from_date: input.from_date,
+                to_date_exclusive: input.to_date_exclusive,
+            })
             .await?;
         serialize_output(DailyReviewsOutput {
             reviews: reviews.into_iter().map(DailyReviewItem::from).collect(),
@@ -127,17 +122,14 @@ impl Tool for WeeklyReviewGetRangeTool {
     fn input_schema(&self) -> Value {
         schema_value::<GetReviewsInput>()
     }
-    async fn dispatch(&self, ctx: &UserContext, args: Value) -> Result<Value, ToolError> {
+    async fn dispatch(&self, args: Value) -> Result<Value, ToolError> {
         let input: GetReviewsInput = deserialize_input(args)?;
         let reviews = self
             .service
-            .get_weekly_reviews(
-                ctx,
-                GetReviewsRequest {
-                    from_date: input.from_date,
-                    to_date_exclusive: input.to_date_exclusive,
-                },
-            )
+            .get_weekly_reviews(GetReviewsRequest {
+                from_date: input.from_date,
+                to_date_exclusive: input.to_date_exclusive,
+            })
             .await?;
         serialize_output(WeeklyReviewsOutput {
             reviews: reviews.into_iter().map(WeeklyReviewItem::from).collect(),
@@ -170,7 +162,6 @@ mod tests {
     impl ReviewReadService for StubReviewService {
         async fn get_daily_reviews(
             &self,
-            _ctx: &UserContext,
             request: GetReviewsRequest,
         ) -> Result<Vec<DailyReviewView>, AnalyzerError> {
             *self.last_daily.lock().unwrap() = Some(request);
@@ -178,7 +169,6 @@ mod tests {
         }
         async fn get_weekly_reviews(
             &self,
-            _ctx: &UserContext,
             request: GetReviewsRequest,
         ) -> Result<Vec<WeeklyReviewView>, AnalyzerError> {
             *self.last_weekly.lock().unwrap() = Some(request);
@@ -186,7 +176,6 @@ mod tests {
         }
         async fn get_daily_review(
             &self,
-            _ctx: &UserContext,
             review_date: NaiveDate,
         ) -> Result<Option<DailyReviewView>, AnalyzerError> {
             *self.last_daily_single.lock().unwrap() = Some(review_date);
@@ -194,16 +183,11 @@ mod tests {
         }
         async fn get_weekly_review(
             &self,
-            _ctx: &UserContext,
             week_start: NaiveDate,
         ) -> Result<Option<WeeklyReviewView>, AnalyzerError> {
             *self.last_weekly_single.lock().unwrap() = Some(week_start);
             Ok(self.weekly_single_response.lock().unwrap().clone())
         }
-    }
-
-    fn ctx() -> UserContext {
-        UserContext::new("user-1")
     }
 
     fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
@@ -225,13 +209,10 @@ mod tests {
         let tool = DailyReviewGetRangeTool::new(stub.clone());
 
         let out = tool
-            .dispatch(
-                &ctx(),
-                json!({
-                    "from_date": "2026-04-27",
-                    "to_date_exclusive": "2026-04-29"
-                }),
-            )
+            .dispatch(json!({
+                "from_date": "2026-04-27",
+                "to_date_exclusive": "2026-04-29"
+            }))
             .await
             .unwrap();
 
@@ -247,7 +228,7 @@ mod tests {
         let tool = DailyReviewGetRangeTool::new(Arc::new(StubReviewService::default()));
 
         let err = tool
-            .dispatch(&ctx(), json!({"from_date": "2026-04-27"}))
+            .dispatch(json!({"from_date": "2026-04-27"}))
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
@@ -265,13 +246,10 @@ mod tests {
         let tool = WeeklyReviewGetRangeTool::new(stub.clone());
 
         let out = tool
-            .dispatch(
-                &ctx(),
-                json!({
-                    "from_date": "2026-04-20",
-                    "to_date_exclusive": "2026-04-27"
-                }),
-            )
+            .dispatch(json!({
+                "from_date": "2026-04-20",
+                "to_date_exclusive": "2026-04-27"
+            }))
             .await
             .unwrap();
 

@@ -23,7 +23,7 @@ use froid::{
     adapters::mcp::AnalyzerMcpServer,
     database,
     journal::analyzer::{
-        SemanticJournalSearcher, UserContext, build_analyzer_mcp_components,
+        SemanticJournalSearcher, build_analyzer_mcp_components,
         types::{AnalyzerError, SemanticHit},
     },
 };
@@ -54,7 +54,7 @@ async fn fresh_pool() -> SqlitePool {
 async fn lists_and_calls_analyzer_tools_over_streamable_http() {
     let pool = fresh_pool().await;
     let components = build_analyzer_mcp_components(pool, Arc::new(StubSemanticSearcher));
-    let server = AnalyzerMcpServer::new(components, UserContext::new("test-user"));
+    let server = AnalyzerMcpServer::new(components);
 
     let cancel = CancellationToken::new();
     let service = StreamableHttpService::new(
