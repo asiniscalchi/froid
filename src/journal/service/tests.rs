@@ -286,9 +286,8 @@ struct FailingPendingEmbeddingCounter;
 
 #[async_trait::async_trait]
 impl PendingEmbeddingCounter for FailingPendingEmbeddingCounter {
-    async fn count_entries_missing_embedding_for_user(
+    async fn count_entries_missing_embedding(
         &self,
-        _user_id: &str,
         _embedding_model: &str,
     ) -> Result<i64, EmbeddingRepositoryError> {
         Err(EmbeddingRepositoryError::Database(

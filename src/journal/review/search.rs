@@ -24,7 +24,6 @@ pub enum DailyReviewSearchError {
 pub trait DailyReviewSearchService: Send + Sync {
     async fn search(
         &self,
-        user_id: &str,
         query: &str,
     ) -> Result<Vec<DailyReviewSearchResult>, DailyReviewSearchError>;
 }
@@ -58,7 +57,6 @@ where
 {
     async fn search(
         &self,
-        user_id: &str,
         query: &str,
     ) -> Result<Vec<DailyReviewSearchResult>, DailyReviewSearchError> {
         let embedding = self
@@ -71,7 +69,7 @@ where
 
         let index_results: Vec<EmbeddingSearchResult<i64>> = self
             .index
-            .search_for_user(user_id, &embedding, model, None, None, 5)
+            .search(&embedding, model, None, None, 5)
             .await
             .map_err(DailyReviewSearchError::Index)?;
 
@@ -225,9 +223,8 @@ mod tests {
             unreachable!()
         }
 
-        async fn search_for_user(
+        async fn search(
             &self,
-            _user_id: &str,
             _embedding: &Embedding,
             _embedding_model: &str,
             _from_date: Option<chrono::NaiveDate>,
@@ -258,7 +255,7 @@ mod tests {
             repo,
         );
 
-        let results = service.search("user-1", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(
@@ -289,7 +286,7 @@ mod tests {
             repo,
         );
 
-        let results = service.search("user-1", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(
@@ -307,7 +304,7 @@ mod tests {
             repo,
         );
 
-        let results = service.search("user-1", "query").await.unwrap();
+        let results = service.search("query").await.unwrap();
 
         assert!(results.is_empty());
     }
@@ -318,7 +315,7 @@ mod tests {
         let service =
             SemanticDailyReviewSearchService::new(index, FakeEmbedder::fails(TEST_MODEL), repo);
 
-        let err = service.search("user-1", "query").await.unwrap_err();
+        let err = service.search("query").await.unwrap_err();
 
         assert!(matches!(err, DailyReviewSearchError::Embedder(_)));
     }

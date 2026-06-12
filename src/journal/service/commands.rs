@@ -61,19 +61,14 @@ impl JournalService {
                 self.stats(&request.user_id, request.received_at.date_naive())
                     .await
             }
-            JournalCommand::Status => {
-                self.status(&request.user_id, request.received_at.date_naive())
-                    .await
-            }
+            JournalCommand::Status => self.status(request.received_at.date_naive()).await,
             JournalCommand::DayReviewLast => Ok(self
                 .day_review_last(&request.user_id, request.received_at.date_naive())
                 .await),
             JournalCommand::WeekReviewLast => Ok(self
                 .week_review_last(&request.user_id, request.received_at.date_naive())
                 .await),
-            JournalCommand::Search { query } => {
-                Ok(self.search_command(&request.user_id, query).await)
-            }
+            JournalCommand::Search { query } => Ok(self.search_command(query).await),
             JournalCommand::SearchUsage => Ok(OutgoingMessage {
                 text: search_usage_response(),
             }),
@@ -145,14 +140,14 @@ impl JournalService {
         }
     }
 
-    async fn search_command(&self, user_id: &str, query: &str) -> OutgoingMessage {
+    async fn search_command(&self, query: &str) -> OutgoingMessage {
         let Some(search) = &self.search else {
             return OutgoingMessage {
                 text: search_unavailable_response(),
             };
         };
 
-        match search.search(user_id, query).await {
+        match search.search(query).await {
             Ok(results) if results.is_empty() => OutgoingMessage {
                 text: search_empty_response(),
             },
@@ -242,13 +237,9 @@ impl JournalService {
         })
     }
 
-    async fn status(
-        &self,
-        user_id: &str,
-        today: chrono::NaiveDate,
-    ) -> Result<OutgoingMessage, sqlx::Error> {
+    async fn status(&self, today: chrono::NaiveDate) -> Result<OutgoingMessage, sqlx::Error> {
         let journal = self.repository.stats(today).await?;
-        let embeddings = self.embedding_status(user_id).await;
+        let embeddings = self.embedding_status().await;
         let daily_review = self.daily_review_status();
 
         Ok(OutgoingMessage {
@@ -260,7 +251,7 @@ impl JournalService {
         })
     }
 
-    async fn embedding_status(&self, user_id: &str) -> EmbeddingStatus {
+    async fn embedding_status(&self) -> EmbeddingStatus {
         let semantic_search = if self.search.is_some() && self.embedding_status_config.is_some() {
             SemanticSearchStatus::Enabled
         } else {
@@ -272,10 +263,7 @@ impl JournalService {
             self.pending_embedding_counter.as_ref(),
         ) {
             (Some(config), Some(counter)) => {
-                match counter
-                    .count_entries_missing_embedding_for_user(user_id, &config.model)
-                    .await
-                {
+                match counter.count_entries_missing_embedding(&config.model).await {
                     Ok(count) => Some(count),
                     Err(error) => {
                         warn!(%error, "failed to count pending embeddings for status");

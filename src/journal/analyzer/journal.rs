@@ -113,7 +113,7 @@ impl JournalReadService for DefaultJournalReadService {
 
     async fn search_semantic(
         &self,
-        ctx: &UserContext,
+        _ctx: &UserContext,
         request: SearchSemanticRequest,
     ) -> Result<Vec<SemanticHit>, AnalyzerError> {
         let limit = validate_limit(request.limit, MAX_SEMANTIC_LIMIT)?;
@@ -128,7 +128,6 @@ impl JournalReadService for DefaultJournalReadService {
         let hits = self
             .semantic
             .search(
-                &ctx.user_id,
                 trimmed,
                 request.from_date,
                 request.to_date_exclusive,
@@ -212,7 +211,6 @@ mod tests {
     impl SemanticJournalSearcher for StubSemanticSearcher {
         async fn search(
             &self,
-            _user_id: &str,
             _query: &str,
             from_date: Option<NaiveDate>,
             to_date_exclusive: Option<NaiveDate>,

@@ -177,9 +177,8 @@ mod tests {
                 .map_err(Into::into)
         }
 
-        async fn search_for_user(
+        async fn search(
             &self,
-            user_id: &str,
             embedding: &Embedding,
             embedding_model: &str,
             from_date: Option<chrono::NaiveDate>,
@@ -187,8 +186,7 @@ mod tests {
             limit: usize,
         ) -> Result<Vec<EmbeddingSearchResult<String>>, EmbeddingRepositoryError> {
             self.inner
-                .search_for_user(
-                    user_id,
+                .search(
                     embedding,
                     embedding_model,
                     from_date,
