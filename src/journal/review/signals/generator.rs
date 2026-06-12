@@ -8,7 +8,10 @@ use rig::{
 use thiserror::Error;
 
 use crate::{
-    journal::review::{JournalEntryWithExtraction, signals::types::DailyReviewSignalsOutput},
+    journal::review::{
+        JournalEntryWithExtraction,
+        signals::types::{DailyReviewSignalsOutput, KnownSignalLabel},
+    },
     prompts::{PromptSource, ResolvedPrompt},
 };
 
@@ -63,6 +66,7 @@ pub trait DailyReviewSignalGenerator: Send + Sync {
         &self,
         review_text: &str,
         entries: &[JournalEntryWithExtraction],
+        known_labels: &[KnownSignalLabel],
     ) -> Result<DailyReviewSignalsOutput, DailyReviewSignalGenerationError>;
 }
 
@@ -204,9 +208,10 @@ impl DailyReviewSignalGenerator for RigOpenAiDailyReviewSignalGenerator {
         &self,
         review_text: &str,
         entries: &[JournalEntryWithExtraction],
+        known_labels: &[KnownSignalLabel],
     ) -> Result<DailyReviewSignalsOutput, DailyReviewSignalGenerationError> {
         self.refresh_prompt().await?;
-        let prompt = build_signal_extraction_prompt(review_text, entries);
+        let prompt = build_signal_extraction_prompt(review_text, entries, known_labels);
         let instructions = self.prompt.read().unwrap().text.clone();
         self.provider
             .complete_signal_extraction(&self.config.model, &instructions, &prompt)
@@ -218,6 +223,7 @@ impl DailyReviewSignalGenerator for RigOpenAiDailyReviewSignalGenerator {
 fn build_signal_extraction_prompt(
     review_text: &str,
     entries: &[JournalEntryWithExtraction],
+    known_labels: &[KnownSignalLabel],
 ) -> String {
     let formatted_entries = entries
         .iter()
@@ -242,12 +248,25 @@ fn build_signal_extraction_prompt(
         .collect::<Vec<_>>()
         .join("\n");
 
+    let known_labels_section = if known_labels.is_empty() {
+        String::new()
+    } else {
+        let labels = known_labels
+            .iter()
+            .map(|known| format!("- {}: {}", known.signal_type.as_str(), known.label))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "\n\nKnown labels from previous days (reuse the exact label when the meaning matches):\n{labels}"
+        )
+    };
+
     format!(
         r#"Daily review:
 {review_text}
 
 Journal entries:
-{formatted_entries}"#
+{formatted_entries}{known_labels_section}"#
     )
 }
 
@@ -263,7 +282,8 @@ pub mod fake {
 
     use super::{DailyReviewSignalGenerationError, DailyReviewSignalGenerator};
     use crate::journal::review::{
-        JournalEntryWithExtraction, signals::types::DailyReviewSignalsOutput,
+        JournalEntryWithExtraction,
+        signals::types::{DailyReviewSignalsOutput, KnownSignalLabel},
     };
 
     #[derive(Debug, Clone)]
@@ -272,6 +292,7 @@ pub mod fake {
         prompt_version: String,
         result: Arc<Mutex<Result<DailyReviewSignalsOutput, DailyReviewSignalGenerationError>>>,
         calls: Arc<AtomicUsize>,
+        known_labels_seen: Arc<Mutex<Vec<Vec<KnownSignalLabel>>>>,
     }
 
     impl FakeSignalGenerator {
@@ -281,6 +302,7 @@ pub mod fake {
                 prompt_version: "fake-signal-prompt-v1".to_string(),
                 result: Arc::new(Mutex::new(Ok(output))),
                 calls: Arc::new(AtomicUsize::new(0)),
+                known_labels_seen: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -292,11 +314,16 @@ pub mod fake {
                     message,
                 )))),
                 calls: Arc::new(AtomicUsize::new(0)),
+                known_labels_seen: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
         pub fn calls(&self) -> usize {
             self.calls.load(Ordering::SeqCst)
+        }
+
+        pub fn known_labels_seen(&self) -> Vec<Vec<KnownSignalLabel>> {
+            self.known_labels_seen.lock().unwrap().clone()
         }
     }
 
@@ -314,8 +341,13 @@ pub mod fake {
             &self,
             _review_text: &str,
             _entries: &[JournalEntryWithExtraction],
+            known_labels: &[KnownSignalLabel],
         ) -> Result<DailyReviewSignalsOutput, DailyReviewSignalGenerationError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.known_labels_seen
+                .lock()
+                .unwrap()
+                .push(known_labels.to_vec());
             self.result.lock().unwrap().clone()
         }
     }
@@ -454,7 +486,7 @@ mod tests {
         );
 
         let output = generator
-            .generate_signals("review text", &[entry("entry text")])
+            .generate_signals("review text", &[entry("entry text")], &[])
             .await
             .unwrap();
         let calls = provider.calls();
@@ -482,7 +514,7 @@ mod tests {
         );
 
         let error = generator
-            .generate_signals("review text", &[])
+            .generate_signals("review text", &[], &[])
             .await
             .unwrap_err();
 
@@ -502,7 +534,7 @@ mod tests {
         );
 
         let output = generator
-            .generate_signals("review text", &[])
+            .generate_signals("review text", &[], &[])
             .await
             .unwrap();
 
@@ -510,9 +542,39 @@ mod tests {
     }
 
     #[test]
+    fn build_prompt_includes_known_labels_when_present() {
+        let known = vec![
+            KnownSignalLabel {
+                signal_type: SignalType::Theme,
+                label: "physical appearance".to_string(),
+            },
+            KnownSignalLabel {
+                signal_type: SignalType::Behavior,
+                label: "plan switching".to_string(),
+            },
+        ];
+
+        let prompt = build_signal_extraction_prompt("review text", &[], &known);
+
+        assert!(prompt.contains("Known labels from previous days"));
+        assert!(prompt.contains("- theme: physical appearance"));
+        assert!(prompt.contains("- behavior: plan switching"));
+    }
+
+    #[test]
+    fn build_prompt_omits_known_labels_section_when_empty() {
+        let prompt = build_signal_extraction_prompt("review text", &[], &[]);
+
+        assert!(!prompt.contains("Known labels"));
+    }
+
+    #[test]
     fn build_prompt_includes_review_and_entries() {
-        let prompt =
-            build_signal_extraction_prompt("Today was hard.", &[entry("Felt anxious at work.")]);
+        let prompt = build_signal_extraction_prompt(
+            "Today was hard.",
+            &[entry("Felt anxious at work.")],
+            &[],
+        );
 
         assert!(prompt.contains("Today was hard."));
         assert!(prompt.contains("Felt anxious at work."));
@@ -541,7 +603,7 @@ mod tests {
             extraction: Some(extraction),
         };
 
-        let prompt = build_signal_extraction_prompt("review text", &[entry_with_extraction]);
+        let prompt = build_signal_extraction_prompt("review text", &[entry_with_extraction], &[]);
 
         assert!(prompt.contains("Structured extraction:"));
         assert!(prompt.contains("Work stress"));

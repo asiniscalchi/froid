@@ -201,11 +201,14 @@ mod tests {
 
         let journal_entries = JournalRepository::new(pool.clone());
         let daily_reviews = DailyReviewRepository::new(pool.clone());
-        let extractions = JournalEntryExtractionRepository::new(pool);
+        let extractions = JournalEntryExtractionRepository::new(pool.clone());
         let service = DailyReviewService::new(
             daily_reviews.clone(),
             journal_entries.clone(),
             extractions,
+            crate::journal::review::signals::repository::DailyReviewSignalRepository::new(
+                pool.clone(),
+            ),
             generator,
         );
         let worker = DailyReviewDeliveryWorker::new(

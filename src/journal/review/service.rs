@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use thiserror::Error;
+use tracing::warn;
 
 use crate::errors::from_error_string;
 
@@ -13,6 +14,10 @@ use crate::journal::{
         JournalEntryWithExtraction,
         generator::ReviewGenerator,
         repository::{DailyReviewRepository, DailyReviewRepositoryError},
+        signals::{
+            repository::DailyReviewSignalRepository,
+            types::{DailyReviewSignal, SignalType},
+        },
     },
 };
 
@@ -36,6 +41,7 @@ pub struct DailyReviewService {
     daily_reviews: DailyReviewRepository,
     journal_entries: JournalRepository,
     extractions: JournalEntryExtractionRepository,
+    signals: DailyReviewSignalRepository,
     generator: Arc<dyn ReviewGenerator>,
 }
 
@@ -57,6 +63,7 @@ impl DailyReviewService {
         daily_reviews: DailyReviewRepository,
         journal_entries: JournalRepository,
         extractions: JournalEntryExtractionRepository,
+        signals: DailyReviewSignalRepository,
         generator: G,
     ) -> Self
     where
@@ -66,6 +73,7 @@ impl DailyReviewService {
             daily_reviews,
             journal_entries,
             extractions,
+            signals,
             generator: Arc::new(generator),
         }
     }
@@ -92,11 +100,13 @@ impl DailyReviewService {
             return Ok(DailyReviewResult::EmptyDay);
         }
 
+        let carried_attention = self.carried_attention_from_previous_day(utc_date).await;
+
         let model = self.generator.model();
 
         match self
             .generator
-            .generate_daily_review(&entries_with_extractions)
+            .generate_daily_review(&entries_with_extractions, &carried_attention)
             .await
         {
             Ok(review_text) => {
@@ -134,6 +144,30 @@ impl DailyReviewService {
                     .as_deref()
                     .is_some_and(|t: &str| !t.trim().is_empty())
         }))
+    }
+
+    /// Yesterday's `tomorrow_attention` signals, carried into today's review
+    /// as context. Best-effort: the review is still generated when the lookup
+    /// fails or the signals have not been extracted yet.
+    async fn carried_attention_from_previous_day(
+        &self,
+        utc_date: NaiveDate,
+    ) -> Vec<DailyReviewSignal> {
+        let previous_day = utc_date - Duration::days(1);
+        match self.signals.find_by_user_and_date(previous_day).await {
+            Ok(signals) => signals
+                .into_iter()
+                .filter(|signal| signal.signal_type == SignalType::TomorrowAttention)
+                .collect(),
+            Err(error) => {
+                warn!(
+                    review_date = %utc_date,
+                    error = %error,
+                    "failed to load carried-over attention signals; generating review without them"
+                );
+                Vec::new()
+            }
+        }
     }
 
     async fn fetch_entries_with_extractions(
@@ -231,11 +265,12 @@ mod tests {
 
         let daily_reviews = DailyReviewRepository::new(pool.clone());
         let journal_entries = JournalRepository::new(pool.clone());
-        let extractions = JournalEntryExtractionRepository::new(pool);
+        let extractions = JournalEntryExtractionRepository::new(pool.clone());
         let service = DailyReviewService::new(
             daily_reviews.clone(),
             journal_entries.clone(),
             extractions.clone(),
+            DailyReviewSignalRepository::new(pool),
             generator.clone(),
         );
 
@@ -606,6 +641,7 @@ mod tests {
             daily_reviews,
             journal_entries,
             extractions,
+            DailyReviewSignalRepository::new(pool.clone()),
             PoolClosingGenerator { pool },
         );
 
@@ -631,10 +667,92 @@ mod tests {
         async fn generate_daily_review(
             &self,
             _entries: &[JournalEntryWithExtraction],
+            _carried_attention: &[DailyReviewSignal],
         ) -> Result<String, ReviewGenerationError> {
             self.pool.close().await;
             Err(ReviewGenerationError::new("provider down"))
         }
+    }
+
+    #[tokio::test]
+    async fn review_day_carries_yesterdays_tomorrow_attention_signals_into_generation() {
+        let pool = crate::database::test_pool().await;
+        let daily_reviews = DailyReviewRepository::new(pool.clone());
+        let journal_entries = JournalRepository::new(pool.clone());
+        let extractions = JournalEntryExtractionRepository::new(pool.clone());
+        let signals = DailyReviewSignalRepository::new(pool);
+        let generator = FakeReviewGenerator::succeeding("review with carryover");
+        let service = DailyReviewService::new(
+            daily_reviews.clone(),
+            journal_entries.clone(),
+            extractions,
+            signals.clone(),
+            generator.clone(),
+        );
+
+        // Yesterday: a completed review with one tomorrow_attention signal
+        // and one unrelated theme signal.
+        let yesterday = date() - Duration::days(1);
+        let yesterdays_review = daily_reviews
+            .upsert_completed(yesterday, "yesterday text", "m", "v1")
+            .await
+            .unwrap();
+        signals
+            .replace_in_transaction(
+                yesterdays_review.id,
+                yesterday,
+                &[
+                    crate::journal::review::signals::types::DailyReviewSignalCandidate {
+                        signal_type: SignalType::TomorrowAttention,
+                        label: "protect the focus block".to_string(),
+                        status: None,
+                        valence: None,
+                        strength: 0.8,
+                        confidence: 0.9,
+                        evidence: "Planned to keep mornings meeting-free.".to_string(),
+                    },
+                    crate::journal::review::signals::types::DailyReviewSignalCandidate {
+                        signal_type: SignalType::Theme,
+                        label: "work pressure".to_string(),
+                        status: None,
+                        valence: None,
+                        strength: 0.7,
+                        confidence: 0.8,
+                        evidence: "Mentions deadlines.".to_string(),
+                    },
+                ],
+                "m",
+                "v1",
+            )
+            .await
+            .unwrap();
+
+        journal_entries
+            .store(&at_date(28, "1", "kept the morning free"))
+            .await
+            .unwrap();
+
+        service.review_day(date()).await.unwrap();
+
+        let carried = generator.carried_seen();
+        assert_eq!(carried.len(), 1);
+        assert_eq!(carried[0].len(), 1, "only tomorrow_attention is carried");
+        assert_eq!(carried[0][0].label, "protect the focus block");
+        assert_eq!(carried[0][0].signal_type, SignalType::TomorrowAttention);
+    }
+
+    #[tokio::test]
+    async fn review_day_passes_empty_carryover_when_yesterday_has_no_signals() {
+        let (service, _daily_reviews, journal_entries, _extractions, generator) =
+            setup(FakeReviewGenerator::succeeding("plain review")).await;
+        journal_entries
+            .store(&at_date(28, "1", "an entry"))
+            .await
+            .unwrap();
+
+        service.review_day(date()).await.unwrap();
+
+        assert_eq!(generator.carried_seen(), vec![Vec::new()]);
     }
 
     #[tokio::test]

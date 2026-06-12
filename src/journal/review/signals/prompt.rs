@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::prompts::file::{self, PromptFile, PromptFileError};
 
 pub const DEFAULT_SIGNAL_EXTRACTION_PROMPT_PATH: &str =
-    "prompts/daily_review_signal_extraction_v1.md";
+    "prompts/daily_review_signal_extraction_v2.md";
 
 const PROMPT_KIND: &str = "signal extraction";
 

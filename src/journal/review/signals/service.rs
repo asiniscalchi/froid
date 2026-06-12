@@ -6,6 +6,11 @@ use tracing::{info, warn};
 
 use crate::errors::from_error_string;
 
+/// How far back the label vocabulary offered for reuse reaches.
+const KNOWN_LABEL_WINDOW_DAYS: u32 = 90;
+/// Cap on the vocabulary size included in the signal-extraction prompt.
+const KNOWN_LABEL_LIMIT: u32 = 100;
+
 use crate::journal::{
     extraction::repository::JournalEntryExtractionRepository,
     repository::JournalRepository,
@@ -110,9 +115,14 @@ impl DailyReviewSignalService {
 
         let entries = self.fetch_entries_with_extractions(review_date).await?;
 
+        let known_labels = self
+            .signals
+            .find_recent_labels(review_date, KNOWN_LABEL_WINDOW_DAYS, KNOWN_LABEL_LIMIT)
+            .await?;
+
         let generation_result = self
             .generator
-            .generate_signals(&review_text, &entries)
+            .generate_signals(&review_text, &entries, &known_labels)
             .await;
 
         let output = match generation_result {
@@ -231,7 +241,10 @@ mod tests {
                 signals::{
                     generator::fake::FakeSignalGenerator,
                     repository::DailyReviewSignalRepository,
-                    types::{DailyReviewSignalCandidate, DailyReviewSignalsOutput, SignalType},
+                    types::{
+                        DailyReviewSignalCandidate, DailyReviewSignalsOutput, KnownSignalLabel,
+                        SignalType,
+                    },
                 },
             },
         },
@@ -304,6 +317,69 @@ mod tests {
 
     fn output_with(signals: Vec<DailyReviewSignalCandidate>) -> DailyReviewSignalsOutput {
         DailyReviewSignalsOutput { signals }
+    }
+
+    #[tokio::test]
+    async fn generation_offers_recent_labels_for_reuse() {
+        let pool = crate::database::test_pool().await;
+        let daily_reviews = DailyReviewRepository::new(pool.clone());
+        let journal_entries = JournalRepository::new(pool.clone());
+        let extractions =
+            crate::journal::extraction::repository::JournalEntryExtractionRepository::new(
+                pool.clone(),
+            );
+        let signals = DailyReviewSignalRepository::new(pool.clone());
+        let generator = FakeSignalGenerator::succeeding(output_with(vec![theme_signal()]));
+        let service = DailyReviewSignalService::new(
+            daily_reviews.clone(),
+            journal_entries.clone(),
+            extractions,
+            signals.clone(),
+            generator.clone(),
+        );
+
+        // A signal stored three days earlier provides the vocabulary.
+        let earlier = date() - chrono::Duration::days(3);
+        let earlier_review = daily_reviews
+            .upsert_completed(earlier, "earlier review", "m", "v1")
+            .await
+            .unwrap();
+        signals
+            .replace_in_transaction(
+                earlier_review.id,
+                earlier,
+                &[DailyReviewSignalCandidate {
+                    signal_type: SignalType::Behavior,
+                    label: "plan switching".to_string(),
+                    status: None,
+                    valence: Some(crate::journal::extraction::BehaviorValence::Negative),
+                    strength: 0.6,
+                    confidence: 0.8,
+                    evidence: "Changed plans twice.".to_string(),
+                }],
+                "m",
+                "v1",
+            )
+            .await
+            .unwrap();
+
+        journal_entries
+            .store(&incoming("today entry"))
+            .await
+            .unwrap();
+        daily_reviews
+            .upsert_completed(date(), "today review", "m", "v1")
+            .await
+            .unwrap();
+
+        service.generate_signals_for_review(date()).await.unwrap();
+
+        let seen = generator.known_labels_seen();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].contains(&KnownSignalLabel {
+            signal_type: SignalType::Behavior,
+            label: "plan switching".to_string(),
+        }));
     }
 
     #[tokio::test]
