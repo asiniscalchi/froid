@@ -8,6 +8,7 @@ use crate::{
         review::{
             DailyReviewPromptConfig, ReviewConfig, RigOpenAiReviewGenerator,
             repository::DailyReviewRepository, service::DailyReviewService,
+            signals::repository::DailyReviewSignalRepository,
         },
         service::JournalService,
     },
@@ -72,7 +73,8 @@ pub fn build_daily_review_service(
     let daily_review_service = DailyReviewService::new(
         DailyReviewRepository::new(pool.clone()),
         JournalRepository::new(pool.clone()),
-        JournalEntryExtractionRepository::new(pool),
+        JournalEntryExtractionRepository::new(pool.clone()),
+        DailyReviewSignalRepository::new(pool),
         review_generator,
     );
 

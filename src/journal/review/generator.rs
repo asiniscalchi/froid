@@ -9,7 +9,10 @@ use rig::{
 use thiserror::Error;
 
 use crate::{
-    journal::review::{DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction},
+    journal::review::{
+        DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction,
+        signals::types::DailyReviewSignal,
+    },
     prompts::{PromptSource, ResolvedPrompt},
 };
 
@@ -61,6 +64,7 @@ pub trait ReviewGenerator: Send + Sync {
     async fn generate_daily_review(
         &self,
         entries: &[JournalEntryWithExtraction],
+        carried_attention: &[DailyReviewSignal],
     ) -> Result<String, ReviewGenerationError>;
 }
 
@@ -197,9 +201,10 @@ impl ReviewGenerator for RigOpenAiReviewGenerator {
     async fn generate_daily_review(
         &self,
         entries: &[JournalEntryWithExtraction],
+        carried_attention: &[DailyReviewSignal],
     ) -> Result<String, ReviewGenerationError> {
         self.refresh_prompt().await?;
-        let prompt = build_daily_review_prompt(entries);
+        let prompt = build_daily_review_prompt(entries, carried_attention);
         let instructions = self.prompt.read().unwrap().text.clone();
         self.provider
             .complete_daily_review(&self.config.model, &instructions, &prompt)
@@ -208,7 +213,10 @@ impl ReviewGenerator for RigOpenAiReviewGenerator {
     }
 }
 
-fn build_daily_review_prompt(entries: &[JournalEntryWithExtraction]) -> String {
+fn build_daily_review_prompt(
+    entries: &[JournalEntryWithExtraction],
+    carried_attention: &[DailyReviewSignal],
+) -> String {
     let formatted_entries = entries
         .iter()
         .map(|entry_with_ext| {
@@ -232,6 +240,24 @@ fn build_daily_review_prompt(entries: &[JournalEntryWithExtraction]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let carried_section = if carried_attention.is_empty() {
+        String::new()
+    } else {
+        let points = carried_attention
+            .iter()
+            .map(|signal| {
+                format!(
+                    "- {} (flagged on {}): \"{}\"",
+                    signal.label, signal.review_date, signal.evidence
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "\n\nCarried over from yesterday's review — points of attention previously flagged for today:\n{points}"
+        )
+    };
+
     format!(
         r#"Write a daily review using only these journal entries.
 
@@ -244,7 +270,7 @@ Themes:
 - ...
 
 Pay attention tomorrow:
-- ...
+- ...{carried_section}
 
 Journal entries:
 {formatted_entries}"#
@@ -264,7 +290,7 @@ pub mod fake {
     use async_trait::async_trait;
 
     use super::{ReviewGenerationError, ReviewGenerator};
-    use crate::journal::review::JournalEntryWithExtraction;
+    use crate::journal::review::{JournalEntryWithExtraction, signals::types::DailyReviewSignal};
 
     #[derive(Debug, Clone)]
     pub struct FakeReviewGenerator {
@@ -273,6 +299,7 @@ pub mod fake {
         results: Arc<Mutex<VecDeque<Result<String, ReviewGenerationError>>>>,
         calls: Arc<AtomicUsize>,
         entries_seen: Arc<Mutex<Vec<Vec<JournalEntryWithExtraction>>>>,
+        carried_seen: Arc<Mutex<Vec<Vec<DailyReviewSignal>>>>,
     }
 
     impl FakeReviewGenerator {
@@ -291,6 +318,7 @@ pub mod fake {
                 results: Arc::new(Mutex::new(VecDeque::from(results))),
                 calls: Arc::new(AtomicUsize::new(0)),
                 entries_seen: Arc::new(Mutex::new(Vec::new())),
+                carried_seen: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -300,6 +328,10 @@ pub mod fake {
 
         pub fn entries_seen(&self) -> Vec<Vec<JournalEntryWithExtraction>> {
             self.entries_seen.lock().unwrap().clone()
+        }
+
+        pub fn carried_seen(&self) -> Vec<Vec<DailyReviewSignal>> {
+            self.carried_seen.lock().unwrap().clone()
         }
     }
 
@@ -316,9 +348,14 @@ pub mod fake {
         async fn generate_daily_review(
             &self,
             entries: &[JournalEntryWithExtraction],
+            carried_attention: &[DailyReviewSignal],
         ) -> Result<String, ReviewGenerationError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.entries_seen.lock().unwrap().push(entries.to_vec());
+            self.carried_seen
+                .lock()
+                .unwrap()
+                .push(carried_attention.to_vec());
 
             self.results
                 .lock()
@@ -454,11 +491,14 @@ mod tests {
         assert_eq!(generator.prompt_version(), "custom-prompt");
         assert_eq!(
             generator
-                .generate_daily_review(&[JournalEntryWithExtraction {
-                    id: "1".to_string(),
-                    entry: entry(28, "wrote a test"),
-                    extraction: None,
-                }])
+                .generate_daily_review(
+                    &[JournalEntryWithExtraction {
+                        id: "1".to_string(),
+                        entry: entry(28, "wrote a test"),
+                        extraction: None,
+                    }],
+                    &[]
+                )
                 .await
                 .unwrap(),
             "review text"
@@ -480,11 +520,14 @@ mod tests {
         );
 
         generator
-            .generate_daily_review(&[JournalEntryWithExtraction {
-                id: "1".to_string(),
-                entry: entry(28, "requested date entry"),
-                extraction: None,
-            }])
+            .generate_daily_review(
+                &[JournalEntryWithExtraction {
+                    id: "1".to_string(),
+                    entry: entry(28, "requested date entry"),
+                    extraction: None,
+                }],
+                &[],
+            )
             .await
             .unwrap();
 
@@ -504,11 +547,14 @@ mod tests {
         );
 
         let error = generator
-            .generate_daily_review(&[JournalEntryWithExtraction {
-                id: "1".to_string(),
-                entry: entry(28, "wrote a test"),
-                extraction: None,
-            }])
+            .generate_daily_review(
+                &[JournalEntryWithExtraction {
+                    id: "1".to_string(),
+                    entry: entry(28, "wrote a test"),
+                    extraction: None,
+                }],
+                &[],
+            )
             .await
             .unwrap_err();
 
@@ -517,16 +563,54 @@ mod tests {
 
     #[test]
     fn generated_prompt_requests_review_format() {
-        let prompt_text = build_daily_review_prompt(&[JournalEntryWithExtraction {
-            id: "1".to_string(),
-            entry: entry(28, "finished the feature"),
-            extraction: None,
-        }]);
+        let prompt_text = build_daily_review_prompt(
+            &[JournalEntryWithExtraction {
+                id: "1".to_string(),
+                entry: entry(28, "finished the feature"),
+                extraction: None,
+            }],
+            &[],
+        );
 
         assert!(prompt_text.contains("Summary:"));
         assert!(prompt_text.contains("Themes:"));
         assert!(prompt_text.contains("Pay attention tomorrow:"));
         assert!(prompt_text.contains("finished the feature"));
+        assert!(!prompt_text.contains("Carried over from yesterday"));
+    }
+
+    #[test]
+    fn generated_prompt_includes_carried_over_attention_points() {
+        let carried = DailyReviewSignal {
+            id: 1,
+            daily_review_id: 1,
+            review_date: chrono::NaiveDate::from_ymd_opt(2026, 4, 27).unwrap(),
+            signal_type: crate::journal::review::signals::types::SignalType::TomorrowAttention,
+            label: "protect the morning focus block".to_string(),
+            status: None,
+            valence: None,
+            strength: 0.8,
+            confidence: 0.9,
+            evidence: "Planned to keep mornings meeting-free.".to_string(),
+            model: "m".to_string(),
+            prompt_version: "v1".to_string(),
+            created_at: Utc.with_ymd_and_hms(2026, 4, 27, 22, 0, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 4, 27, 22, 0, 0).unwrap(),
+        };
+
+        let prompt_text = build_daily_review_prompt(
+            &[JournalEntryWithExtraction {
+                id: "1".to_string(),
+                entry: entry(28, "finished the feature"),
+                extraction: None,
+            }],
+            &[carried],
+        );
+
+        assert!(prompt_text.contains("Carried over from yesterday's review"));
+        assert!(prompt_text.contains("protect the morning focus block"));
+        assert!(prompt_text.contains("flagged on 2026-04-27"));
+        assert!(prompt_text.contains("Planned to keep mornings meeting-free."));
     }
 
     #[tokio::test]
@@ -561,11 +645,14 @@ mod tests {
         .with_prompt_source(source);
 
         generator
-            .generate_daily_review(&[JournalEntryWithExtraction {
-                id: "1".to_string(),
-                entry: entry(28, "first"),
-                extraction: None,
-            }])
+            .generate_daily_review(
+                &[JournalEntryWithExtraction {
+                    id: "1".to_string(),
+                    entry: entry(28, "first"),
+                    extraction: None,
+                }],
+                &[],
+            )
             .await
             .unwrap();
 
@@ -586,11 +673,14 @@ mod tests {
             .unwrap();
 
         generator
-            .generate_daily_review(&[JournalEntryWithExtraction {
-                id: "1".to_string(),
-                entry: entry(28, "second"),
-                extraction: None,
-            }])
+            .generate_daily_review(
+                &[JournalEntryWithExtraction {
+                    id: "1".to_string(),
+                    entry: entry(28, "second"),
+                    extraction: None,
+                }],
+                &[],
+            )
             .await
             .unwrap();
 
@@ -613,11 +703,14 @@ mod tests {
             needs: vec![],
             possible_patterns: vec![],
         };
-        let prompt_text = build_daily_review_prompt(&[JournalEntryWithExtraction {
-            id: "1".to_string(),
-            entry: entry(28, "entry with extraction"),
-            extraction: Some(extraction),
-        }]);
+        let prompt_text = build_daily_review_prompt(
+            &[JournalEntryWithExtraction {
+                id: "1".to_string(),
+                entry: entry(28, "entry with extraction"),
+                extraction: Some(extraction),
+            }],
+            &[],
+        );
 
         assert!(prompt_text.contains("entry with extraction"));
         assert!(prompt_text.contains("Entry #1"));

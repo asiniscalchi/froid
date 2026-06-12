@@ -85,8 +85,9 @@ async fn setup_with_daily_review_service(
     let extractions = JournalEntryExtractionRepository::new(pool.clone());
     let daily_review_service = DailyReviewService::new(
         daily_review_repo.clone(),
-        JournalRepository::new(pool),
+        JournalRepository::new(pool.clone()),
         extractions,
+        crate::journal::review::signals::repository::DailyReviewSignalRepository::new(pool),
         generator,
     );
     let service =
