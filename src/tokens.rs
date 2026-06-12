@@ -107,12 +107,9 @@ impl TokenIssuer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database;
 
     async fn store() -> UserTokenStore {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         UserTokenStore::new(pool)
     }
 

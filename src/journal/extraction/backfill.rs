@@ -108,11 +108,9 @@ mod tests {
 
     use async_trait::async_trait;
     use chrono::TimeZone;
-    use sqlx::SqlitePool;
 
     use super::*;
     use crate::{
-        database,
         journal::{
             extraction::{
                 repository::JournalEntryExtractionRepository,
@@ -124,9 +122,7 @@ mod tests {
     };
 
     async fn setup() -> (JournalRepository, JournalEntryExtractionRepository) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         (
             JournalRepository::new(pool.clone()),
             JournalEntryExtractionRepository::new(pool),

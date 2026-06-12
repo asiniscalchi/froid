@@ -147,13 +147,9 @@ impl JournalReadService for DefaultJournalReadService {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate, TimeZone, Utc};
-    use sqlx::SqlitePool;
 
     use super::*;
-    use crate::{
-        database,
-        messages::{IncomingMessage, MessageSource},
-    };
+    use crate::messages::{IncomingMessage, MessageSource};
 
     async fn setup() -> (DefaultJournalReadService, JournalRepository) {
         setup_with_semantic(Arc::new(StubSemanticSearcher::default())).await
@@ -162,9 +158,7 @@ mod tests {
     async fn setup_with_semantic(
         semantic: Arc<dyn SemanticJournalSearcher>,
     ) -> (DefaultJournalReadService, JournalRepository) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         let repository = JournalRepository::new(pool);
         let service = DefaultJournalReadService::new(repository.clone(), semantic);
         (service, repository)

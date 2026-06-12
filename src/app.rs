@@ -12,29 +12,23 @@ use crate::{
     cli::ServeConfig,
     database, http,
     journal::{
-        embedding::{
-            EmbeddingBackfillService, EmbeddingConfig, RigOpenAiEmbedder, SqliteEmbeddingRepository,
-        },
+        embedding::{EmbeddingBackfillService, RigOpenAiEmbedder, SqliteEmbeddingRepository},
         extraction::{
-            ExtractionBackfillService, JournalEntryExtractionRuntimeConfig,
-            configure_journal_entry_extraction, repository::JournalEntryExtractionRepository,
-            service::JournalEntryExtractionService,
+            ExtractionBackfillService, configure_journal_entry_extraction,
+            repository::JournalEntryExtractionRepository, service::JournalEntryExtractionService,
         },
         repository::JournalRepository,
         review::{
-            DailyReviewRuntimeConfig, build_daily_review_service, configure_daily_review,
+            build_daily_review_service, configure_daily_review,
             signals::{
                 backfill::DailyReviewSignalBackfillService,
-                repository::DailyReviewSignalRepository,
-                wiring::{DailyReviewSignalRuntimeConfig, build_signal_service},
+                repository::DailyReviewSignalRepository, wiring::build_signal_service,
             },
         },
         search::SemanticSearchService,
         service::JournalService,
         status::EmbeddingStatusConfig,
-        week_review::{
-            WeeklyReviewRuntimeConfig, build_weekly_review_service, configure_weekly_review,
-        },
+        week_review::{build_weekly_review_service, configure_weekly_review},
     },
     prompts::{PromptKey, PromptRepository, PromptSource},
     version,
@@ -56,16 +50,8 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         "starting service"
     );
 
-    let embedding_config = Some(EmbeddingConfig::from_env());
-    let daily_review_config = DailyReviewRuntimeConfig::from_env();
-    let weekly_review_config = WeeklyReviewRuntimeConfig::from_env();
-    let entry_extraction_config = JournalEntryExtractionRuntimeConfig::from_env();
-    let signal_runtime_config = DailyReviewSignalRuntimeConfig::from_env();
-
     let shutdown = CancellationToken::new();
     let mut workers: JoinSet<&'static str> = JoinSet::new();
-
-    let delivery_configured = config.daily_review_delivery.enabled;
 
     let config = Arc::new(config);
 
@@ -73,12 +59,6 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let journal_registry = crate::journal::registry::JournalServiceRegistry::new(
         crate::journal::registry::JournalServiceRegistryConfig {
             config: (*config).clone(),
-            embedding_config: embedding_config.clone(),
-            entry_extraction_config: entry_extraction_config.clone(),
-            daily_review_config: daily_review_config.clone(),
-            weekly_review_config: weekly_review_config.clone(),
-            signal_runtime_config: signal_runtime_config.clone(),
-            delivery_configured,
             shutdown: shutdown.clone(),
         },
     );
@@ -96,7 +76,6 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         &mut workers,
         &shutdown,
         &config,
-        embedding_config.as_ref(),
         &journal_registry,
         issued_tokens.clone(),
     )
@@ -114,11 +93,6 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
         GlobalWorkersConfig {
             registry: journal_registry.clone(),
             config: config.clone(),
-            embedding_config,
-            entry_extraction_config,
-            daily_review_config,
-            weekly_review_config,
-            signal_runtime_config,
             shutdown: shutdown.clone(),
         },
     );
@@ -139,7 +113,6 @@ async fn spawn_http_server(
     workers: &mut JoinSet<&'static str>,
     shutdown: &CancellationToken,
     config: &ServeConfig,
-    embedding_config: Option<&EmbeddingConfig>,
     registry: &crate::journal::registry::JournalServiceRegistry,
     issued_tokens: crate::tokens::UserTokenStore,
 ) -> Result<(), Box<dyn Error>> {
@@ -147,15 +120,16 @@ async fn spawn_http_server(
         return Ok(());
     }
 
-    if embedding_config.is_none() {
+    let Some(openai_api_key) = config.openai_api_key() else {
         warn!(
-            "MCP server is enabled but embedding configuration is missing; skipping (semantic search requires it)"
+            "MCP server is enabled but OPENAI_API_KEY is missing; skipping (semantic search requires it)"
         );
         return Ok(());
-    }
+    };
 
     let router_config = http::TenantRouterConfig {
-        embedding_config: embedding_config.cloned(),
+        embedding_config: config.embedding.clone(),
+        openai_api_key: openai_api_key.to_string(),
         shutdown: shutdown.clone(),
     };
 
@@ -278,10 +252,7 @@ async fn shutdown_signal() {
 pub(crate) fn build_journal_service(
     pool: SqlitePool,
     prompt_repository: &PromptRepository,
-    embedding_config: Option<EmbeddingConfig>,
-    entry_extraction_config: JournalEntryExtractionRuntimeConfig,
-    daily_review_config: DailyReviewRuntimeConfig,
-    weekly_review_config: WeeklyReviewRuntimeConfig,
+    config: &ServeConfig,
     delivery_configured: bool,
 ) -> Result<JournalService, Box<dyn Error>> {
     let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
@@ -290,35 +261,38 @@ pub(crate) fn build_journal_service(
         journal_service,
         pool.clone(),
         prompt_repository,
-        entry_extraction_config,
+        config.entry_extraction.clone(),
     )?;
 
     journal_service = configure_daily_review(
         journal_service,
         pool.clone(),
         prompt_repository,
-        daily_review_config,
+        config.daily_review.clone(),
     )?;
 
     journal_service = configure_weekly_review(
         journal_service,
         pool.clone(),
         prompt_repository,
-        weekly_review_config,
+        config.weekly_review.clone(),
     )?;
 
     if delivery_configured {
         journal_service = journal_service.with_daily_review_delivery_configured();
     }
 
-    if let Some(cfg) = embedding_config {
-        let embedder = RigOpenAiEmbedder::from_env(cfg.clone()).map_err(|error| {
-            warn!(
-                error = %error,
-                "failed to construct OpenAI embedder for journal service; semantic search will be unavailable"
-            );
-            error
-        })?;
+    if let Some(api_key) = config.openai_api_key() {
+        let cfg = config.embedding.clone();
+        let embedder =
+            RigOpenAiEmbedder::from_optional_api_key(cfg.clone(), Some(api_key.to_string()))
+                .map_err(|error| {
+                    warn!(
+                        error = %error,
+                        "failed to construct OpenAI embedder for journal service; semantic search will be unavailable"
+                    );
+                    error
+                })?;
         let embedder = Arc::new(embedder);
 
         let embedding_repository = SqliteEmbeddingRepository::new(pool.clone());
@@ -344,6 +318,8 @@ pub(crate) fn build_journal_service(
             journal_service.with_capture_embedding(embedding_repository.clone(), embedder);
         journal_service = journal_service.with_embedding_status_config(status_config);
         journal_service = journal_service.with_pending_embedding_counter(embedding_repository);
+    } else {
+        warn!("OPENAI_API_KEY is not set; semantic search and embeddings are disabled");
     }
 
     Ok(journal_service)
@@ -352,11 +328,6 @@ pub(crate) fn build_journal_service(
 pub struct GlobalWorkersConfig {
     pub registry: crate::journal::registry::JournalServiceRegistry,
     pub config: Arc<ServeConfig>,
-    pub embedding_config: Option<EmbeddingConfig>,
-    pub entry_extraction_config: JournalEntryExtractionRuntimeConfig,
-    pub daily_review_config: DailyReviewRuntimeConfig,
-    pub weekly_review_config: WeeklyReviewRuntimeConfig,
-    pub signal_runtime_config: DailyReviewSignalRuntimeConfig,
     pub shutdown: CancellationToken,
 }
 
@@ -390,18 +361,15 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
     let GlobalWorkersConfig {
         registry,
         config,
-        embedding_config,
-        entry_extraction_config,
-        daily_review_config,
-        weekly_review_config,
-        signal_runtime_config,
         shutdown,
     } = config;
 
     // 1. Embedding Worker
     if config.embedding_worker.enabled
-        && let Some(cfg) = &embedding_config
-        && let Ok(embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
+        && let Ok(embedder) = RigOpenAiEmbedder::from_optional_api_key(
+            config.embedding.clone(),
+            config.openai_api_key.clone(),
+        )
     {
         spawn_sweep(
             workers,
@@ -421,8 +389,10 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
 
     // 2. Daily Review Embedding Worker
     if config.daily_review_embedding_worker.enabled
-        && let Some(cfg) = &embedding_config
-        && let Ok(embedder) = RigOpenAiEmbedder::from_env(cfg.clone())
+        && let Ok(embedder) = RigOpenAiEmbedder::from_optional_api_key(
+            config.embedding.clone(),
+            config.openai_api_key.clone(),
+        )
     {
         spawn_sweep(
             workers,
@@ -444,13 +414,8 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
     }
 
     // 3. Extraction Worker
-    if config.extraction_worker.enabled
-        && entry_extraction_config
-            .openai_api_key
-            .as_deref()
-            .is_some_and(|key| !key.trim().is_empty())
-    {
-        let extraction_config = entry_extraction_config.clone();
+    if config.extraction_worker.enabled && config.openai_api_key().is_some() {
+        let extraction_config = config.entry_extraction.clone();
         spawn_sweep(
             workers,
             "extraction-sweep",
@@ -493,7 +458,7 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
                 let daily_review_service = build_daily_review_service(
                     pool.clone(),
                     &prompt_repository,
-                    daily_review_config.clone(),
+                    serve_config.daily_review.clone(),
                 )
                 .ok()
                 .flatten()?;
@@ -529,7 +494,7 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
                 let weekly_review_service = build_weekly_review_service(
                     pool.clone(),
                     &prompt_repository,
-                    weekly_review_config.clone(),
+                    serve_config.weekly_review.clone(),
                 )
                 .ok()
                 .flatten()?;
@@ -555,6 +520,7 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
 
     // 6. Signal Worker
     if config.signal_worker.enabled {
+        let serve_config = config.clone();
         spawn_sweep(
             workers,
             "signal-sweep",
@@ -564,7 +530,7 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
                 let service = build_signal_service(
                     pool.clone(),
                     &prompt_repository,
-                    signal_runtime_config.clone(),
+                    serve_config.signal_runtime.clone(),
                 )
                 .ok()
                 .flatten()?;

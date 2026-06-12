@@ -264,15 +264,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        database,
         journal::extraction::JournalEntryExtractionStatus,
         messages::{IncomingMessage, MessageSource},
     };
 
     async fn setup() -> (JournalEntryExtractionRepository, SqlitePool) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         (JournalEntryExtractionRepository::new(pool.clone()), pool)
     }
 

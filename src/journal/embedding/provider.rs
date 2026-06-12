@@ -1,5 +1,3 @@
-use std::env;
-
 use async_trait::async_trait;
 use rig::{client::EmbeddingsClient, embeddings::EmbeddingModel, providers::openai};
 use thiserror::Error;
@@ -65,11 +63,7 @@ pub struct RigOpenAiEmbedder<P = RigOpenAiProvider> {
 }
 
 impl RigOpenAiEmbedder<RigOpenAiProvider> {
-    pub fn from_env(config: EmbeddingConfig) -> Result<Self, RigOpenAiEmbedderError> {
-        Self::from_optional_api_key(config, env::var("OPENAI_API_KEY").ok())
-    }
-
-    pub(crate) fn from_optional_api_key(
+    pub fn from_optional_api_key(
         config: EmbeddingConfig,
         api_key: Option<String>,
     ) -> Result<Self, RigOpenAiEmbedderError> {

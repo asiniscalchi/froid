@@ -34,6 +34,21 @@ fn sqlite_connect_options(database_url: &str) -> Result<SqliteConnectOptions, sq
         .foreign_keys(true))
 }
 
+/// Fresh in-memory database with the vec extension registered and all
+/// migrations applied — the shared starting point for unit tests.
+#[cfg(test)]
+pub(crate) async fn test_pool() -> SqlitePool {
+    register_sqlite_vec_extension();
+    let pool = SqlitePool::connect("sqlite::memory:")
+        .await
+        .expect("connect to in-memory sqlite");
+    sqlx::migrate!()
+        .run(&pool)
+        .await
+        .expect("run migrations on test database");
+    pool
+}
+
 #[cfg(test)]
 mod tests {
     use std::{

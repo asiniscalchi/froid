@@ -245,24 +245,20 @@ impl WeeklyReviewRunner for WeeklyReviewService {
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
-    use sqlx::SqlitePool;
 
     use super::*;
-    use crate::{
-        database,
-        journal::{
-            extraction::NeedStatus,
-            review::{
-                repository::DailyReviewRepository,
-                signals::{
-                    repository::DailyReviewSignalRepository,
-                    types::{DailyReviewSignalCandidate, SignalType},
-                },
+    use crate::journal::{
+        extraction::NeedStatus,
+        review::{
+            repository::DailyReviewRepository,
+            signals::{
+                repository::DailyReviewSignalRepository,
+                types::{DailyReviewSignalCandidate, SignalType},
             },
-            week_review::{
-                generator::{WeeklyReviewGenerationError, fake::FakeWeeklyReviewGenerator},
-                repository::WeeklyReviewRepository,
-            },
+        },
+        week_review::{
+            generator::{WeeklyReviewGenerationError, fake::FakeWeeklyReviewGenerator},
+            repository::WeeklyReviewRepository,
         },
     };
 
@@ -275,9 +271,7 @@ mod tests {
         DailyReviewSignalRepository,
         FakeWeeklyReviewGenerator,
     ) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
 
         let weekly_reviews = WeeklyReviewRepository::new(pool.clone());
         let daily_reviews = DailyReviewRepository::new(pool.clone());

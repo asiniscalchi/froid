@@ -220,11 +220,9 @@ impl DailyReviewSignalService {
 #[cfg(test)]
 mod tests {
     use chrono::{NaiveDate, TimeZone, Utc};
-    use sqlx::SqlitePool;
 
     use super::*;
     use crate::{
-        database,
         journal::{
             extraction::NeedStatus,
             repository::JournalRepository,
@@ -247,9 +245,7 @@ mod tests {
         DailyReviewRepository,
         JournalRepository,
     ) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
 
         let daily_reviews = DailyReviewRepository::new(pool.clone());
         let journal_entries = JournalRepository::new(pool.clone());

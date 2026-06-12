@@ -5,7 +5,24 @@ use clap::{Parser, Subcommand};
 
 use crate::{
     journal::{
-        review::DailyReviewDeliveryWorkerConfig, week_review::WeeklyReviewDeliveryWorkerConfig,
+        embedding::EmbeddingConfig,
+        extraction::{
+            JournalEntryExtractionConfig, JournalEntryExtractionPromptConfig,
+            JournalEntryExtractionRuntimeConfig,
+        },
+        review::{
+            DailyReviewDeliveryWorkerConfig, DailyReviewPromptConfig, DailyReviewRuntimeConfig,
+            ReviewConfig,
+            signals::{
+                generator::DailyReviewSignalConfig, prompt::DailyReviewSignalPromptConfig,
+                wiring::DailyReviewSignalRuntimeConfig,
+            },
+        },
+        week_review::{
+            WeeklyReviewDeliveryWorkerConfig, WeeklyReviewRuntimeConfig,
+            generator::WeeklyReviewConfig, prompt::WeeklyReviewPromptConfig,
+            service::DEFAULT_MIN_DAILY_REVIEWS,
+        },
     },
     version,
     workers::{ReconciliationWorkerConfig, weekly_review::weekday_from_str},
@@ -160,6 +177,37 @@ pub struct Cli {
     #[arg(long, env = "FROID_MCP_ENABLED", global = true)]
     mcp_enabled: Option<bool>,
 
+    /// OpenAI API key used for embeddings, reviews, and extractions
+    #[arg(long, env = "OPENAI_API_KEY", global = true, hide_env_values = true)]
+    openai_api_key: Option<String>,
+
+    #[arg(long, env = "FROID_EMBEDDING_MODEL", global = true)]
+    embedding_model: Option<String>,
+
+    #[arg(long, env = "FROID_REVIEW_MODEL", global = true)]
+    review_model: Option<String>,
+
+    #[arg(long, env = "FROID_REVIEW_PROMPT_PATH", global = true)]
+    review_prompt_path: Option<String>,
+
+    #[arg(long, env = "FROID_WEEK_REVIEW_MODEL", global = true)]
+    week_review_model: Option<String>,
+
+    #[arg(long, env = "FROID_WEEK_REVIEW_PROMPT_PATH", global = true)]
+    week_review_prompt_path: Option<String>,
+
+    #[arg(long, env = "FROID_ENTRY_EXTRACTION_MODEL", global = true)]
+    entry_extraction_model: Option<String>,
+
+    #[arg(long, env = "FROID_ENTRY_EXTRACTION_PROMPT_PATH", global = true)]
+    entry_extraction_prompt_path: Option<String>,
+
+    #[arg(long, env = "FROID_SIGNAL_EXTRACTION_MODEL", global = true)]
+    signal_extraction_model: Option<String>,
+
+    #[arg(long, env = "FROID_SIGNAL_EXTRACTION_PROMPT_PATH", global = true)]
+    signal_extraction_prompt_path: Option<String>,
+
     #[arg(
         long,
         env = "FROID_MCP_BIND",
@@ -213,6 +261,23 @@ pub struct ServeConfig {
     pub weekly_review_delivery: WeeklyReviewDeliveryWorkerConfig,
     pub signal_worker: ReconciliationWorkerConfig,
     pub mcp_server: McpServerConfig,
+    pub openai_api_key: Option<String>,
+    pub embedding: EmbeddingConfig,
+    pub daily_review: DailyReviewRuntimeConfig,
+    pub weekly_review: WeeklyReviewRuntimeConfig,
+    pub entry_extraction: JournalEntryExtractionRuntimeConfig,
+    pub signal_runtime: DailyReviewSignalRuntimeConfig,
+}
+
+impl ServeConfig {
+    /// The OpenAI API key, when set to a non-blank value. LLM-backed
+    /// features (semantic search, reviews, extractions) require it.
+    pub fn openai_api_key(&self) -> Option<&str> {
+        self.openai_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+    }
 }
 
 impl Cli {
@@ -303,6 +368,41 @@ impl Cli {
             bind: self.mcp_bind,
         };
 
+        let openai_api_key = self.openai_api_key.clone();
+
+        let daily_review = DailyReviewRuntimeConfig {
+            openai_api_key: openai_api_key.clone(),
+            review: ReviewConfig::from_values(self.review_model.clone()),
+            prompt: DailyReviewPromptConfig::from_values(self.review_prompt_path.clone()),
+        };
+
+        let weekly_review = WeeklyReviewRuntimeConfig {
+            openai_api_key: openai_api_key.clone(),
+            review: WeeklyReviewConfig::from_values(self.week_review_model.clone()),
+            prompt: WeeklyReviewPromptConfig::from_values(self.week_review_prompt_path.clone()),
+            min_daily_reviews: self
+                .week_review_min_daily_reviews
+                .unwrap_or(DEFAULT_MIN_DAILY_REVIEWS),
+        };
+
+        let entry_extraction = JournalEntryExtractionRuntimeConfig {
+            openai_api_key: openai_api_key.clone(),
+            extraction: JournalEntryExtractionConfig::from_values(
+                self.entry_extraction_model.clone(),
+            ),
+            prompt: JournalEntryExtractionPromptConfig::from_values(
+                self.entry_extraction_prompt_path.clone(),
+            ),
+        };
+
+        let signal_runtime = DailyReviewSignalRuntimeConfig {
+            openai_api_key: openai_api_key.clone(),
+            signal: DailyReviewSignalConfig::from_values(self.signal_extraction_model.clone()),
+            prompt: DailyReviewSignalPromptConfig::from_values(
+                self.signal_extraction_prompt_path.clone(),
+            ),
+        };
+
         Ok(ServeConfig {
             telegram_bot_token: telegram_bot_token.clone(),
             telegram_allowed_user_ids: self.telegram_allowed_user_ids.clone(),
@@ -315,6 +415,12 @@ impl Cli {
             weekly_review_delivery,
             signal_worker,
             mcp_server,
+            openai_api_key,
+            embedding: EmbeddingConfig::from_values(self.embedding_model.clone()),
+            daily_review,
+            weekly_review,
+            entry_extraction,
+            signal_runtime,
         })
     }
 }
@@ -352,6 +458,16 @@ mod tests {
             signal_worker_interval_seconds: None,
             mcp_enabled: None,
             mcp_bind: "127.0.0.1:8080".parse().unwrap(),
+            openai_api_key: None,
+            embedding_model: None,
+            review_model: None,
+            review_prompt_path: None,
+            week_review_model: None,
+            week_review_prompt_path: None,
+            entry_extraction_model: None,
+            entry_extraction_prompt_path: None,
+            signal_extraction_model: None,
+            signal_extraction_prompt_path: None,
         }
     }
 
@@ -745,6 +861,55 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn serve_config_builds_llm_configs_from_flags() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--openai-api-key",
+            "sk-test",
+            "--embedding-model",
+            "embed-x",
+            "--review-model",
+            "review-x",
+            "--review-prompt-path",
+            "prompts/custom_daily.md",
+            "--week-review-min-daily-reviews",
+            "5",
+        ]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.openai_api_key(), Some("sk-test"));
+        assert_eq!(config.embedding.model, "embed-x");
+        assert_eq!(
+            config.daily_review.openai_api_key.as_deref(),
+            Some("sk-test")
+        );
+        assert_eq!(config.daily_review.review.model, "review-x");
+        assert_eq!(
+            config.daily_review.prompt.path,
+            PathBuf::from("prompts/custom_daily.md")
+        );
+        assert_eq!(config.weekly_review.min_daily_reviews, 5);
+    }
+
+    #[test]
+    fn serve_config_openai_api_key_treats_blank_as_unset() {
+        let cli = Cli::parse_from([
+            "froid",
+            "--telegram-bot-token",
+            "token",
+            "--openai-api-key",
+            "  ",
+        ]);
+
+        let config = cli.serve_config().unwrap();
+
+        assert_eq!(config.openai_api_key(), None);
     }
 
     #[test]

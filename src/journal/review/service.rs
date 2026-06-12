@@ -208,7 +208,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        database,
         journal::{
             repository::JournalRepository,
             review::{
@@ -228,9 +227,7 @@ mod tests {
         JournalEntryExtractionRepository,
         FakeReviewGenerator,
     ) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
 
         let daily_reviews = DailyReviewRepository::new(pool.clone());
         let journal_entries = JournalRepository::new(pool.clone());
@@ -595,8 +592,7 @@ mod tests {
 
     #[tokio::test]
     async fn persisting_failed_generation_failure_returns_service_error() {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
 
         let daily_reviews = DailyReviewRepository::new(pool.clone());
         let journal_entries = JournalRepository::new(pool.clone());

@@ -225,15 +225,11 @@ fn row_to_weekly_review(row: SqliteRow) -> Result<WeeklyReview, WeeklyReviewRepo
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
-    use sqlx::SqlitePool;
 
     use super::*;
-    use crate::database;
 
     async fn setup() -> WeeklyReviewRepository {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         WeeklyReviewRepository::new(pool)
     }
 

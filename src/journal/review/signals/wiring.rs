@@ -1,5 +1,3 @@
-use std::env;
-
 use sqlx::SqlitePool;
 
 use crate::{
@@ -24,16 +22,6 @@ pub struct DailyReviewSignalRuntimeConfig {
     pub openai_api_key: Option<String>,
     pub signal: DailyReviewSignalConfig,
     pub prompt: DailyReviewSignalPromptConfig,
-}
-
-impl DailyReviewSignalRuntimeConfig {
-    pub fn from_env() -> Self {
-        Self {
-            openai_api_key: env::var("OPENAI_API_KEY").ok(),
-            signal: DailyReviewSignalConfig::from_env(),
-            prompt: DailyReviewSignalPromptConfig::from_env(),
-        }
-    }
 }
 
 pub fn build_signal_service(

@@ -38,20 +38,17 @@ type BoxError = Box<dyn Error + Send + Sync>;
 
 /// Shared context for building a tenant's router.
 pub struct TenantRouterConfig {
-    pub embedding_config: Option<EmbeddingConfig>,
+    pub embedding_config: EmbeddingConfig,
+    pub openai_api_key: String,
     pub shutdown: CancellationToken,
 }
 
 /// Build the protected `/mcp` routes bound to one database.
 fn build_tenant_router(pool: &SqlitePool, config: &TenantRouterConfig) -> Result<Router, BoxError> {
-    // The caller refuses to start the listener without embedding
-    // configuration, so this only guards internal misuse.
-    let cfg = config
-        .embedding_config
-        .as_ref()
-        .ok_or("MCP requires embedding configuration")?;
-
-    let embedder = RigOpenAiEmbedder::from_env(cfg.clone())?;
+    let embedder = RigOpenAiEmbedder::from_optional_api_key(
+        config.embedding_config.clone(),
+        Some(config.openai_api_key.clone()),
+    )?;
     let semantic = Arc::new(DefaultSemanticJournalSearcher::new(
         SqliteEmbeddingRepository::new(pool.clone()),
         embedder,

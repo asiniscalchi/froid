@@ -122,11 +122,8 @@ mod tests {
 
     use super::*;
     use crate::cli::Cli;
-    use crate::journal::extraction::JournalEntryExtractionRuntimeConfig;
+
     use crate::journal::registry::JournalServiceRegistryConfig;
-    use crate::journal::review::DailyReviewRuntimeConfig;
-    use crate::journal::review::signals::wiring::DailyReviewSignalRuntimeConfig;
-    use crate::journal::week_review::WeeklyReviewRuntimeConfig;
 
     #[derive(Debug)]
     struct NeverError;
@@ -177,14 +174,10 @@ mod tests {
         ])
         .unwrap();
 
+        let mut config = cli.serve_config().unwrap();
+        config.openai_api_key = None;
         JournalServiceRegistry::new(JournalServiceRegistryConfig {
-            config: cli.serve_config().unwrap(),
-            embedding_config: None,
-            entry_extraction_config: JournalEntryExtractionRuntimeConfig::from_env(),
-            daily_review_config: DailyReviewRuntimeConfig::from_env(),
-            weekly_review_config: WeeklyReviewRuntimeConfig::from_env(),
-            signal_runtime_config: DailyReviewSignalRuntimeConfig::from_env(),
-            delivery_configured: false,
+            config,
             shutdown: CancellationToken::new(),
         })
         .with_base_dir(temp_base_dir)

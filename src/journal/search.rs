@@ -143,15 +143,13 @@ pub fn search_error_response(error: &SemanticSearchError) -> String {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, TimeZone, Utc};
-    use sqlx::SqlitePool;
 
     use super::*;
     use crate::{
-        database,
         journal::{
             embedding::{
-                EmbedderError, Embedding, EmbeddingCandidate, EmbeddingRepositoryError,
-                EmbeddingSearchResult, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
+                SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
+                test_support::{FakeEmbedder, PresetIndex, directional_embedding},
             },
             repository::JournalRepository,
         },
@@ -159,9 +157,7 @@ mod tests {
     };
 
     async fn setup() -> (JournalRepository, SqliteEmbeddingRepository) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         (
             JournalRepository::new(pool.clone()),
             SqliteEmbeddingRepository::new(pool),
@@ -218,110 +214,6 @@ mod tests {
 
     const TEST_MODEL: &str = "test-model";
 
-    fn directional_embedding(nonzero_dim: usize) -> Embedding {
-        let mut values = vec![0.0f32; SUPPORTED_EMBEDDING_DIMENSIONS];
-        values[nonzero_dim] = 1.0;
-        Embedding::new(values, SUPPORTED_EMBEDDING_DIMENSIONS).unwrap()
-    }
-
-    #[derive(Clone)]
-    struct FakeEmbedder {
-        model: String,
-        result: Result<Embedding, EmbedderError>,
-    }
-
-    impl FakeEmbedder {
-        fn succeeds(model: &str, dim: usize) -> Self {
-            Self {
-                model: model.to_string(),
-                result: Ok(directional_embedding(dim)),
-            }
-        }
-
-        fn fails(model: &str) -> Self {
-            Self {
-                model: model.to_string(),
-                result: Err(EmbedderError::Provider("provider down".to_string())),
-            }
-        }
-    }
-
-    #[derive(Clone)]
-    struct FakeIndex {
-        results: Vec<EmbeddingSearchResult<String>>,
-    }
-
-    #[async_trait]
-    impl EmbeddingIndex<String> for FakeIndex {
-        async fn store_embedding(
-            &self,
-            _id: String,
-            _embedding_model: &str,
-            _embedding_dim: usize,
-            _embedding: &Embedding,
-        ) -> Result<bool, EmbeddingRepositoryError> {
-            unreachable!("search tests do not store through FakeIndex")
-        }
-
-        async fn record_embedding_failure(
-            &self,
-            _id: String,
-            _embedding_model: &str,
-            _error_message: &str,
-        ) -> Result<(), EmbeddingRepositoryError> {
-            unreachable!("search tests do not record failures through FakeIndex")
-        }
-
-        async fn delete_failed_embedding(
-            &self,
-            _id: String,
-            _embedding_model: &str,
-        ) -> Result<bool, EmbeddingRepositoryError> {
-            unreachable!("search tests do not delete through FakeIndex")
-        }
-
-        async fn find_entries_missing_or_failed_embedding(
-            &self,
-            _embedding_model: &str,
-            _limit: u32,
-        ) -> Result<Vec<EmbeddingCandidate<String>>, EmbeddingRepositoryError> {
-            unreachable!("search tests do not backfill through FakeIndex")
-        }
-
-        async fn count_entries_missing_or_failed_embedding(
-            &self,
-            _embedding_model: &str,
-        ) -> Result<u32, EmbeddingRepositoryError> {
-            unreachable!("search tests do not count missing through FakeIndex")
-        }
-
-        async fn search(
-            &self,
-            _embedding: &Embedding,
-            _embedding_model: &str,
-            _from_date: Option<chrono::NaiveDate>,
-            _to_date_exclusive: Option<chrono::NaiveDate>,
-            _limit: usize,
-        ) -> Result<Vec<EmbeddingSearchResult<String>>, EmbeddingRepositoryError> {
-            Ok(self.results.clone())
-        }
-    }
-
-    #[async_trait]
-    impl Embedder for FakeEmbedder {
-        fn model(&self) -> &str {
-            &self.model
-        }
-
-        fn dimensions(&self) -> usize {
-            SUPPORTED_EMBEDDING_DIMENSIONS
-        }
-
-        async fn embed(&self, _text: &str) -> Result<Embedding, EmbedderError> {
-            self.result.clone()
-        }
-    }
-
     fn make_service(
         index: SqliteEmbeddingRepository,
         embedder: FakeEmbedder,
@@ -331,10 +223,10 @@ mod tests {
     }
 
     fn make_fake_index_service(
-        index: FakeIndex,
+        index: PresetIndex<String>,
         embedder: FakeEmbedder,
         repo: JournalRepository,
-    ) -> SemanticSearchService<FakeIndex, FakeEmbedder> {
+    ) -> SemanticSearchService<PresetIndex<String>, FakeEmbedder> {
         SemanticSearchService::new(index, embedder, repo)
     }
 
@@ -532,7 +424,7 @@ mod tests {
         .fetch_one(repo.pool())
         .await
         .unwrap();
-        let index = FakeIndex {
+        let index = PresetIndex {
             results: vec![
                 EmbeddingSearchResult {
                     id: "missing".to_string(),

@@ -8,30 +8,150 @@ pub use backfill::{BackfillResult, EmbeddingBackfillError, EmbeddingBackfillServ
 pub use config::EmbeddingConfig;
 pub use provider::RigOpenAiEmbedder;
 pub use repository::{
-    EmbeddingIndex, EmbeddingRepositoryError, PendingEmbeddingCounter, SqliteEmbeddingRepository,
+    EmbeddingIndex, EmbeddingRepositoryError, EmbeddingSchema, PendingEmbeddingCounter,
+    SqliteEmbeddingRepository, SqliteVectorIndex,
 };
 pub use types::{Embedder, EmbedderError, Embedding, EmbeddingCandidate, EmbeddingSearchResult};
 
 pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 pub const SUPPORTED_EMBEDDING_DIMENSIONS: usize = 1536;
 
+/// Shared test doubles for code that depends on [`Embedder`] /
+/// [`EmbeddingIndex`].
+#[cfg(test)]
+pub(crate) mod test_support {
+    use async_trait::async_trait;
+    use chrono::NaiveDate;
+
+    use super::{
+        Embedder, EmbedderError, Embedding, EmbeddingCandidate, EmbeddingIndex,
+        EmbeddingRepositoryError, EmbeddingSearchResult, SUPPORTED_EMBEDDING_DIMENSIONS,
+    };
+
+    /// An embedding with a single nonzero dimension, giving each entry a
+    /// distinct direction so cosine distances are meaningfully distinct.
+    pub(crate) fn directional_embedding(nonzero_dim: usize) -> Embedding {
+        let mut values = vec![0.0f32; SUPPORTED_EMBEDDING_DIMENSIONS];
+        values[nonzero_dim] = 1.0;
+        Embedding::new(values, SUPPORTED_EMBEDDING_DIMENSIONS).unwrap()
+    }
+
+    /// Embedder returning one fixed result (a directional embedding or an
+    /// error) for every input.
+    #[derive(Clone)]
+    pub(crate) struct FakeEmbedder {
+        model: String,
+        result: Result<Embedding, EmbedderError>,
+    }
+
+    impl FakeEmbedder {
+        pub(crate) fn succeeds(model: &str, dim: usize) -> Self {
+            Self {
+                model: model.to_string(),
+                result: Ok(directional_embedding(dim)),
+            }
+        }
+
+        pub(crate) fn fails(model: &str) -> Self {
+            Self {
+                model: model.to_string(),
+                result: Err(EmbedderError::Provider("provider down".to_string())),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Embedder for FakeEmbedder {
+        fn model(&self) -> &str {
+            &self.model
+        }
+
+        fn dimensions(&self) -> usize {
+            SUPPORTED_EMBEDDING_DIMENSIONS
+        }
+
+        async fn embed(&self, _text: &str) -> Result<Embedding, EmbedderError> {
+            self.result.clone()
+        }
+    }
+
+    /// Index whose `search` returns a preset result list; every other method
+    /// is out of scope for search-oriented tests and panics if reached.
+    #[derive(Clone)]
+    pub(crate) struct PresetIndex<ID> {
+        pub(crate) results: Vec<EmbeddingSearchResult<ID>>,
+    }
+
+    #[async_trait]
+    impl<ID: Clone + Send + Sync> EmbeddingIndex<ID> for PresetIndex<ID> {
+        async fn store_embedding(
+            &self,
+            _id: ID,
+            _embedding_model: &str,
+            _embedding_dim: usize,
+            _embedding: &Embedding,
+        ) -> Result<bool, EmbeddingRepositoryError> {
+            unreachable!("search tests do not store through PresetIndex")
+        }
+
+        async fn record_embedding_failure(
+            &self,
+            _id: ID,
+            _embedding_model: &str,
+            _error_message: &str,
+        ) -> Result<(), EmbeddingRepositoryError> {
+            unreachable!("search tests do not record failures through PresetIndex")
+        }
+
+        async fn delete_failed_embedding(
+            &self,
+            _id: ID,
+            _embedding_model: &str,
+        ) -> Result<bool, EmbeddingRepositoryError> {
+            unreachable!("search tests do not delete through PresetIndex")
+        }
+
+        async fn find_entries_missing_or_failed_embedding(
+            &self,
+            _embedding_model: &str,
+            _limit: u32,
+        ) -> Result<Vec<EmbeddingCandidate<ID>>, EmbeddingRepositoryError> {
+            unreachable!("search tests do not backfill through PresetIndex")
+        }
+
+        async fn count_entries_missing_or_failed_embedding(
+            &self,
+            _embedding_model: &str,
+        ) -> Result<u32, EmbeddingRepositoryError> {
+            unreachable!("search tests do not count missing through PresetIndex")
+        }
+
+        async fn search(
+            &self,
+            _embedding: &Embedding,
+            _embedding_model: &str,
+            _from_date: Option<NaiveDate>,
+            _to_date_exclusive: Option<NaiveDate>,
+            _limit: usize,
+        ) -> Result<Vec<EmbeddingSearchResult<ID>>, EmbeddingRepositoryError> {
+            Ok(self.results.clone())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
     use chrono::{TimeZone, Utc};
-    use sqlx::SqlitePool;
 
     use super::*;
     use crate::{
-        database,
         journal::repository::JournalRepository,
         messages::{IncomingMessage, MessageSource},
     };
 
     async fn setup() -> (JournalRepository, SqliteEmbeddingRepository) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
 
         (
             JournalRepository::new(pool.clone()),

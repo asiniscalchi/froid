@@ -814,14 +814,8 @@ mod tests {
 
     mod transfer_commands {
         use super::super::import_reply;
+        use crate::journal::registry::{JournalServiceRegistry, JournalServiceRegistryConfig};
         use crate::journal::transfer::TransferService;
-        use crate::journal::{
-            extraction::JournalEntryExtractionRuntimeConfig,
-            registry::{JournalServiceRegistry, JournalServiceRegistryConfig},
-            review::DailyReviewRuntimeConfig,
-            review::signals::wiring::DailyReviewSignalRuntimeConfig,
-            week_review::WeeklyReviewRuntimeConfig,
-        };
         use clap::Parser;
         use tokio_util::sync::CancellationToken;
 
@@ -839,14 +833,10 @@ mod tests {
             ])
             .unwrap();
 
+            let mut config = cli.serve_config().unwrap();
+            config.openai_api_key = None;
             let registry = JournalServiceRegistry::new(JournalServiceRegistryConfig {
-                config: cli.serve_config().unwrap(),
-                embedding_config: None,
-                entry_extraction_config: JournalEntryExtractionRuntimeConfig::from_env(),
-                daily_review_config: DailyReviewRuntimeConfig::from_env(),
-                weekly_review_config: WeeklyReviewRuntimeConfig::from_env(),
-                signal_runtime_config: DailyReviewSignalRuntimeConfig::from_env(),
-                delivery_configured: false,
+                config,
                 shutdown: CancellationToken::new(),
             })
             .with_base_dir(temp_base_dir);
@@ -933,13 +923,11 @@ mod tests {
 
     mod token_command {
         use super::super::{TokenAction, handle_token_command};
-        use crate::database;
+
         use crate::tokens::{TokenIssuer, UserTokenStore, hash_token};
 
         async fn issuer() -> (TokenIssuer, UserTokenStore) {
-            database::register_sqlite_vec_extension();
-            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-            sqlx::migrate!().run(&pool).await.unwrap();
+            let pool = crate::database::test_pool().await;
             let store = UserTokenStore::new(pool);
             (TokenIssuer::new(store.clone()), store)
         }

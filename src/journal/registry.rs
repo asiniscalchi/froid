@@ -9,33 +9,18 @@ use crate::cli::ServeConfig;
 use crate::database;
 use crate::handler::MessageHandler;
 use crate::journal::command::JournalCommandRequest;
-use crate::journal::embedding::EmbeddingConfig;
-use crate::journal::extraction::JournalEntryExtractionRuntimeConfig;
-use crate::journal::review::DailyReviewRuntimeConfig;
-use crate::journal::review::signals::wiring::DailyReviewSignalRuntimeConfig;
 use crate::journal::service::JournalService;
-use crate::journal::week_review::WeeklyReviewRuntimeConfig;
 use crate::messages::{IncomingMessage, OutgoingMessage};
 use crate::prompts::PromptRepository;
 
 pub struct JournalServiceRegistryConfig {
     pub config: ServeConfig,
-    pub embedding_config: Option<EmbeddingConfig>,
-    pub entry_extraction_config: JournalEntryExtractionRuntimeConfig,
-    pub daily_review_config: DailyReviewRuntimeConfig,
-    pub weekly_review_config: WeeklyReviewRuntimeConfig,
-    pub signal_runtime_config: DailyReviewSignalRuntimeConfig,
-    pub delivery_configured: bool,
     pub shutdown: CancellationToken,
 }
 
 #[derive(Clone)]
 pub struct JournalServiceRegistry {
-    embedding_config: Option<EmbeddingConfig>,
-    entry_extraction_config: JournalEntryExtractionRuntimeConfig,
-    daily_review_config: DailyReviewRuntimeConfig,
-    weekly_review_config: WeeklyReviewRuntimeConfig,
-    delivery_configured: bool,
+    serve_config: Arc<ServeConfig>,
 
     base_dir: PathBuf,
 
@@ -52,11 +37,7 @@ impl JournalServiceRegistry {
         let base_dir = data_dir.join("journals");
 
         Self {
-            embedding_config: config.embedding_config,
-            entry_extraction_config: config.entry_extraction_config,
-            daily_review_config: config.daily_review_config,
-            weekly_review_config: config.weekly_review_config,
-            delivery_configured: config.delivery_configured,
+            serve_config: Arc::new(config.config),
             base_dir,
             pools: Arc::new(RwLock::new(HashMap::new())),
             services: Arc::new(RwLock::new(HashMap::new())),
@@ -169,11 +150,8 @@ impl JournalServiceRegistry {
         let service = crate::app::build_journal_service(
             pool.clone(),
             &prompt_repository,
-            self.embedding_config.clone(),
-            self.entry_extraction_config.clone(),
-            self.daily_review_config.clone(),
-            self.weekly_review_config.clone(),
-            self.delivery_configured,
+            &self.serve_config,
+            self.serve_config.daily_review_delivery.enabled,
         )
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
 

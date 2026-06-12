@@ -1,14 +1,11 @@
 use chrono::{TimeZone, Utc};
-use sqlx::{Row, SqlitePool};
+use sqlx::Row;
 
 use super::repository::*;
-use crate::database;
 use crate::messages::{IncomingMessage, MessageSource};
 
 async fn setup() -> JournalRepository {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     JournalRepository::new(pool)
 }
 
@@ -585,6 +582,35 @@ async fn search_text_matches_substring_case_insensitively() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].entry.text, "ANXIETY again today");
     assert_eq!(entries[1].entry.text, "I felt anxious before the call");
+}
+
+#[tokio::test]
+async fn search_text_treats_like_wildcards_as_literals() {
+    let repo = setup().await;
+
+    repo.store(&incoming("1", "progress: 100% done", at(10, 0)))
+        .await
+        .unwrap();
+    repo.store(&incoming("2", "100 reasons to be done", at(11, 0)))
+        .await
+        .unwrap();
+    repo.store(&incoming("3", "snake_case naming", at(12, 0)))
+        .await
+        .unwrap();
+    repo.store(&incoming("4", "snake case naming", at(13, 0)))
+        .await
+        .unwrap();
+
+    let percent = repo.search_text("100% done", None, None, 10).await.unwrap();
+    assert_eq!(percent.len(), 1);
+    assert_eq!(percent[0].entry.text, "progress: 100% done");
+
+    let underscore = repo
+        .search_text("snake_case", None, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(underscore.len(), 1);
+    assert_eq!(underscore[0].entry.text, "snake_case naming");
 }
 
 #[tokio::test]

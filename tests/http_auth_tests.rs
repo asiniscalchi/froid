@@ -23,11 +23,7 @@ use froid::{
     http::{TenantRouterConfig, TenantRouters, build_per_user_app},
     journal::{
         embedding::EmbeddingConfig,
-        extraction::JournalEntryExtractionRuntimeConfig,
         registry::{JournalServiceRegistry, JournalServiceRegistryConfig},
-        review::DailyReviewRuntimeConfig,
-        review::signals::wiring::DailyReviewSignalRuntimeConfig,
-        week_review::WeeklyReviewRuntimeConfig,
     },
     tokens::{TokenIssuer, UserTokenStore},
 };
@@ -44,12 +40,6 @@ async fn registry(temp_base_dir: &std::path::Path) -> JournalServiceRegistry {
 
     JournalServiceRegistry::new(JournalServiceRegistryConfig {
         config: cli.serve_config().unwrap(),
-        embedding_config: None,
-        entry_extraction_config: JournalEntryExtractionRuntimeConfig::from_env(),
-        daily_review_config: DailyReviewRuntimeConfig::from_env(),
-        weekly_review_config: WeeklyReviewRuntimeConfig::from_env(),
-        signal_runtime_config: DailyReviewSignalRuntimeConfig::from_env(),
-        delivery_configured: false,
         shutdown: CancellationToken::new(),
     })
     .with_base_dir(temp_base_dir.to_path_buf())
@@ -77,7 +67,8 @@ async fn mcp_app() -> (Router, String) {
     let tenants = TenantRouters::new(
         registry,
         TenantRouterConfig {
-            embedding_config: Some(EmbeddingConfig::default()),
+            embedding_config: EmbeddingConfig::default(),
+            openai_api_key: "test-key".to_string(),
             shutdown: CancellationToken::new(),
         },
     );
@@ -135,7 +126,8 @@ async fn revoked_token_stops_passing_the_auth_layer() {
     let tenants = TenantRouters::new(
         registry,
         TenantRouterConfig {
-            embedding_config: Some(EmbeddingConfig::default()),
+            embedding_config: EmbeddingConfig::default(),
+            openai_api_key: "test-key".to_string(),
             shutdown: CancellationToken::new(),
         },
     );

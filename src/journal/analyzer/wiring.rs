@@ -79,7 +79,7 @@ mod tests {
     use sqlx::SqlitePool;
 
     use super::*;
-    use crate::database;
+
     use crate::journal::analyzer::types::{AnalyzerError, SemanticHit};
 
     struct StubSemanticSearcher;
@@ -98,10 +98,7 @@ mod tests {
     }
 
     async fn pool() -> SqlitePool {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
-        pool
+        crate::database::test_pool().await
     }
 
     #[tokio::test]
