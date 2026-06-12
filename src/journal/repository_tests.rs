@@ -1,14 +1,11 @@
 use chrono::{TimeZone, Utc};
-use sqlx::{Row, SqlitePool};
+use sqlx::Row;
 
 use super::repository::*;
-use crate::database;
 use crate::messages::{IncomingMessage, MessageSource};
 
 async fn setup() -> JournalRepository {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     JournalRepository::new(pool)
 }
 

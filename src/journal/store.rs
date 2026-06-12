@@ -169,22 +169,17 @@ mod tests {
     use sqlx::SqlitePool;
 
     use super::*;
-    use crate::{
-        database,
-        journal::{
-            embedding::{Embedding, EmbeddingIndex, SqliteEmbeddingRepository},
-            repository::JournalRepository,
-            review::{
-                embedding_repository::SqliteDailyReviewEmbeddingRepository,
-                repository::DailyReviewRepository,
-            },
+    use crate::journal::{
+        embedding::{Embedding, EmbeddingIndex, SqliteEmbeddingRepository},
+        repository::JournalRepository,
+        review::{
+            embedding_repository::SqliteDailyReviewEmbeddingRepository,
+            repository::DailyReviewRepository,
         },
     };
 
     async fn setup() -> (JournalEntryStore, JournalRepository, SqlitePool) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         (
             JournalEntryStore::new(pool.clone()),
             JournalRepository::new(pool.clone()),

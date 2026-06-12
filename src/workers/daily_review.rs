@@ -247,7 +247,6 @@ mod tests {
     use chrono::TimeZone;
 
     use crate::{
-        database,
         journal::{
             extraction::repository::JournalEntryExtractionRepository,
             repository::JournalRepository,
@@ -260,7 +259,6 @@ mod tests {
         },
         messages::IncomingMessage,
     };
-    use sqlx::SqlitePool;
 
     use super::*;
 
@@ -321,9 +319,7 @@ mod tests {
         JournalRepository,
         FakeSender,
     ) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
 
         let journal_entries = JournalRepository::new(pool.clone());
         let daily_reviews = DailyReviewRepository::new(pool.clone());
@@ -385,9 +381,7 @@ mod tests {
         JournalRepository,
         FakeSender,
     ) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
 
         let journal_entries = JournalRepository::new(pool.clone());
         let daily_reviews = DailyReviewRepository::new(pool.clone());
@@ -722,9 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_forever_exits_when_cancellation_token_fires() {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
 
         let worker = DailyReviewDeliveryWorker::new(
             JournalRepository::new(pool.clone()),

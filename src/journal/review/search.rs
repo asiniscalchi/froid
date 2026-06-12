@@ -104,136 +104,23 @@ where
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
-    use sqlx::SqlitePool;
 
     use super::*;
-    use crate::{
-        database,
-        journal::{
-            embedding::{
-                Embedder, EmbedderError, Embedding, EmbeddingCandidate,
-                SUPPORTED_EMBEDDING_DIMENSIONS,
-            },
-            review::repository::DailyReviewRepository,
-        },
+    use crate::journal::{
+        embedding::test_support::{FakeEmbedder, PresetIndex},
+        review::repository::DailyReviewRepository,
     };
 
-    async fn setup() -> (DailyReviewRepository, FakeIndex) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+    async fn setup() -> (DailyReviewRepository, PresetIndex<i64>) {
+        let pool = crate::database::test_pool().await;
 
         (
             DailyReviewRepository::new(pool),
-            FakeIndex { results: vec![] },
+            PresetIndex { results: vec![] },
         )
     }
 
     const TEST_MODEL: &str = "test-model";
-
-    fn directional_embedding(nonzero_dim: usize) -> Embedding {
-        let mut values = vec![0.0f32; SUPPORTED_EMBEDDING_DIMENSIONS];
-        values[nonzero_dim] = 1.0;
-        Embedding::new(values, SUPPORTED_EMBEDDING_DIMENSIONS).unwrap()
-    }
-
-    #[derive(Clone)]
-    struct FakeEmbedder {
-        model: String,
-        result: Result<Embedding, EmbedderError>,
-    }
-
-    impl FakeEmbedder {
-        fn succeeds(model: &str, dim: usize) -> Self {
-            Self {
-                model: model.to_string(),
-                result: Ok(directional_embedding(dim)),
-            }
-        }
-
-        fn fails(model: &str) -> Self {
-            Self {
-                model: model.to_string(),
-                result: Err(EmbedderError::Provider("provider down".to_string())),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl Embedder for FakeEmbedder {
-        fn model(&self) -> &str {
-            &self.model
-        }
-
-        fn dimensions(&self) -> usize {
-            SUPPORTED_EMBEDDING_DIMENSIONS
-        }
-
-        async fn embed(&self, _text: &str) -> Result<Embedding, EmbedderError> {
-            self.result.clone()
-        }
-    }
-
-    #[derive(Clone)]
-    struct FakeIndex {
-        results: Vec<EmbeddingSearchResult<i64>>,
-    }
-
-    #[async_trait]
-    impl EmbeddingIndex<i64> for FakeIndex {
-        async fn store_embedding(
-            &self,
-            _id: i64,
-            _embedding_model: &str,
-            _embedding_dim: usize,
-            _embedding: &Embedding,
-        ) -> Result<bool, EmbeddingRepositoryError> {
-            unreachable!()
-        }
-
-        async fn record_embedding_failure(
-            &self,
-            _id: i64,
-            _embedding_model: &str,
-            _error_message: &str,
-        ) -> Result<(), EmbeddingRepositoryError> {
-            unreachable!()
-        }
-
-        async fn delete_failed_embedding(
-            &self,
-            _id: i64,
-            _embedding_model: &str,
-        ) -> Result<bool, EmbeddingRepositoryError> {
-            unreachable!()
-        }
-
-        async fn find_entries_missing_or_failed_embedding(
-            &self,
-            _embedding_model: &str,
-            _limit: u32,
-        ) -> Result<Vec<EmbeddingCandidate<i64>>, EmbeddingRepositoryError> {
-            unreachable!()
-        }
-
-        async fn count_entries_missing_or_failed_embedding(
-            &self,
-            _embedding_model: &str,
-        ) -> Result<u32, EmbeddingRepositoryError> {
-            unreachable!()
-        }
-
-        async fn search(
-            &self,
-            _embedding: &Embedding,
-            _embedding_model: &str,
-            _from_date: Option<chrono::NaiveDate>,
-            _to_date_exclusive: Option<chrono::NaiveDate>,
-            _limit: usize,
-        ) -> Result<Vec<EmbeddingSearchResult<i64>>, EmbeddingRepositoryError> {
-            Ok(self.results.clone())
-        }
-    }
 
     #[tokio::test]
     async fn search_returns_mapped_review_results() {

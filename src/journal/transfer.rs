@@ -212,14 +212,12 @@ impl TransferService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database;
+
     use crate::messages::{IncomingMessage, MessageSource};
     use serde_json::{Value, json};
 
     async fn repo() -> JournalRepository {
-        database::register_sqlite_vec_extension();
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         JournalRepository::new(pool)
     }
 

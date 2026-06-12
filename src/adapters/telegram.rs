@@ -933,13 +933,11 @@ mod tests {
 
     mod token_command {
         use super::super::{TokenAction, handle_token_command};
-        use crate::database;
+
         use crate::tokens::{TokenIssuer, UserTokenStore, hash_token};
 
         async fn issuer() -> (TokenIssuer, UserTokenStore) {
-            database::register_sqlite_vec_extension();
-            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-            sqlx::migrate!().run(&pool).await.unwrap();
+            let pool = crate::database::test_pool().await;
             let store = UserTokenStore::new(pool);
             (TokenIssuer::new(store.clone()), store)
         }

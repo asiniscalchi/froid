@@ -357,7 +357,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        database,
         journal::{
             extraction::NeedStatus,
             review::repository::DailyReviewRepository,
@@ -371,9 +370,7 @@ mod tests {
         DailyReviewRepository,
         SqlitePool,
     ) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         (
             DailyReviewSignalRepository::new(pool.clone()),
             DailyReviewRepository::new(pool.clone()),

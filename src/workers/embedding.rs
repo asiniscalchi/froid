@@ -70,7 +70,6 @@ pub type EmbeddingReconciliationWorker<ID, I, E> = ReconciliationWorker<Embeddin
 mod tests {
     use super::*;
     use crate::{
-        database,
         journal::{
             embedding::{
                 EmbedderError, Embedding, EmbeddingBackfillService, SUPPORTED_EMBEDDING_DIMENSIONS,
@@ -83,13 +82,11 @@ mod tests {
     };
     use async_trait::async_trait;
     use chrono::{TimeZone, Utc};
-    use sqlx::SqlitePool;
+
     use std::time::Duration;
 
     async fn setup() -> (JournalRepository, SqliteEmbeddingRepository) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         (
             JournalRepository::new(pool.clone()),
             SqliteEmbeddingRepository::new(pool),

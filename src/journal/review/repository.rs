@@ -380,15 +380,11 @@ fn row_to_daily_review(row: SqliteRow) -> Result<DailyReview, DailyReviewReposit
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
-    use sqlx::SqlitePool;
 
     use super::*;
-    use crate::database;
 
     async fn setup() -> DailyReviewRepository {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         DailyReviewRepository::new(pool)
     }
 

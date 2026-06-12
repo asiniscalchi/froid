@@ -461,19 +461,15 @@ pub(crate) struct StoredEmbedding {
 #[cfg(test)]
 mod tests {
     use chrono::{NaiveDate, TimeZone, Utc};
-    use sqlx::SqlitePool;
 
     use super::*;
     use crate::{
-        database,
         journal::{embedding::SUPPORTED_EMBEDDING_DIMENSIONS, repository::JournalRepository},
         messages::{IncomingMessage, MessageSource},
     };
 
     async fn setup() -> (JournalRepository, SqliteEmbeddingRepository) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
 
         (
             JournalRepository::new(pool.clone()),

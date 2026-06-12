@@ -6,7 +6,6 @@ use sqlx::SqlitePool;
 
 use super::*;
 use crate::{
-    database,
     journal::{
         command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
         embedding::{
@@ -31,9 +30,7 @@ use crate::{
 };
 
 async fn setup() -> JournalService {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     JournalService::new(JournalRepository::new(pool))
 }
 
@@ -52,9 +49,7 @@ where
 }
 
 async fn setup_with_pool() -> (JournalService, SqlitePool) {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     (
         JournalService::new(JournalRepository::new(pool.clone())),
         pool,
@@ -65,9 +60,7 @@ async fn setup_with_daily_review_runner<R>(runner: R) -> JournalService
 where
     R: DailyReviewRunner + 'static,
 {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     JournalService::new(JournalRepository::new(pool)).with_daily_review_runner(runner)
 }
 
@@ -75,9 +68,7 @@ async fn setup_with_entry_extraction_runner<R>(runner: R) -> (JournalService, Jo
 where
     R: JournalEntryExtractionRunner + 'static,
 {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     let repo = JournalRepository::new(pool);
     (
         JournalService::new(repo.clone()).with_entry_extraction_runner(runner),
@@ -88,9 +79,7 @@ where
 async fn setup_with_daily_review_service(
     generator: FakeReviewGenerator,
 ) -> (JournalService, DailyReviewRepository, JournalRepository) {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     let journal_repo = JournalRepository::new(pool.clone());
     let daily_review_repo = DailyReviewRepository::new(pool.clone());
     let extractions = JournalEntryExtractionRepository::new(pool.clone());
@@ -109,9 +98,7 @@ async fn setup_with_daily_review_service(
 async fn setup_with_search(
     embedder: FakeEmbedder,
 ) -> (JournalService, SqliteEmbeddingRepository, JournalRepository) {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     let repo = JournalRepository::new(pool.clone());
     let index = SqliteEmbeddingRepository::new(pool.clone());
     let search_repo = JournalRepository::new(pool.clone());
@@ -123,9 +110,7 @@ async fn setup_with_search(
 async fn setup_with_capture_embedding(
     embedder: FakeEmbedder,
 ) -> (JournalService, SqliteEmbeddingRepository, JournalRepository) {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     let repo = JournalRepository::new(pool.clone());
     let index = SqliteEmbeddingRepository::new(pool.clone());
     let service = JournalService::new(repo.clone()).with_capture_embedding(index.clone(), embedder);
@@ -136,9 +121,7 @@ async fn setup_with_search_and_capture_embedding(
     search_embedder: FakeEmbedder,
     capture_embedder: FakeEmbedder,
 ) -> (JournalService, SqliteEmbeddingRepository) {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     let repo = JournalRepository::new(pool.clone());
     let search_index = SqliteEmbeddingRepository::new(pool.clone());
     let capture_index = SqliteEmbeddingRepository::new(pool.clone());
@@ -1355,9 +1338,7 @@ async fn setup_with_weekly_review_runner<R>(runner: R) -> JournalService
 where
     R: WeeklyReviewRunner + 'static,
 {
-    database::register_sqlite_vec_extension();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::migrate!().run(&pool).await.unwrap();
+    let pool = crate::database::test_pool().await;
     JournalService::new(JournalRepository::new(pool)).with_weekly_review_runner(runner)
 }
 

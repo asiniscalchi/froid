@@ -281,20 +281,14 @@ impl EmbeddingIndex<i64> for SqliteDailyReviewEmbeddingRepository {
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
-    use sqlx::SqlitePool;
 
     use super::*;
-    use crate::{
-        database,
-        journal::{
-            embedding::SUPPORTED_EMBEDDING_DIMENSIONS, review::repository::DailyReviewRepository,
-        },
+    use crate::journal::{
+        embedding::SUPPORTED_EMBEDDING_DIMENSIONS, review::repository::DailyReviewRepository,
     };
 
     async fn setup() -> (DailyReviewRepository, SqliteDailyReviewEmbeddingRepository) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
 
         (
             DailyReviewRepository::new(pool.clone()),

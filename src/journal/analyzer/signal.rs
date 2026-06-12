@@ -103,10 +103,9 @@ impl SignalReadService for DefaultSignalReadService {
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
-    use sqlx::SqlitePool;
 
     use super::*;
-    use crate::database;
+
     use crate::journal::extraction::{BehaviorValence, NeedStatus};
     use crate::journal::review::repository::DailyReviewRepository;
     use crate::journal::review::signals::types::{DailyReviewSignalCandidate, SignalType};
@@ -116,9 +115,7 @@ mod tests {
         DailyReviewSignalRepository,
         DailyReviewRepository,
     ) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         let signals = DailyReviewSignalRepository::new(pool.clone());
         let reviews = DailyReviewRepository::new(pool);
         let service = DefaultSignalReadService::new(signals.clone());

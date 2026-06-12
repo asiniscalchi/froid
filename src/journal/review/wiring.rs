@@ -104,7 +104,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        database,
         journal::{
             command::{JournalCommand, JournalCommandRequest},
             review::prompt::DEFAULT_REVIEW_PROMPT_PATH,
@@ -281,10 +280,7 @@ mod tests {
     }
 
     async fn setup_pool() -> SqlitePool {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
-        pool
+        crate::database::test_pool().await
     }
 
     fn temp_prompt_path(name: &str) -> PathBuf {

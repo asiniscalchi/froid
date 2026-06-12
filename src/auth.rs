@@ -107,9 +107,7 @@ mod tests {
         use tower::ServiceExt;
 
         async fn store() -> UserTokenStore {
-            crate::database::register_sqlite_vec_extension();
-            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-            sqlx::migrate!().run(&pool).await.unwrap();
+            let pool = crate::database::test_pool().await;
             UserTokenStore::new(pool)
         }
 

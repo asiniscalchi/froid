@@ -166,19 +166,15 @@ fn weekly_view_if_completed(review: WeeklyReview) -> Option<WeeklyReviewView> {
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
-    use sqlx::SqlitePool;
 
     use super::*;
-    use crate::database;
 
     async fn setup() -> (
         DefaultReviewReadService,
         DailyReviewRepository,
         WeeklyReviewRepository,
     ) {
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         let daily = DailyReviewRepository::new(pool.clone());
         let weekly = WeeklyReviewRepository::new(pool);
         let service = DefaultReviewReadService::new(daily.clone(), weekly.clone());

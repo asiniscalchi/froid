@@ -538,13 +538,11 @@ mod tests {
 
     #[tokio::test]
     async fn generator_with_prompt_source_refreshes_instructions_per_call() {
-        use crate::{database, prompts::PromptKey};
-        use sqlx::SqlitePool;
+        use crate::prompts::PromptKey;
+
         use std::path::PathBuf;
 
-        database::register_sqlite_vec_extension();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        let pool = crate::database::test_pool().await;
         let prompts = crate::prompts::PromptRepository::new(pool);
 
         let temp_path = std::env::temp_dir().join(format!(
