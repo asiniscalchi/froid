@@ -332,35 +332,34 @@ impl<S: EmbeddingSchema> SqliteVectorIndex<S> {
         to_date_exclusive: Option<NaiveDate>,
         limit: usize,
     ) -> Result<Vec<EmbeddingSearchResult<S::Id>>, sqlx::Error> {
-        let mut sql = format!(
-            "SELECT m.{owner_id}, vec_distance_cosine(v.embedding, ?) AS distance
+        let mut builder = sqlx::QueryBuilder::new(format!(
+            "SELECT m.{owner_id}, vec_distance_cosine(v.embedding, ",
+            owner_id = S::OWNER_ID_COLUMN,
+        ));
+        builder.push_bind(embedding.to_blob());
+        builder.push(format!(
+            ") AS distance
              FROM {metadata} m
              JOIN {vec} v ON v.rowid = m.id
              JOIN {owner} o ON o.id = m.{owner_id}
-             WHERE m.embedding_model = ?",
+             WHERE m.embedding_model = ",
             owner_id = S::OWNER_ID_COLUMN,
             metadata = S::METADATA_TABLE,
             vec = S::VEC_TABLE,
             owner = S::OWNER_TABLE,
-        );
-        if from_date.is_some() {
-            sql.push_str(&format!(" AND o.{} >= ?", S::DATE_COLUMN));
-        }
-        if to_date_exclusive.is_some() {
-            sql.push_str(&format!(" AND o.{} < ?", S::DATE_COLUMN));
-        }
-        sql.push_str(" ORDER BY distance ASC LIMIT ?");
-
-        let mut query = sqlx::query(&sql)
-            .bind(embedding.to_blob())
-            .bind(embedding_model);
+        ));
+        builder.push_bind(embedding_model);
         if let Some(date) = from_date {
-            query = query.bind(S::date_bound(date));
+            builder.push(format!(" AND o.{} >= ", S::DATE_COLUMN));
+            builder.push_bind(S::date_bound(date));
         }
         if let Some(date) = to_date_exclusive {
-            query = query.bind(S::date_bound(date));
+            builder.push(format!(" AND o.{} < ", S::DATE_COLUMN));
+            builder.push_bind(S::date_bound(date));
         }
-        let rows = query.bind(limit as i64).fetch_all(&self.pool).await?;
+        builder.push(" ORDER BY distance ASC LIMIT ");
+        builder.push_bind(limit as i64);
+        let rows = builder.build().fetch_all(&self.pool).await?;
 
         Ok(rows
             .into_iter()

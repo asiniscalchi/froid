@@ -62,6 +62,15 @@ fn map_entry(row: SqliteRow) -> JournalEntry {
     }
 }
 
+/// Escape LIKE wildcards so a user query matches them literally
+/// (used with `ESCAPE '\'`).
+fn escape_like_pattern(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 #[derive(Clone)]
 pub struct JournalRepository {
     pool: SqlitePool,
@@ -223,31 +232,25 @@ impl JournalRepository {
         to_date_exclusive: Option<NaiveDate>,
         limit: u32,
     ) -> Result<Vec<StoredJournalEntry>, sqlx::Error> {
-        let mut sql = String::from(
+        let mut builder = sqlx::QueryBuilder::new(
             r#"SELECT id, raw_text, received_at
                FROM journal_entries
-               WHERE LOWER(raw_text) LIKE LOWER(?)"#,
+               WHERE LOWER(raw_text) LIKE LOWER("#,
         );
-        if from_date.is_some() {
-            sql.push_str(" AND received_at >= ?");
-        }
-        if to_date_exclusive.is_some() {
-            sql.push_str(" AND received_at < ?");
-        }
-        sql.push_str(" ORDER BY received_at DESC, id DESC LIMIT ?");
-
-        let mut q = sqlx::query(&sql).bind(format!("%{query}%"));
+        builder.push_bind(format!("%{}%", escape_like_pattern(query)));
+        builder.push(r#") ESCAPE '\'"#);
         if let Some(d) = from_date {
-            let start = Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap());
-            q = q.bind(start);
+            builder.push(" AND received_at >= ");
+            builder.push_bind(Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap()));
         }
         if let Some(d) = to_date_exclusive {
-            let end = Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap());
-            q = q.bind(end);
+            builder.push(" AND received_at < ");
+            builder.push_bind(Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap()));
         }
-        q = q.bind(limit);
+        builder.push(" ORDER BY received_at DESC, id DESC LIMIT ");
+        builder.push_bind(limit);
 
-        let rows = q.fetch_all(&self.pool).await?;
+        let rows = builder.build().fetch_all(&self.pool).await?;
 
         Ok(rows
             .into_iter()
