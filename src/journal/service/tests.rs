@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use super::*;
 use crate::{
     journal::{
-        command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest, MAX_RECENT_LIMIT},
+        command::{JournalCommand, JournalCommandRequest},
         embedding::{
             EmbedderError, Embedding, SUPPORTED_EMBEDDING_DIMENSIONS, SqliteEmbeddingRepository,
         },
@@ -146,10 +146,6 @@ struct FakeDailyReviewRunner {
 }
 
 impl FakeDailyReviewRunner {
-    fn new() -> Self {
-        Self::with_fetch_result(Ok(None))
-    }
-
     fn with_fetch_result(
         fetch_result: Result<Option<DailyReview>, DailyReviewServiceError>,
     ) -> Self {
@@ -257,21 +253,6 @@ impl JournalEntryExtractionRunner for FakeJournalEntryExtractionRunner {
             .unwrap()
             .push((journal_entry_id.to_string(), text.to_string()));
         Ok(())
-    }
-}
-
-#[derive(Clone)]
-struct FailingPendingEmbeddingCounter;
-
-#[async_trait::async_trait]
-impl PendingEmbeddingCounter for FailingPendingEmbeddingCounter {
-    async fn count_entries_missing_embedding(
-        &self,
-        _embedding_model: &str,
-    ) -> Result<i64, EmbeddingRepositoryError> {
-        Err(EmbeddingRepositoryError::Database(
-            "database path /tmp/secret.sqlite unavailable".to_string(),
-        ))
     }
 }
 
@@ -485,214 +466,6 @@ async fn command_start_returns_welcome_message() {
 }
 
 #[tokio::test]
-async fn status_returns_stable_sections_when_optional_subsystems_are_unavailable() {
-    let service = setup().await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::Status))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        outgoing.text,
-        "Froid status\n\nJournal:\n- Total entries: 0\n- Entries today: 0\n\nEmbeddings:\n- Semantic search: unavailable\n- Model: unavailable\n- Dimensions: unavailable\n- Pending embeddings: unavailable\n\nDaily review:\n- Generation: not configured\n- Delivery: not configured"
-    );
-}
-
-#[tokio::test]
-async fn status_uses_single_user_journal_stats_and_command_received_at_date() {
-    let (service, pool) = setup_with_pool().await;
-    service
-        .process(&incoming(
-            "1",
-            "previous day",
-            Utc.with_ymd_and_hms(2026, 4, 28, 23, 59, 0).unwrap(),
-        ))
-        .await
-        .unwrap();
-    service
-        .process(&incoming(
-            "2",
-            "requested day",
-            Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
-        ))
-        .await
-        .unwrap();
-    JournalRepository::new(pool.clone())
-        .store(&IncomingMessage {
-            source: MessageSource::Telegram,
-            source_conversation_id: "42".to_string(),
-            source_message_id: "3".to_string(),
-            text: "other user".to_string(),
-            received_at: Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
-        })
-        .await
-        .unwrap();
-
-    let outgoing = service
-        .command(&JournalCommandRequest {
-            source: MessageSource::Telegram,
-            source_conversation_id: "42".to_string(),
-            received_at: Utc.with_ymd_and_hms(2026, 4, 29, 12, 0, 0).unwrap(),
-            command: JournalCommand::Status,
-        })
-        .await
-        .unwrap();
-
-    assert!(outgoing.text.contains("- Total entries: 3"));
-    assert!(outgoing.text.contains("- Entries today: 2"));
-}
-
-#[tokio::test]
-async fn status_command_does_not_store_command_text_as_journal_entry() {
-    let (service, pool) = setup_with_pool().await;
-
-    service
-        .command(&command(JournalCommand::Status))
-        .await
-        .unwrap();
-
-    let entry_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM journal_entries")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(entry_count, 0);
-}
-
-#[tokio::test]
-async fn status_reports_configured_embedding_status_and_single_user_pending_count() {
-    let (service, index, repo) = setup_with_search(FakeEmbedder::fails()).await;
-    let service = service
-        .with_embedding_status_config(EmbeddingStatusConfig {
-            model: TEST_MODEL.to_string(),
-        })
-        .with_pending_embedding_counter(index.clone());
-    repo.store(&incoming("1", "embedded entry", at(10, 0)))
-        .await
-        .unwrap();
-    repo.store(&incoming("2", "pending entry", at(11, 0)))
-        .await
-        .unwrap();
-    let embedded_entry_id: String =
-        sqlx::query_scalar("SELECT id FROM journal_entries WHERE source_message_id = '1'")
-            .fetch_one(repo.pool())
-            .await
-            .unwrap();
-    index
-        .store_embedding(
-            &embedded_entry_id,
-            TEST_MODEL,
-            SUPPORTED_EMBEDDING_DIMENSIONS,
-            &Embedding::new(
-                vec![1.0; SUPPORTED_EMBEDDING_DIMENSIONS],
-                SUPPORTED_EMBEDDING_DIMENSIONS,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    repo.store(&IncomingMessage {
-        source: MessageSource::Telegram,
-        source_conversation_id: "42".to_string(),
-        source_message_id: "3".to_string(),
-        text: "other user pending entry".to_string(),
-        received_at: at(12, 0),
-    })
-    .await
-    .unwrap();
-
-    let outgoing = service
-        .command(&command(JournalCommand::Status))
-        .await
-        .unwrap();
-
-    assert!(outgoing.text.contains("- Semantic search: enabled"));
-    assert!(outgoing.text.contains("- Model: test-model"));
-    assert!(outgoing.text.contains("- Dimensions: 1536"));
-    assert!(outgoing.text.contains("- Pending embeddings: 2"));
-}
-
-#[tokio::test]
-async fn status_reports_pending_embeddings_unavailable_when_counter_fails() {
-    let (service, _, _) = setup_with_search(FakeEmbedder::fails()).await;
-    let service = service
-        .with_embedding_status_config(EmbeddingStatusConfig {
-            model: TEST_MODEL.to_string(),
-        })
-        .with_pending_embedding_counter(FailingPendingEmbeddingCounter);
-
-    let outgoing = service
-        .command(&command(JournalCommand::Status))
-        .await
-        .unwrap();
-
-    assert!(outgoing.text.contains("- Semantic search: enabled"));
-    assert!(outgoing.text.contains("- Pending embeddings: unavailable"));
-    assert!(!outgoing.text.contains("/tmp/secret.sqlite"));
-    assert!(!outgoing.text.contains("database path"));
-}
-
-#[tokio::test]
-async fn status_reports_daily_review_prompt_when_configured() {
-    let runner = FakeDailyReviewRunner::new();
-    let service = setup_with_daily_review_runner(runner)
-        .await
-        .with_daily_review_prompt_version("daily-review-v1");
-
-    let outgoing = service
-        .command(&command(JournalCommand::Status))
-        .await
-        .unwrap();
-
-    assert!(outgoing.text.contains("- Generation: configured"));
-    assert!(outgoing.text.contains("- Prompt: daily-review-v1"));
-    assert!(outgoing.text.contains("- Delivery: not configured"));
-}
-
-#[tokio::test]
-async fn status_reports_delivery_configured_when_delivery_is_wired() {
-    let runner = FakeDailyReviewRunner::new();
-    let service = setup_with_daily_review_runner(runner)
-        .await
-        .with_daily_review_delivery_configured();
-
-    let outgoing = service
-        .command(&command(JournalCommand::Status))
-        .await
-        .unwrap();
-
-    assert!(outgoing.text.contains("- Delivery: configured"));
-}
-
-#[tokio::test]
-async fn status_does_not_expose_secrets_or_raw_internal_errors() {
-    let (service, _, _) = setup_with_search(FakeEmbedder::fails()).await;
-    let service = service
-        .with_embedding_status_config(EmbeddingStatusConfig {
-            model: TEST_MODEL.to_string(),
-        })
-        .with_pending_embedding_counter(FailingPendingEmbeddingCounter);
-
-    let outgoing = service
-        .command(&command(JournalCommand::Status))
-        .await
-        .unwrap();
-
-    for forbidden in [
-        "OPENAI_API_KEY",
-        "TELEGRAM_BOT_TOKEN",
-        "bot token",
-        "sqlite:",
-        "/tmp/secret.sqlite",
-        "provider down",
-        "database path",
-        "stack trace",
-    ] {
-        assert!(!outgoing.text.contains(forbidden), "{forbidden}");
-    }
-}
-
-#[tokio::test]
 async fn day_review_last_returns_unavailable_when_runner_is_not_configured() {
     let (service, pool) = setup_with_pool().await;
 
@@ -841,75 +614,6 @@ async fn undo_deletes_daily_review_for_deleted_entry_date() {
 }
 
 #[tokio::test]
-async fn command_recent_usage_returns_usage_message() {
-    let service = setup().await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::RecentUsage))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        outgoing.text,
-        "Usage: /recent [number]\n\nExamples:\n/recent\n/recent 5"
-    );
-}
-
-#[tokio::test]
-async fn last_returns_empty_response_when_no_entry_in_conversation() {
-    let service = setup().await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::Last))
-        .await
-        .unwrap();
-
-    assert_eq!(outgoing.text, "No journal entry found.");
-}
-
-#[tokio::test]
-async fn last_formats_latest_entry_for_current_conversation() {
-    let service = setup().await;
-    service
-        .process(&incoming_for_conversation(
-            "42",
-            "1",
-            "current old",
-            at(10, 0),
-        ))
-        .await
-        .unwrap();
-    service
-        .process(&incoming_for_conversation(
-            "99",
-            "2",
-            "other newer",
-            at(12, 0),
-        ))
-        .await
-        .unwrap();
-    service
-        .process(&incoming_for_conversation(
-            "42",
-            "3",
-            "current new",
-            at(11, 0),
-        ))
-        .await
-        .unwrap();
-
-    let outgoing = service
-        .command(&command(JournalCommand::Last))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        outgoing.text,
-        "Last entry:\n\n\"current new\"\n\nReceived at: 2026-04-28 11:00\n\nUse /undo to delete it."
-    );
-}
-
-#[tokio::test]
 async fn undo_returns_empty_response_when_no_entry_in_conversation() {
     let service = setup().await;
 
@@ -923,7 +627,7 @@ async fn undo_returns_empty_response_when_no_entry_in_conversation() {
 
 #[tokio::test]
 async fn undo_deletes_latest_entry_for_current_conversation() {
-    let service = setup().await;
+    let (service, pool) = setup_with_pool().await;
     service
         .process(&incoming_for_conversation(
             "42",
@@ -956,186 +660,19 @@ async fn undo_deletes_latest_entry_for_current_conversation() {
         .command(&command(JournalCommand::Undo))
         .await
         .unwrap();
-    let last_current = service
-        .command(&command(JournalCommand::Last))
-        .await
-        .unwrap();
-    let last_other = service
-        .command(&JournalCommandRequest {
-            source: MessageSource::Telegram,
-            source_conversation_id: "99".to_string(),
-            received_at: at(12, 0),
-            command: JournalCommand::Last,
-        })
-        .await
-        .unwrap();
 
     assert_eq!(undo.text, "Deleted last entry.");
-    assert_eq!(
-        last_current.text,
-        "Last entry:\n\n\"current old\"\n\nReceived at: 2026-04-28 10:00\n\nUse /undo to delete it."
-    );
-    assert_eq!(
-        last_other.text,
-        "Last entry:\n\n\"other newer\"\n\nReceived at: 2026-04-28 12:00\n\nUse /undo to delete it."
-    );
-}
 
-#[tokio::test]
-async fn recent_returns_empty_response_when_no_entries() {
-    let service = setup().await;
-
-    let result = service
-        .command(&command(JournalCommand::Recent {
-            requested_limit: DEFAULT_RECENT_LIMIT,
-        }))
-        .await
-        .unwrap();
-
-    assert_eq!(result.text, "No journal entries found.");
-}
-
-#[tokio::test]
-async fn recent_formats_entries_newest_first() {
-    let service = setup().await;
-
-    service
-        .process(&incoming("1", "first", at(10, 0)))
-        .await
-        .unwrap();
-    service
-        .process(&incoming("2", "second", at(11, 0)))
-        .await
-        .unwrap();
-
-    let outgoing = service
-        .command(&command(JournalCommand::Recent {
-            requested_limit: 10,
-        }))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        outgoing.text,
-        "2026-04-28 11:00 - second\n2026-04-28 10:00 - first"
-    );
-}
-
-#[tokio::test]
-async fn recent_respects_limit() {
-    let service = setup().await;
-
-    service
-        .process(&incoming("1", "first", at(10, 0)))
-        .await
-        .unwrap();
-    service
-        .process(&incoming("2", "second", at(11, 0)))
-        .await
-        .unwrap();
-    service
-        .process(&incoming("3", "third", at(12, 0)))
-        .await
-        .unwrap();
-
-    let outgoing = service
-        .command(&command(JournalCommand::Recent { requested_limit: 2 }))
-        .await
-        .unwrap();
-
-    assert!(outgoing.text.contains("third"));
-    assert!(outgoing.text.contains("second"));
-    assert!(!outgoing.text.contains("first"));
-}
-
-#[tokio::test]
-async fn recent_caps_requested_limit() {
-    let service = setup().await;
-
-    for index in 1..=51 {
-        service
-            .process(&incoming(
-                &index.to_string(),
-                &format!("entry {index}"),
-                Utc.with_ymd_and_hms(2026, 4, 28, 0, index, 0).unwrap(),
-            ))
+    // Only the latest entry of conversation 42 ("current new") is removed; the
+    // older entry of 42 and the entry of conversation 99 are left untouched.
+    let remaining: Vec<String> =
+        sqlx::query_scalar("SELECT raw_text FROM journal_entries ORDER BY received_at")
+            .fetch_all(&pool)
             .await
             .unwrap();
-    }
-
-    let outgoing = service
-        .command(&command(JournalCommand::Recent {
-            requested_limit: 100,
-        }))
-        .await
-        .unwrap();
-
-    assert_eq!(outgoing.text.lines().count(), MAX_RECENT_LIMIT as usize);
-    assert!(outgoing.text.contains("entry 51"));
-    assert!(!outgoing.text.contains("2026-04-28 00:01 - entry 1"));
-}
-
-#[tokio::test]
-async fn today_formats_entries_oldest_first() {
-    let service = setup().await;
-
-    service
-        .process(&incoming("1", "first", at(10, 0)))
-        .await
-        .unwrap();
-    service
-        .process(&incoming("2", "second", at(11, 0)))
-        .await
-        .unwrap();
-
-    let outgoing = service
-        .command(&command(JournalCommand::Today))
-        .await
-        .unwrap();
-
     assert_eq!(
-        outgoing.text,
-        "2026-04-28 10:00 - first\n2026-04-28 11:00 - second"
-    );
-}
-
-#[tokio::test]
-async fn today_returns_empty_response_when_no_entries() {
-    let service = setup().await;
-
-    let outgoing = service
-        .command(&command(JournalCommand::Today))
-        .await
-        .unwrap();
-
-    assert_eq!(outgoing.text, "No journal entries found for today.");
-}
-
-#[tokio::test]
-async fn stats_formats_basic_statistics() {
-    let service = setup().await;
-
-    service
-        .process(&incoming("1", "first", at(10, 0)))
-        .await
-        .unwrap();
-    service
-        .process(&incoming(
-            "2",
-            "tomorrow",
-            Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
-        ))
-        .await
-        .unwrap();
-
-    let outgoing = service
-        .command(&command(JournalCommand::Stats))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        outgoing.text,
-        "Journal stats:\nTotal entries: 2\nEntries today: 1\nLatest entry: 2026-04-29 09:00"
+        remaining,
+        vec!["current old".to_string(), "other newer".to_string()]
     );
 }
 

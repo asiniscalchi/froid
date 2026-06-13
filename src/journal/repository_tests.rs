@@ -241,44 +241,7 @@ async fn fetch_all_returns_empty_when_no_entries() {
 }
 
 #[tokio::test]
-async fn fetch_last_for_conversation_returns_latest_entry_for_current_conversation() {
-    let repo = setup().await;
-    repo.store(&incoming_for_conversation(
-        "42",
-        "1",
-        "current old",
-        at(10, 0),
-    ))
-    .await
-    .unwrap();
-    repo.store(&incoming_for_conversation(
-        "42",
-        "2",
-        "current new",
-        at(11, 0),
-    ))
-    .await
-    .unwrap();
-    repo.store(&incoming_for_conversation(
-        "99",
-        "3",
-        "other conversation",
-        at(12, 0),
-    ))
-    .await
-    .unwrap();
-
-    let entry = repo
-        .fetch_last_for_conversation(&MessageSource::Telegram, "42")
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(entry.entry.text, "current new");
-}
-
-#[tokio::test]
-async fn fetch_last_for_conversation_breaks_timestamp_ties_by_id() {
+async fn delete_last_for_conversation_deletes_newest_entry_breaking_ties_by_id() {
     let repo = setup().await;
     repo.store(&incoming("1", "first inserted", at(10, 0)))
         .await
@@ -287,30 +250,6 @@ async fn fetch_last_for_conversation_breaks_timestamp_ties_by_id() {
         .await
         .unwrap();
 
-    let entry = repo
-        .fetch_last_for_conversation(&MessageSource::Telegram, "42")
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(entry.entry.text, "second inserted");
-}
-
-#[tokio::test]
-async fn delete_last_for_conversation_deletes_same_entry_selected_by_fetch_last() {
-    let repo = setup().await;
-    repo.store(&incoming("1", "first inserted", at(10, 0)))
-        .await
-        .unwrap();
-    repo.store(&incoming("2", "second inserted", at(10, 0)))
-        .await
-        .unwrap();
-
-    let fetched = repo
-        .fetch_last_for_conversation(&MessageSource::Telegram, "42")
-        .await
-        .unwrap()
-        .unwrap();
     let deleted = repo
         .delete_last_for_conversation(&MessageSource::Telegram, "42")
         .await
@@ -318,7 +257,6 @@ async fn delete_last_for_conversation_deletes_same_entry_selected_by_fetch_last(
         .unwrap();
     let remaining = repo.fetch_recent(10).await.unwrap();
 
-    assert_eq!(deleted.id, fetched.id);
     assert_eq!(deleted.entry.text, "second inserted");
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].entry.text, "first inserted");
@@ -339,14 +277,11 @@ async fn delete_last_for_conversation_does_not_delete_other_conversations() {
         .await
         .unwrap()
         .unwrap();
-    let other = repo
-        .fetch_last_for_conversation(&MessageSource::Telegram, "99")
-        .await
-        .unwrap()
-        .unwrap();
+    let remaining = repo.fetch_recent(10).await.unwrap();
 
     assert_eq!(deleted.entry.text, "current");
-    assert_eq!(other.entry.text, "other");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].entry.text, "other");
 }
 
 #[tokio::test]
@@ -856,40 +791,4 @@ async fn fetch_by_ids_returns_empty_when_no_ids_match() {
         .unwrap();
 
     assert!(rows.is_empty());
-}
-
-#[tokio::test]
-async fn stats_returns_counts_and_latest_timestamp_for_user() {
-    let repo = setup().await;
-
-    repo.store(&incoming("1", "first", at(10, 0)))
-        .await
-        .unwrap();
-    repo.store(&incoming(
-        "2",
-        "tomorrow",
-        Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap(),
-    ))
-    .await
-    .unwrap();
-
-    let stats = repo.stats(date()).await.unwrap();
-
-    assert_eq!(stats.total_entries, 2);
-    assert_eq!(stats.entries_today, 1);
-    assert_eq!(
-        stats.latest_received_at,
-        Some(Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap())
-    );
-}
-
-#[tokio::test]
-async fn stats_returns_zeroes_when_journal_has_no_entries() {
-    let repo = setup().await;
-
-    let stats = repo.stats(date()).await.unwrap();
-
-    assert_eq!(stats.total_entries, 0);
-    assert_eq!(stats.entries_today, 0);
-    assert_eq!(stats.latest_received_at, None);
 }

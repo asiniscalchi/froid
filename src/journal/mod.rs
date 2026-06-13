@@ -9,7 +9,6 @@ pub(crate) mod responses;
 pub mod review;
 pub mod search;
 pub mod service;
-pub mod status;
 pub mod store;
 pub mod transfer;
 pub mod week_review;

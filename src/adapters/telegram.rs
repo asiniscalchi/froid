@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     handler::MessageHandler,
-    journal::command::{DEFAULT_RECENT_LIMIT, JournalCommand, JournalCommandRequest},
+    journal::command::{JournalCommand, JournalCommandRequest},
     journal::transfer::{TransferError, TransferService},
     messages::{IncomingMessage, MessageSource},
     tokens::TokenIssuer,
@@ -126,22 +126,12 @@ enum Command {
     Start,
     #[command(description = "show commands")]
     Help,
-    #[command(description = "show latest entry")]
-    Last,
     #[command(description = "delete latest entry")]
     Undo,
-    #[command(description = "show recent entries (optionally how many)")]
-    Recent(String),
-    #[command(description = "show today's entries")]
-    Today,
     #[command(description = "show daily review")]
     DayReview,
     #[command(description = "show last week's review")]
     WeekReview,
-    #[command(description = "show journal stats")]
-    Stats,
-    #[command(description = "show bot status")]
-    Status,
     #[command(description = "search entries by meaning")]
     Search(String),
     #[command(description = "create or rotate your MCP access token (/token revoke to disable)")]
@@ -168,29 +158,9 @@ fn dispatch_for(command: Command) -> Dispatch {
     match command {
         Command::Start => Dispatch::Journal(JournalCommand::Start),
         Command::Help => Dispatch::Help,
-        Command::Last => Dispatch::Journal(JournalCommand::Last),
         Command::Undo => Dispatch::Journal(JournalCommand::Undo),
-        Command::Recent(argument) => {
-            let argument = argument.trim();
-            let command = if argument.is_empty() {
-                JournalCommand::Recent {
-                    requested_limit: DEFAULT_RECENT_LIMIT,
-                }
-            } else {
-                match argument.parse::<u32>() {
-                    Ok(limit) if limit > 0 => JournalCommand::Recent {
-                        requested_limit: limit,
-                    },
-                    _ => JournalCommand::RecentUsage,
-                }
-            };
-            Dispatch::Journal(command)
-        }
-        Command::Today => Dispatch::Journal(JournalCommand::Today),
         Command::DayReview => Dispatch::Journal(JournalCommand::DayReviewLast),
         Command::WeekReview => Dispatch::Journal(JournalCommand::WeekReviewLast),
-        Command::Stats => Dispatch::Journal(JournalCommand::Stats),
-        Command::Status => Dispatch::Journal(JournalCommand::Status),
         Command::Search(query) => {
             let query = query.trim();
             let command = if query.is_empty() {
@@ -697,11 +667,7 @@ mod tests {
     #[test]
     fn parse_journal_commands() {
         assert_eq!(journal("/start"), Some(JournalCommand::Start));
-        assert_eq!(journal("/last"), Some(JournalCommand::Last));
         assert_eq!(journal("/undo"), Some(JournalCommand::Undo));
-        assert_eq!(journal("/today"), Some(JournalCommand::Today));
-        assert_eq!(journal("/stats"), Some(JournalCommand::Stats));
-        assert_eq!(journal("/status"), Some(JournalCommand::Status));
         assert_eq!(journal("/day_review"), Some(JournalCommand::DayReviewLast));
         assert_eq!(
             journal("/week_review"),
@@ -711,11 +677,10 @@ mod tests {
 
     #[test]
     fn parse_strips_bot_name_suffix() {
-        assert_eq!(journal("/last@mybot"), Some(JournalCommand::Last));
-        assert_eq!(journal("/status@mybot"), Some(JournalCommand::Status));
+        assert_eq!(journal("/undo@mybot"), Some(JournalCommand::Undo));
         assert_eq!(
-            journal("/recent@mybot 3"),
-            Some(JournalCommand::Recent { requested_limit: 3 })
+            journal("/day_review@mybot"),
+            Some(JournalCommand::DayReviewLast)
         );
         assert_eq!(
             journal("/search@mybot something"),
@@ -723,23 +688,6 @@ mod tests {
                 query: "something".to_string()
             })
         );
-    }
-
-    #[test]
-    fn parse_recent_command_arguments() {
-        assert_eq!(
-            journal("/recent"),
-            Some(JournalCommand::Recent {
-                requested_limit: DEFAULT_RECENT_LIMIT
-            })
-        );
-        assert_eq!(
-            journal("/recent 5"),
-            Some(JournalCommand::Recent { requested_limit: 5 })
-        );
-        assert_eq!(journal("/recent abc"), Some(JournalCommand::RecentUsage));
-        assert_eq!(journal("/recent 0"), Some(JournalCommand::RecentUsage));
-        assert_eq!(journal("/recent -3"), Some(JournalCommand::RecentUsage));
     }
 
     #[test]
@@ -796,7 +744,7 @@ mod tests {
                 registered.command
             );
         }
-        assert!(help.contains("/recent"));
+        assert!(help.contains("/search"));
         assert!(help.contains("/token"));
         assert!(help.contains("/export"));
     }

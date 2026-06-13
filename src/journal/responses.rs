@@ -1,12 +1,6 @@
 use chrono::NaiveDate;
 
-use super::embedding::SUPPORTED_EMBEDDING_DIMENSIONS;
-use super::entry::{JournalEntry, JournalStats};
 use super::review::DailyReview;
-use super::status::{
-    DailyReviewDeliveryStatus, DailyReviewGenerationStatus, DailyReviewStatus, EmbeddingStatus,
-    SemanticSearchStatus, StatusReport,
-};
 use super::week_review::WeeklyReview;
 
 pub(super) fn message_saved_response() -> String {
@@ -17,20 +11,8 @@ pub(super) fn start_response() -> String {
     "Froid is your private journal. Send me any text message and I will store it for you.\n\nI use AI to help you find meaning in your entries and provide daily and weekly reviews of your thoughts.\n\nUse /help to see all available commands.".to_string()
 }
 
-pub(super) fn recent_usage_response() -> String {
-    "Usage: /recent [number]\n\nExamples:\n/recent\n/recent 5".to_string()
-}
-
 pub(super) fn search_usage_response() -> String {
     "Usage: /search <query>\n\nExamples:\n/search anxiety before meetings".to_string()
-}
-
-pub(super) fn no_entries_response() -> String {
-    "No journal entries found.".to_string()
-}
-
-pub(super) fn no_last_entry_response() -> String {
-    "No journal entry found.".to_string()
 }
 
 pub(super) fn no_entry_to_delete_response() -> String {
@@ -39,10 +21,6 @@ pub(super) fn no_entry_to_delete_response() -> String {
 
 pub(super) fn deleted_last_entry_response() -> String {
     "Deleted last entry.".to_string()
-}
-
-pub(super) fn no_entries_today_response() -> String {
-    "No journal entries found for today.".to_string()
 }
 
 pub(super) fn daily_review_unavailable_response() -> String {
@@ -84,134 +62,4 @@ pub(super) fn weekly_review_not_available_response(week_start: NaiveDate) -> Str
         "No weekly review available for the week of {} yet.",
         week_start.format("%Y-%m-%d")
     )
-}
-
-pub(super) fn stats_response(stats: &JournalStats) -> String {
-    let latest = stats
-        .latest_received_at
-        .map(|timestamp| timestamp.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|| "none".to_string());
-
-    format!(
-        "Journal stats:\nTotal entries: {}\nEntries today: {}\nLatest entry: {}",
-        stats.total_entries, stats.entries_today, latest
-    )
-}
-
-pub(super) fn status_response(report: &StatusReport) -> String {
-    format!(
-        "Froid status\n\nJournal:\n- Total entries: {}\n- Entries today: {}\n\nEmbeddings:\n{}\n\nDaily review:\n{}",
-        report.journal.total_entries,
-        report.journal.entries_today,
-        format_embedding_status(&report.embeddings),
-        format_daily_review_status(&report.daily_review)
-    )
-}
-
-fn format_embedding_status(status: &EmbeddingStatus) -> String {
-    let semantic_search = match status.semantic_search {
-        SemanticSearchStatus::Enabled => "enabled",
-        SemanticSearchStatus::Unavailable => "unavailable",
-    };
-    let model = status
-        .config
-        .as_ref()
-        .map(|config| config.model.as_str())
-        .unwrap_or("unavailable");
-    let dimensions = status
-        .config
-        .as_ref()
-        .map(|_| SUPPORTED_EMBEDDING_DIMENSIONS.to_string())
-        .unwrap_or_else(|| "unavailable".to_string());
-    let pending_embeddings = status
-        .pending_embeddings
-        .map(|count| count.to_string())
-        .unwrap_or_else(|| "unavailable".to_string());
-
-    format!(
-        "- Semantic search: {semantic_search}\n- Model: {model}\n- Dimensions: {dimensions}\n- Pending embeddings: {pending_embeddings}"
-    )
-}
-
-fn format_daily_review_status(status: &DailyReviewStatus) -> String {
-    let generation = match status.generation {
-        DailyReviewGenerationStatus::Configured => "configured",
-        DailyReviewGenerationStatus::NotConfigured => "not configured",
-    };
-    let delivery = match status.delivery {
-        DailyReviewDeliveryStatus::Configured => "configured",
-        DailyReviewDeliveryStatus::NotConfigured => "not configured",
-    };
-
-    let mut lines = vec![format!("- Generation: {generation}")];
-    if let Some(prompt_version) = &status.prompt_version {
-        lines.push(format!("- Prompt: {prompt_version}"));
-    }
-    lines.push(format!("- Delivery: {delivery}"));
-
-    lines.join("\n")
-}
-
-pub(super) fn format_entries<T: AsRef<JournalEntry>>(entries: &[T]) -> String {
-    entries
-        .iter()
-        .map(|e| {
-            let entry = e.as_ref();
-            format!(
-                "{} - {}",
-                entry.received_at.format("%Y-%m-%d %H:%M"),
-                entry.text
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-pub(super) fn format_last_entry(entry: &JournalEntry) -> String {
-    format!(
-        "Last entry:\n\n\"{}\"\n\nReceived at: {}\n\nUse /undo to delete it.",
-        entry.text,
-        entry.received_at.format("%Y-%m-%d %H:%M")
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::journal::entry::{JournalEntry, StoredJournalEntry};
-    use chrono::{TimeZone, Utc};
-
-    fn entry(day: u32, text: &str) -> JournalEntry {
-        JournalEntry {
-            text: text.to_string(),
-            received_at: Utc.with_ymd_and_hms(2026, 4, day, 10, 0, 0).unwrap(),
-        }
-    }
-
-    #[test]
-    fn format_entries_works_with_journal_entries() {
-        let entries = vec![entry(28, "first"), entry(28, "second")];
-        let formatted = format_entries(&entries);
-
-        assert!(formatted.contains("2026-04-28 10:00 - first"));
-        assert!(formatted.contains("2026-04-28 10:00 - second"));
-    }
-
-    #[test]
-    fn format_entries_works_with_stored_journal_entries() {
-        let entries = vec![
-            StoredJournalEntry {
-                id: "1".to_string(),
-                entry: entry(28, "first"),
-            },
-            StoredJournalEntry {
-                id: "2".to_string(),
-                entry: entry(28, "second"),
-            },
-        ];
-        let formatted = format_entries(&entries);
-
-        assert!(formatted.contains("2026-04-28 10:00 - first"));
-        assert!(formatted.contains("2026-04-28 10:00 - second"));
-    }
 }

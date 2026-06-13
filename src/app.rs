@@ -27,7 +27,6 @@ use crate::{
         },
         search::SemanticSearchService,
         service::JournalService,
-        status::EmbeddingStatusConfig,
         week_review::{build_weekly_review_service, configure_weekly_review},
     },
     prompts::{PromptKey, PromptRepository, PromptSource},
@@ -253,7 +252,6 @@ pub(crate) fn build_journal_service(
     pool: SqlitePool,
     prompt_repository: &PromptRepository,
     config: &ServeConfig,
-    delivery_configured: bool,
 ) -> Result<JournalService, Box<dyn Error>> {
     let mut journal_service = JournalService::new(JournalRepository::new(pool.clone()));
 
@@ -278,14 +276,9 @@ pub(crate) fn build_journal_service(
         config.weekly_review.clone(),
     )?;
 
-    if delivery_configured {
-        journal_service = journal_service.with_daily_review_delivery_configured();
-    }
-
     if let Some(api_key) = config.openai_api_key() {
-        let cfg = config.embedding.clone();
         let embedder =
-            RigOpenAiEmbedder::from_optional_api_key(cfg.clone(), Some(api_key.to_string()))
+            RigOpenAiEmbedder::from_optional_api_key(config.embedding.clone(), Some(api_key.to_string()))
                 .map_err(|error| {
                     warn!(
                         error = %error,
@@ -300,7 +293,6 @@ pub(crate) fn build_journal_service(
             crate::journal::review::embedding_repository::SqliteDailyReviewEmbeddingRepository::new(
                 pool.clone(),
             );
-        let status_config = EmbeddingStatusConfig { model: cfg.model };
         let search = SemanticSearchService::new(
             embedding_repository.clone(),
             Arc::clone(&embedder),
@@ -314,10 +306,7 @@ pub(crate) fn build_journal_service(
 
         journal_service = journal_service.with_search(search);
         journal_service = journal_service.with_daily_review_search(review_search);
-        journal_service =
-            journal_service.with_capture_embedding(embedding_repository.clone(), embedder);
-        journal_service = journal_service.with_embedding_status_config(status_config);
-        journal_service = journal_service.with_pending_embedding_counter(embedding_repository);
+        journal_service = journal_service.with_capture_embedding(embedding_repository, embedder);
     } else {
         warn!("OPENAI_API_KEY is not set; semantic search and embeddings are disabled");
     }

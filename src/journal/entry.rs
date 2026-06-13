@@ -23,10 +23,3 @@ impl AsRef<JournalEntry> for StoredJournalEntry {
         &self.entry
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JournalStats {
-    pub total_entries: i64,
-    pub entries_today: i64,
-    pub latest_received_at: Option<DateTime<Utc>>,
-}

@@ -147,13 +147,11 @@ impl JournalServiceRegistry {
         let prompt_repository = PromptRepository::new(pool.clone());
 
         // Build the JournalService for this pool
-        let service = crate::app::build_journal_service(
-            pool.clone(),
-            &prompt_repository,
-            &self.serve_config,
-            self.serve_config.daily_review_delivery.enabled,
-        )
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+        let service =
+            crate::app::build_journal_service(pool.clone(), &prompt_repository, &self.serve_config)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    e.to_string().into()
+                })?;
 
         guard.insert(chat_id.to_string(), service.clone());
         Ok(service)
