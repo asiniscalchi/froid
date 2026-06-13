@@ -2,11 +2,24 @@ use clap::Parser;
 use froid::{
     cli::Cli,
     handler::MessageHandler,
-    journal::command::{JournalCommand, JournalCommandRequest},
     journal::{registry::JournalServiceRegistry, registry::JournalServiceRegistryConfig},
     messages::{IncomingMessage, MessageSource},
 };
 use tokio_util::sync::CancellationToken;
+
+/// Read every journal entry text stored in a tenant's database file.
+async fn entry_texts(db_path: &std::path::Path) -> Vec<String> {
+    use sqlx::Row;
+
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", db_path.display()))
+        .await
+        .unwrap();
+    let rows = sqlx::query("SELECT raw_text FROM journal_entries ORDER BY received_at")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    rows.into_iter().map(|row| row.get("raw_text")).collect()
+}
 
 #[tokio::test]
 async fn test_multiuser_database_isolation_and_routing() {
@@ -86,49 +99,31 @@ async fn test_multiuser_database_isolation_and_routing() {
         db_b_path
     );
 
-    // 6. Verify Isolation via /recent command
-    // Query recent entries for User A
-    let cmd_a = JournalCommandRequest {
-        source: MessageSource::Telegram,
-        source_conversation_id: "user_a".to_string(),
-        received_at: chrono::Utc::now(),
-        command: JournalCommand::Recent {
-            requested_limit: 10,
-        },
-    };
-
-    let res_recent_a = registry.command(&cmd_a).await.unwrap();
+    // 6. Verify isolation by inspecting each tenant's physical database.
+    let texts_a = entry_texts(&db_a_path).await;
     assert!(
-        res_recent_a.text.contains("Today was a productive day"),
-        "User A's recent list should contain their own message. Got: {}",
-        res_recent_a.text
+        texts_a
+            .iter()
+            .any(|t| t.contains("Today was a productive day")),
+        "User A's database should contain their own message. Got: {:?}",
+        texts_a
     );
     assert!(
-        !res_recent_a.text.contains("gardening"),
-        "User A's recent list must NOT contain User B's message. Got: {}",
-        res_recent_a.text
+        !texts_a.iter().any(|t| t.contains("gardening")),
+        "User A's database must NOT contain User B's message. Got: {:?}",
+        texts_a
     );
 
-    // Query recent entries for User B
-    let cmd_b = JournalCommandRequest {
-        source: MessageSource::Telegram,
-        source_conversation_id: "user_b".to_string(),
-        received_at: chrono::Utc::now(),
-        command: JournalCommand::Recent {
-            requested_limit: 10,
-        },
-    };
-
-    let res_recent_b = registry.command(&cmd_b).await.unwrap();
+    let texts_b = entry_texts(&db_b_path).await;
     assert!(
-        res_recent_b.text.contains("gardening"),
-        "User B's recent list should contain their own message. Got: {}",
-        res_recent_b.text
+        texts_b.iter().any(|t| t.contains("gardening")),
+        "User B's database should contain their own message. Got: {:?}",
+        texts_b
     );
     assert!(
-        !res_recent_b.text.contains("productive day"),
-        "User B's recent list must NOT contain User A's message. Got: {}",
-        res_recent_b.text
+        !texts_b.iter().any(|t| t.contains("productive day")),
+        "User B's database must NOT contain User A's message. Got: {:?}",
+        texts_b
     );
 
     // 7. Verify Startup Database Discovery
@@ -150,13 +145,32 @@ async fn test_multiuser_database_isolation_and_routing() {
         discovery_res.err()
     );
 
-    // Verify both tenant services were loaded and cached
-    // We can query recent again using the restarted registry without sending a new message first
-    let res_restart_a = registry_restart.command(&cmd_a).await.unwrap();
+    // The restarted registry must route to User A's existing database: a new
+    // message lands alongside the entry stored before the restart rather than
+    // in a fresh database.
+    let msg_a_again = IncomingMessage {
+        source: MessageSource::Telegram,
+        source_conversation_id: "user_a".to_string(),
+        source_message_id: "msg_3".to_string(),
+        text: "A second entry written after restart.".to_string(),
+        received_at: chrono::Utc::now(),
+    };
+    registry_restart.process(&msg_a_again).await.unwrap();
+
+    let texts_a_after_restart = entry_texts(&db_a_path).await;
     assert!(
-        res_restart_a.text.contains("Today was a productive day"),
-        "Restarted registry should discover User A's DB and load existing entries. Got: {}",
-        res_restart_a.text
+        texts_a_after_restart
+            .iter()
+            .any(|t| t.contains("Today was a productive day")),
+        "Restarted registry should keep User A's original entry. Got: {:?}",
+        texts_a_after_restart
+    );
+    assert!(
+        texts_a_after_restart
+            .iter()
+            .any(|t| t.contains("second entry written after restart")),
+        "Restarted registry should append to User A's existing database. Got: {:?}",
+        texts_a_after_restart
     );
 
     // Clean up temporary database files

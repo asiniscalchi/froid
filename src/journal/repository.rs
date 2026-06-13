@@ -5,7 +5,7 @@ use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
 use crate::messages::{IncomingMessage, MessageSource};
 
-use super::entry::{JournalEntry, JournalStats, StoredJournalEntry};
+use super::entry::{JournalEntry, StoredJournalEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalConversation {
@@ -150,32 +150,6 @@ impl JournalRepository {
                 entry: map_entry(row),
             })
             .collect())
-    }
-
-    pub async fn fetch_last_for_conversation(
-        &self,
-        source: &MessageSource,
-        source_conversation_id: &str,
-    ) -> Result<Option<StoredJournalEntry>, sqlx::Error> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, raw_text, received_at
-            FROM journal_entries
-            WHERE source = ?
-              AND source_conversation_id = ?
-            ORDER BY received_at DESC, id DESC
-            LIMIT 1
-            "#,
-        )
-        .bind(source.to_string())
-        .bind(source_conversation_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(row.map(|row| StoredJournalEntry {
-            id: row.get("id"),
-            entry: map_entry(row),
-        }))
     }
 
     pub async fn delete_last_for_conversation(
@@ -503,30 +477,5 @@ impl JournalRepository {
                 (id, map_entry(row))
             })
             .collect())
-    }
-
-    pub async fn stats(&self, today: NaiveDate) -> Result<JournalStats, sqlx::Error> {
-        let start = Utc.from_utc_datetime(&today.and_hms_opt(0, 0, 0).unwrap());
-        let end = start + Duration::days(1);
-
-        let row = sqlx::query(
-            r#"
-            SELECT
-                COUNT(*) AS total_entries,
-                COALESCE(SUM(CASE WHEN received_at >= ? AND received_at < ? THEN 1 ELSE 0 END), 0) AS entries_today,
-                MAX(received_at) AS latest_received_at
-            FROM journal_entries
-            "#,
-        )
-        .bind(start)
-        .bind(end)
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(JournalStats {
-            total_entries: row.get("total_entries"),
-            entries_today: row.get("entries_today"),
-            latest_received_at: row.get("latest_received_at"),
-        })
     }
 }

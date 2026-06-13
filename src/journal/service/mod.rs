@@ -9,10 +9,7 @@ use crate::{
     handler::MessageHandler,
     journal::{
         command::JournalCommandRequest,
-        embedding::{
-            Embedder, EmbedderError, Embedding, EmbeddingIndex, EmbeddingRepositoryError,
-            PendingEmbeddingCounter,
-        },
+        embedding::{Embedder, EmbedderError, Embedding, EmbeddingIndex, EmbeddingRepositoryError},
         extraction::service::JournalEntryExtractionRunner,
         responses::message_saved_response,
         review::{
@@ -20,7 +17,6 @@ use crate::{
             service::DailyReviewRunner,
         },
         search::{SearchService, SemanticSearchService},
-        status::EmbeddingStatusConfig,
         store::JournalEntryStore,
         week_review::service::WeeklyReviewRunner,
     },
@@ -33,7 +29,6 @@ mod commands;
 
 #[derive(Clone)]
 pub struct JournalService {
-    repository: JournalRepository,
     store: JournalEntryStore,
     search: Option<Arc<dyn SearchService>>,
     daily_review_search: Option<Arc<dyn DailyReviewSearchService>>,
@@ -41,17 +36,12 @@ pub struct JournalService {
     entry_extraction: Option<Arc<dyn JournalEntryExtractionRunner>>,
     daily_review: Option<Arc<dyn DailyReviewRunner>>,
     weekly_review: Option<Arc<dyn WeeklyReviewRunner>>,
-    embedding_status_config: Option<EmbeddingStatusConfig>,
-    pending_embedding_counter: Option<Arc<dyn PendingEmbeddingCounter>>,
-    daily_review_prompt_version: Option<String>,
-    daily_review_delivery_configured: bool,
 }
 
 impl JournalService {
     pub fn new(repository: JournalRepository) -> Self {
         let store = JournalEntryStore::new(repository.clone_pool());
         Self {
-            repository,
             store,
             search: None,
             daily_review_search: None,
@@ -59,10 +49,6 @@ impl JournalService {
             entry_extraction: None,
             daily_review: None,
             weekly_review: None,
-            embedding_status_config: None,
-            pending_embedding_counter: None,
-            daily_review_prompt_version: None,
-            daily_review_delivery_configured: false,
         }
     }
 
@@ -84,19 +70,6 @@ impl JournalService {
         E: Embedder + Send + Sync + 'static,
     {
         self.daily_review_search = Some(Arc::new(search));
-        self
-    }
-
-    pub fn with_embedding_status_config(mut self, config: EmbeddingStatusConfig) -> Self {
-        self.embedding_status_config = Some(config);
-        self
-    }
-
-    pub fn with_pending_embedding_counter<C>(mut self, counter: C) -> Self
-    where
-        C: PendingEmbeddingCounter + 'static,
-    {
-        self.pending_embedding_counter = Some(Arc::new(counter));
         self
     }
 
@@ -132,16 +105,6 @@ impl JournalService {
         R: WeeklyReviewRunner + 'static,
     {
         self.weekly_review = Some(Arc::new(weekly_review));
-        self
-    }
-
-    pub fn with_daily_review_prompt_version(mut self, prompt_version: impl Into<String>) -> Self {
-        self.daily_review_prompt_version = Some(prompt_version.into());
-        self
-    }
-
-    pub fn with_daily_review_delivery_configured(mut self) -> Self {
-        self.daily_review_delivery_configured = true;
         self
     }
 

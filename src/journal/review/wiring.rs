@@ -28,21 +28,12 @@ pub fn configure_daily_review(
     prompt_repository: &PromptRepository,
     config: DailyReviewRuntimeConfig,
 ) -> Result<JournalService, Box<dyn std::error::Error>> {
-    let prompt_version = config
-        .prompt
-        .path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
     let Some(daily_review_service) = build_daily_review_service(pool, prompt_repository, config)?
     else {
         return Ok(journal_service);
     };
 
-    Ok(journal_service
-        .with_daily_review_runner(daily_review_service)
-        .with_daily_review_prompt_version(prompt_version))
+    Ok(journal_service.with_daily_review_runner(daily_review_service))
 }
 
 pub fn build_daily_review_service(
@@ -218,52 +209,6 @@ mod tests {
                 "No daily review available for {} yet.",
                 yesterday.format("%Y-%m-%d")
             )
-        );
-
-        fs::remove_file(prompt_path).unwrap();
-    }
-
-    #[tokio::test]
-    async fn prompt_version_derived_from_filename_is_exposed_to_status() {
-        let prompt_path = temp_prompt_path("daily-review-v-test");
-        fs::write(&prompt_path, "Prompt text").unwrap();
-        let expected_version = prompt_path
-            .file_stem()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let pool = setup_pool().await;
-        let prompts = PromptRepository::new(pool.clone());
-
-        let service = configure_daily_review(
-            JournalService::new(JournalRepository::new(pool.clone())),
-            pool,
-            &prompts,
-            DailyReviewRuntimeConfig {
-                openai_api_key: Some("test-api-key".to_string()),
-                review: ReviewConfig::default(),
-                prompt: DailyReviewPromptConfig {
-                    path: prompt_path.clone(),
-                },
-            },
-        )
-        .unwrap();
-
-        let response = service
-            .command(&JournalCommandRequest {
-                source: MessageSource::Telegram,
-                source_conversation_id: "42".to_string(),
-                received_at: Utc::now(),
-                command: JournalCommand::Status,
-            })
-            .await
-            .unwrap();
-
-        assert!(response.text.contains("- Generation: configured"));
-        assert!(
-            response
-                .text
-                .contains(&format!("- Prompt: {expected_version}"))
         );
 
         fs::remove_file(prompt_path).unwrap();
