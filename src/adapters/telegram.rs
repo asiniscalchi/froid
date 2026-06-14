@@ -138,7 +138,9 @@ enum Command {
     Token(String),
     #[command(description = "download your journal as a JSON file")]
     Export,
-    #[command(description = "send an export file with /import as the caption to load it")]
+    #[command(
+        description = "load your journal from an export file (send it as a document with this caption)"
+    )]
     Import,
 }
 
