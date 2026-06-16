@@ -159,7 +159,7 @@ Override the prompt file used by each pipeline stage. The version tag recorded i
 | Variable | Default |
 |---|---|
 | `FROID_ENTRY_EXTRACTION_PROMPT_PATH` | `prompts/entry_extraction_v1.md` |
-| `FROID_REVIEW_PROMPT_PATH` | `prompts/daily_review_with_entry_extractions_v1.md` |
+| `FROID_REVIEW_PROMPT_PATH` | `prompts/daily_review_v3.md` |
 | `FROID_SIGNAL_EXTRACTION_PROMPT_PATH` | `prompts/daily_review_signal_extraction_v1.md` |
 | `FROID_WEEK_REVIEW_PROMPT_PATH` | `prompts/weekly_review_v1.md` |
 

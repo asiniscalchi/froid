@@ -259,21 +259,27 @@ fn build_daily_review_prompt(
     };
 
     format!(
-        r#"Write a daily review using only these journal entries.
+        r#"Write a compact daily review using only these journal entries.
 
-Return this format:
+Return exactly these sections, in this order, and nothing else.
+Do not add a date or any top-level heading; the application adds it.
+Omit the "Carried over" section entirely when nothing carried over is still relevant.
+
 Summary:
 ...
 
-Themes:
+Main signals:
 - ...
 - ...
 
-Pay attention tomorrow:
-- ...{carried_section}
+Tomorrow:
+- ...
+
+Carried over:
+- ...
 
 Journal entries:
-{formatted_entries}"#
+{formatted_entries}{carried_section}"#
     )
 }
 
@@ -573,8 +579,10 @@ mod tests {
         );
 
         assert!(prompt_text.contains("Summary:"));
-        assert!(prompt_text.contains("Themes:"));
-        assert!(prompt_text.contains("Pay attention tomorrow:"));
+        assert!(prompt_text.contains("Main signals:"));
+        assert!(prompt_text.contains("Tomorrow:"));
+        assert!(!prompt_text.contains("Themes:"));
+        assert!(!prompt_text.contains("Pay attention tomorrow:"));
         assert!(prompt_text.contains("finished the feature"));
         assert!(!prompt_text.contains("Carried over from yesterday"));
     }
