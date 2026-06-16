@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::prompts::file::{self, PromptFile, PromptFileError};
 
-pub const DEFAULT_REVIEW_PROMPT_PATH: &str = "prompts/daily_review_with_entry_extractions_v2.md";
+pub const DEFAULT_REVIEW_PROMPT_PATH: &str = "prompts/daily_review_v3.md";
 
 const PROMPT_KIND: &str = "daily review";
 
