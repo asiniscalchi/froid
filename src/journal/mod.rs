@@ -7,6 +7,7 @@ pub mod registry;
 pub mod repository;
 pub(crate) mod responses;
 pub mod review;
+pub mod review_models;
 pub mod search;
 pub mod service;
 pub mod store;
