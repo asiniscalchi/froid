@@ -25,6 +25,7 @@ use crate::{
                 repository::DailyReviewSignalRepository, wiring::build_signal_service,
             },
         },
+        review_models::{ModelCommandHandler, ReviewKind, ReviewModelSettings},
         search::SemanticSearchService,
         service::JournalService,
         week_review::{build_weekly_review_service, configure_weekly_review},
@@ -52,7 +53,29 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     let shutdown = CancellationToken::new();
     let mut workers: JoinSet<&'static str> = JoinSet::new();
 
-    let config = Arc::new(config);
+    // Central stores living in the default database: bearer tokens minted via
+    // the Telegram /token command, and review model overrides set via /model
+    // (loaded once here so overrides survive a restart).
+    let (issued_tokens, review_model_settings) = {
+        let pool = database::connect_pool(&config.database_url).await?;
+        sqlx::migrate!().run(&pool).await?;
+        let tokens = crate::tokens::UserTokenStore::new(pool.clone());
+        let settings = ReviewModelSettings::new(pool);
+        settings
+            .load()
+            .await
+            .map_err(|e| -> Box<dyn Error> { e.into() })?;
+        (tokens, settings)
+    };
+
+    // Give the generators the shared override handles so a change made via
+    // /model applies without a restart.
+    let config = {
+        let mut serve = config;
+        serve.daily_review.model_override = review_model_settings.handle(ReviewKind::Daily);
+        serve.weekly_review.model_override = review_model_settings.handle(ReviewKind::Weekly);
+        Arc::new(serve)
+    };
 
     // Initialize the multiuser journal service registry
     let journal_registry = crate::journal::registry::JournalServiceRegistry::new(
@@ -61,14 +84,6 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
             shutdown: shutdown.clone(),
         },
     );
-
-    // Central store for tokens issued via the Telegram /token command. It
-    // lives in the default database so one lookup resolves any token.
-    let issued_tokens = {
-        let pool = database::connect_pool(&config.database_url).await?;
-        sqlx::migrate!().run(&pool).await?;
-        crate::tokens::UserTokenStore::new(pool)
-    };
 
     // Spawn the global HTTP server (MCP and Dashboard)
     spawn_http_server(
@@ -104,6 +119,11 @@ pub async fn serve(config: ServeConfig) -> Result<(), Box<dyn Error>> {
     .with_token_issuer(crate::tokens::TokenIssuer::new(issued_tokens))
     .with_transfer(crate::journal::transfer::TransferService::new(
         journal_registry,
+    ))
+    .with_model_command(ModelCommandHandler::new(
+        review_model_settings,
+        config.daily_review.review.model.clone(),
+        config.weekly_review.review.model.clone(),
     ));
     supervise(workers, shutdown, shutdown_signal(), adapter.run()).await
 }

@@ -18,6 +18,7 @@ use crate::{
                 wiring::DailyReviewSignalRuntimeConfig,
             },
         },
+        review_models::ModelOverride,
         week_review::{
             WeeklyReviewDeliveryWorkerConfig, WeeklyReviewRuntimeConfig,
             generator::WeeklyReviewConfig, prompt::WeeklyReviewPromptConfig,
@@ -374,6 +375,9 @@ impl Cli {
             openai_api_key: openai_api_key.clone(),
             review: ReviewConfig::from_values(self.review_model.clone()),
             prompt: DailyReviewPromptConfig::from_values(self.review_prompt_path.clone()),
+            // Replaced in `serve()` with the shared handles loaded from the
+            // persisted `/model` overrides.
+            model_override: ModelOverride::default(),
         };
 
         let weekly_review = WeeklyReviewRuntimeConfig {
@@ -383,6 +387,9 @@ impl Cli {
             min_daily_reviews: self
                 .week_review_min_daily_reviews
                 .unwrap_or(DEFAULT_MIN_DAILY_REVIEWS),
+            // Replaced in `serve()` with the shared handles loaded from the
+            // persisted `/model` overrides.
+            model_override: ModelOverride::default(),
         };
 
         let entry_extraction = JournalEntryExtractionRuntimeConfig {

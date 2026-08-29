@@ -6,6 +6,7 @@ use crate::{
         review::{
             repository::DailyReviewRepository, signals::repository::DailyReviewSignalRepository,
         },
+        review_models::ModelOverride,
         service::JournalService,
         week_review::{
             generator::{RigOpenAiWeeklyReviewGenerator, WeeklyReviewConfig},
@@ -23,6 +24,9 @@ pub struct WeeklyReviewRuntimeConfig {
     pub review: WeeklyReviewConfig,
     pub prompt: WeeklyReviewPromptConfig,
     pub min_daily_reviews: usize,
+    /// Shared `/model` override handle; an unset override resolves to
+    /// `review.model`.
+    pub model_override: ModelOverride,
 }
 
 pub fn build_weekly_review_service(
@@ -49,7 +53,8 @@ pub fn build_weekly_review_service(
         weekly_prompt,
         Some(openai_api_key),
     )?
-    .with_prompt_source(prompt_source);
+    .with_prompt_source(prompt_source)
+    .with_model_override(config.model_override);
 
     let service = WeeklyReviewService::new(
         WeeklyReviewRepository::new(pool.clone()),

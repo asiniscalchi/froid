@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 use crate::{
     handler::MessageHandler,
     journal::command::{JournalCommand, JournalCommandRequest},
+    journal::review_models::{ModelAction, ModelCommandHandler, ReviewKind},
     journal::transfer::{TransferError, TransferService},
     messages::{IncomingMessage, MessageSource},
     tokens::TokenIssuer,
@@ -29,6 +30,7 @@ pub struct TelegramAdapter<H: MessageHandler> {
     handler: H,
     token_issuer: Option<TokenIssuer>,
     transfer: Option<TransferService>,
+    model_command: Option<ModelCommandHandler>,
 }
 
 impl<H: MessageHandler> TelegramAdapter<H> {
@@ -39,6 +41,7 @@ impl<H: MessageHandler> TelegramAdapter<H> {
             handler,
             token_issuer: None,
             transfer: None,
+            model_command: None,
         }
     }
 
@@ -54,12 +57,19 @@ impl<H: MessageHandler> TelegramAdapter<H> {
         self
     }
 
+    /// Attach the handler backing the `/model` command (review model settings).
+    pub fn with_model_command(mut self, model_command: ModelCommandHandler) -> Self {
+        self.model_command = Some(model_command);
+        self
+    }
+
     pub async fn run(self) {
         let bot = Bot::new(self.bot_token);
         let allowed_user_ids = self.allowed_user_ids;
         let handler = self.handler;
         let token_issuer = self.token_issuer;
         let transfer = self.transfer;
+        let model_command = self.model_command;
 
         match &allowed_user_ids {
             Some(ids) => {
@@ -98,6 +108,7 @@ impl<H: MessageHandler> TelegramAdapter<H> {
             let allowed_user_ids = allowed_user_ids.clone();
             let token_issuer = token_issuer.clone();
             let transfer = transfer.clone();
+            let model_command = model_command.clone();
             let bot_username = bot_username.clone();
 
             async move {
@@ -108,6 +119,7 @@ impl<H: MessageHandler> TelegramAdapter<H> {
                     handler,
                     token_issuer,
                     transfer,
+                    model_command,
                     &bot_username,
                 )
                 .await
@@ -142,6 +154,8 @@ enum Command {
         description = "load your journal from an export file (send it as a document with this caption)"
     )]
     Import,
+    #[command(description = "show or change daily/weekly review models (/model for usage)")]
+    Model(String),
 }
 
 /// Where a parsed command is handled.
@@ -151,6 +165,7 @@ enum Dispatch {
     Journal(JournalCommand),
     Help,
     Token(TokenAction),
+    Model(ModelAction),
     Export,
     /// `/import` sent as plain text — the file must come as a document.
     ImportUsage,
@@ -181,6 +196,29 @@ fn dispatch_for(command: Command) -> Dispatch {
         }),
         Command::Export => Dispatch::Export,
         Command::Import => Dispatch::ImportUsage,
+        Command::Model(argument) => Dispatch::Model(parse_model_action(&argument)),
+    }
+}
+
+/// Parse the argument of `/model` into an action. Recognized forms:
+/// `/model`, `/model daily|weekly <model>`, `/model daily|weekly default`.
+fn parse_model_action(argument: &str) -> ModelAction {
+    let mut parts = argument.trim().split_whitespace();
+    match parts.next() {
+        None => ModelAction::Show,
+        Some(kind) => match ReviewKind::parse(kind) {
+            Some(kind) => {
+                let rest = parts.collect::<Vec<_>>().join(" ");
+                if rest.is_empty() {
+                    ModelAction::Usage
+                } else if rest == "default" || rest == "reset" {
+                    ModelAction::Reset { kind }
+                } else {
+                    ModelAction::Set { kind, model: rest }
+                }
+            }
+            None => ModelAction::Usage,
+        },
     }
 }
 
@@ -200,6 +238,7 @@ async fn handle_message<H: MessageHandler>(
     handler: H,
     token_issuer: Option<TokenIssuer>,
     transfer: Option<TransferService>,
+    model_command: Option<ModelCommandHandler>,
     bot_username: &str,
 ) -> ResponseResult<()> {
     if !should_handle_message(&message, allowed_user_ids.as_deref()) {
@@ -267,6 +306,10 @@ async fn handle_message<H: MessageHandler>(
                     &message.chat.id.to_string(),
                 )
                 .await;
+                bot.send_message(message.chat.id, reply).await?;
+            }
+            Dispatch::Model(action) => {
+                let reply = handle_model_command(model_command.as_ref(), action).await;
                 bot.send_message(message.chat.id, reply).await?;
             }
             Dispatch::Export => {
@@ -452,6 +495,22 @@ async fn import_reply(transfer: &TransferService, chat_id: &str, payload: &[u8])
             "Something went wrong importing your journal. Please try again.".to_string()
         }
     }
+}
+
+/// Render the reply for a `/model` command invocation.
+async fn handle_model_command(
+    model_command: Option<&ModelCommandHandler>,
+    action: ModelAction,
+) -> String {
+    let Some(model_command) = model_command else {
+        // Defensive: serve() always attaches a handler; this only triggers if
+        // the adapter was built without one.
+        error!("received /model but no model command handler is attached");
+        return "Review model settings are not available right now. Please try again later."
+            .to_string();
+    };
+
+    model_command.handle(action).await
 }
 
 /// Action requested via the `/token` command.
@@ -718,6 +777,97 @@ mod tests {
             cmd("/token nonsense"),
             Some(Dispatch::Token(TokenAction::Usage))
         );
+    }
+
+    #[test]
+    fn parse_model_command_arguments() {
+        assert_eq!(cmd("/model"), Some(Dispatch::Model(ModelAction::Show)));
+        assert_eq!(
+            cmd("/model@mybot"),
+            Some(Dispatch::Model(ModelAction::Show))
+        );
+        assert_eq!(
+            cmd("/model daily gpt-5.1"),
+            Some(Dispatch::Model(ModelAction::Set {
+                kind: ReviewKind::Daily,
+                model: "gpt-5.1".to_string(),
+            }))
+        );
+        assert_eq!(
+            cmd("/model weekly my cheap model"),
+            Some(Dispatch::Model(ModelAction::Set {
+                kind: ReviewKind::Weekly,
+                model: "my cheap model".to_string(),
+            }))
+        );
+        assert_eq!(
+            cmd("/model weekly default"),
+            Some(Dispatch::Model(ModelAction::Reset {
+                kind: ReviewKind::Weekly,
+            }))
+        );
+        assert_eq!(
+            cmd("/model daily reset"),
+            Some(Dispatch::Model(ModelAction::Reset {
+                kind: ReviewKind::Daily,
+            }))
+        );
+        // A review kind without a model is ambiguous — show usage.
+        assert_eq!(
+            cmd("/model daily"),
+            Some(Dispatch::Model(ModelAction::Usage))
+        );
+        // Unknown review kinds are usage, not sets.
+        assert_eq!(
+            cmd("/model monthly gpt-5"),
+            Some(Dispatch::Model(ModelAction::Usage))
+        );
+        assert_eq!(
+            cmd("/model nonsense"),
+            Some(Dispatch::Model(ModelAction::Usage))
+        );
+    }
+
+    #[tokio::test]
+    async fn model_command_without_handler_reports_unavailable() {
+        let reply = handle_model_command(None, ModelAction::Show).await;
+
+        assert!(reply.contains("not available right now"));
+    }
+
+    #[tokio::test]
+    async fn model_command_updates_settings_and_replies() {
+        let settings = crate::journal::review_models::ReviewModelSettings::new(
+            crate::database::test_pool().await,
+        );
+        let handler = ModelCommandHandler::new(settings.clone(), "env-daily", "env-weekly");
+
+        let reply = handle_model_command(
+            Some(&handler),
+            ModelAction::Set {
+                kind: ReviewKind::Daily,
+                model: "gpt-5.1".to_string(),
+            },
+        )
+        .await;
+        assert!(reply.contains("Daily review model set to gpt-5.1"));
+        // The shared handle the generators hold reflects the change.
+        assert_eq!(
+            settings.handle(ReviewKind::Daily).resolve("env-daily"),
+            "gpt-5.1"
+        );
+
+        let reply = handle_model_command(Some(&handler), ModelAction::Show).await;
+        assert!(reply.contains("Daily review model: gpt-5.1 (custom)"));
+
+        let reply = handle_model_command(
+            Some(&handler),
+            ModelAction::Reset {
+                kind: ReviewKind::Daily,
+            },
+        )
+        .await;
+        assert!(reply.contains("reset to the default (env-daily)"));
     }
 
     #[test]

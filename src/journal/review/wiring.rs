@@ -10,6 +10,7 @@ use crate::{
             repository::DailyReviewRepository, service::DailyReviewService,
             signals::repository::DailyReviewSignalRepository,
         },
+        review_models::ModelOverride,
         service::JournalService,
     },
     prompts::{PromptKey, PromptRepository, PromptSource},
@@ -20,6 +21,9 @@ pub struct DailyReviewRuntimeConfig {
     pub openai_api_key: Option<String>,
     pub review: ReviewConfig,
     pub prompt: DailyReviewPromptConfig,
+    /// Shared `/model` override handle; an unset override resolves to
+    /// `review.model`.
+    pub model_override: ModelOverride,
 }
 
 pub fn configure_daily_review(
@@ -60,7 +64,8 @@ pub fn build_daily_review_service(
         review_prompt,
         Some(openai_api_key),
     )?
-    .with_prompt_source(prompt_source);
+    .with_prompt_source(prompt_source)
+    .with_model_override(config.model_override);
     let daily_review_service = DailyReviewService::new(
         DailyReviewRepository::new(pool.clone()),
         JournalRepository::new(pool.clone()),
@@ -106,6 +111,7 @@ mod tests {
                 prompt: DailyReviewPromptConfig {
                     path: PathBuf::from("missing-review-prompt.md"),
                 },
+                model_override: ModelOverride::default(),
             },
         )
         .unwrap();
@@ -140,6 +146,7 @@ mod tests {
                 prompt: DailyReviewPromptConfig {
                     path: PathBuf::from("missing-review-prompt.md"),
                 },
+                model_override: ModelOverride::default(),
             },
         )
         .err()
@@ -166,6 +173,7 @@ mod tests {
                 prompt: DailyReviewPromptConfig {
                     path: PathBuf::from(DEFAULT_REVIEW_PROMPT_PATH),
                 },
+                model_override: ModelOverride::default(),
             },
         )
         .unwrap();
@@ -188,6 +196,7 @@ mod tests {
                 prompt: DailyReviewPromptConfig {
                     path: prompt_path.clone(),
                 },
+                model_override: ModelOverride::default(),
             },
         )
         .unwrap();
