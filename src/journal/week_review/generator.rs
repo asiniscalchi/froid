@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use crate::{
     journal::review::signals::types::DailyReviewSignal,
+    journal::review_models::ModelOverride,
     prompts::{PromptSource, ResolvedPrompt},
 };
 
@@ -57,7 +58,7 @@ impl WeeklyReviewGenerationError {
 
 #[async_trait]
 pub trait WeeklyReviewGenerator: Send + Sync {
-    fn model(&self) -> &str;
+    fn model(&self) -> String;
     fn prompt_version(&self) -> String;
 
     async fn generate_weekly_review(
@@ -123,6 +124,7 @@ impl WeeklyReviewProvider for RigOpenAiWeeklyReviewProvider {
 #[derive(Clone)]
 pub struct RigOpenAiWeeklyReviewGenerator {
     config: WeeklyReviewConfig,
+    model_override: ModelOverride,
     prompt: Arc<RwLock<ResolvedPrompt>>,
     prompt_source: Option<PromptSource>,
     provider: Arc<dyn WeeklyReviewProvider>,
@@ -141,6 +143,7 @@ impl RigOpenAiWeeklyReviewGenerator {
 
         Ok(Self {
             config,
+            model_override: ModelOverride::default(),
             prompt: Arc::new(RwLock::new(ResolvedPrompt {
                 version: prompt.version,
                 text: prompt.text,
@@ -148,6 +151,13 @@ impl RigOpenAiWeeklyReviewGenerator {
             prompt_source: None,
             provider: Arc::new(provider),
         })
+    }
+
+    /// Use the given shared override, if set, instead of the configured
+    /// model. Clones share state with the `/model` command handler.
+    pub fn with_model_override(mut self, model_override: ModelOverride) -> Self {
+        self.model_override = model_override;
+        self
     }
 
     pub fn with_prompt_source(mut self, source: PromptSource) -> Self {
@@ -166,6 +176,7 @@ impl RigOpenAiWeeklyReviewGenerator {
     {
         Self {
             config,
+            model_override: ModelOverride::default(),
             prompt: Arc::new(RwLock::new(ResolvedPrompt {
                 version: prompt.version,
                 text: prompt.text,
@@ -190,8 +201,8 @@ impl RigOpenAiWeeklyReviewGenerator {
 
 #[async_trait]
 impl WeeklyReviewGenerator for RigOpenAiWeeklyReviewGenerator {
-    fn model(&self) -> &str {
-        &self.config.model
+    fn model(&self) -> String {
+        self.model_override.resolve(&self.config.model)
     }
 
     fn prompt_version(&self) -> String {
@@ -206,7 +217,7 @@ impl WeeklyReviewGenerator for RigOpenAiWeeklyReviewGenerator {
         let prompt = build_weekly_review_prompt(input);
         let instructions = self.prompt.read().unwrap().text.clone();
         self.provider
-            .complete_weekly_review(&self.config.model, &instructions, &prompt)
+            .complete_weekly_review(&self.model(), &instructions, &prompt)
             .await
             .map_err(|error| WeeklyReviewGenerationError::new(error.to_string()))
     }
@@ -357,8 +368,8 @@ pub mod fake {
 
     #[async_trait]
     impl WeeklyReviewGenerator for FakeWeeklyReviewGenerator {
-        fn model(&self) -> &str {
-            &self.model
+        fn model(&self) -> String {
+            self.model.clone()
         }
 
         fn prompt_version(&self) -> String {
@@ -514,6 +525,34 @@ mod tests {
         let config = WeeklyReviewConfig::from_values(Some("custom-weekly-model".to_string()));
 
         assert_eq!(config.model, "custom-weekly-model");
+    }
+
+    #[tokio::test]
+    async fn rig_weekly_review_generator_prefers_shared_model_override() {
+        let provider = FakeWeeklyReviewProvider::succeeding("week review");
+        let model_override = crate::journal::review_models::ModelOverride::default();
+        let generator = RigOpenAiWeeklyReviewGenerator::new(
+            WeeklyReviewConfig {
+                model: "custom-model".to_string(),
+            },
+            weekly_prompt("v1", "injected instructions"),
+            provider.clone(),
+        )
+        .with_model_override(model_override.clone());
+
+        assert_eq!(generator.model(), "custom-model");
+
+        model_override.set("overridden-model");
+
+        // Shared state: the change applies without rebuilding the generator.
+        assert_eq!(generator.model(), "overridden-model");
+
+        let input = WeeklyReviewInput {
+            week_start: week_start(),
+            days: vec![slice(day(0), "monday text", vec![])],
+        };
+        generator.generate_weekly_review(&input).await.unwrap();
+        assert_eq!(provider.models(), vec!["overridden-model".to_string()]);
     }
 
     #[test]

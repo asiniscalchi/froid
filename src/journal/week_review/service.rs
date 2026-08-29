@@ -159,7 +159,7 @@ impl WeeklyReviewService {
                 let trimmed = review_text.trim();
                 if trimmed.is_empty() {
                     return self
-                        .store_failed(week_start, model, &prompt_version, EMPTY_REVIEW_ERROR)
+                        .store_failed(week_start, &model, &prompt_version, EMPTY_REVIEW_ERROR)
                         .await;
                 }
 
@@ -174,7 +174,7 @@ impl WeeklyReviewService {
                     .upsert_completed(
                         week_start,
                         trimmed,
-                        model,
+                        &model,
                         &prompt_version,
                         &inputs_snapshot,
                     )
@@ -184,7 +184,7 @@ impl WeeklyReviewService {
             Err(error) => {
                 let prompt_version = self.generator.prompt_version();
                 let message = error.to_string();
-                self.store_failed(week_start, model, &prompt_version, &message)
+                self.store_failed(week_start, &model, &prompt_version, &message)
                     .await
             }
         }

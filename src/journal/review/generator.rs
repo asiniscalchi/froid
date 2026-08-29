@@ -13,6 +13,7 @@ use crate::{
         DailyReviewPrompt, DailyReviewPromptError, JournalEntryWithExtraction,
         signals::types::DailyReviewSignal,
     },
+    journal::review_models::ModelOverride,
     prompts::{PromptSource, ResolvedPrompt},
 };
 
@@ -58,7 +59,7 @@ impl ReviewGenerationError {
 
 #[async_trait]
 pub trait ReviewGenerator: Send + Sync {
-    fn model(&self) -> &str;
+    fn model(&self) -> String;
     fn prompt_version(&self) -> String;
 
     async fn generate_daily_review(
@@ -127,6 +128,7 @@ impl ReviewProvider for RigOpenAiReviewProvider {
 #[derive(Clone)]
 pub struct RigOpenAiReviewGenerator {
     config: ReviewConfig,
+    model_override: ModelOverride,
     prompt: Arc<RwLock<ResolvedPrompt>>,
     prompt_source: Option<PromptSource>,
     provider: Arc<dyn ReviewProvider>,
@@ -145,6 +147,7 @@ impl RigOpenAiReviewGenerator {
 
         Ok(Self {
             config,
+            model_override: ModelOverride::default(),
             prompt: Arc::new(RwLock::new(ResolvedPrompt {
                 version: prompt.version,
                 text: prompt.text,
@@ -152,6 +155,13 @@ impl RigOpenAiReviewGenerator {
             prompt_source: None,
             provider: Arc::new(provider),
         })
+    }
+
+    /// Use the given shared override, if set, instead of the configured
+    /// model. Clones share state with the `/model` command handler.
+    pub fn with_model_override(mut self, model_override: ModelOverride) -> Self {
+        self.model_override = model_override;
+        self
     }
 
     pub fn with_prompt_source(mut self, source: PromptSource) -> Self {
@@ -166,6 +176,7 @@ impl RigOpenAiReviewGenerator {
     {
         Self {
             config,
+            model_override: ModelOverride::default(),
             prompt: Arc::new(RwLock::new(ResolvedPrompt {
                 version: prompt.version,
                 text: prompt.text,
@@ -190,8 +201,8 @@ impl RigOpenAiReviewGenerator {
 
 #[async_trait]
 impl ReviewGenerator for RigOpenAiReviewGenerator {
-    fn model(&self) -> &str {
-        &self.config.model
+    fn model(&self) -> String {
+        self.model_override.resolve(&self.config.model)
     }
 
     fn prompt_version(&self) -> String {
@@ -207,7 +218,7 @@ impl ReviewGenerator for RigOpenAiReviewGenerator {
         let prompt = build_daily_review_prompt(entries, carried_attention);
         let instructions = self.prompt.read().unwrap().text.clone();
         self.provider
-            .complete_daily_review(&self.config.model, &instructions, &prompt)
+            .complete_daily_review(&self.model(), &instructions, &prompt)
             .await
             .map_err(|error| ReviewGenerationError::new(error.to_string()))
     }
@@ -343,8 +354,8 @@ pub mod fake {
 
     #[async_trait]
     impl ReviewGenerator for FakeReviewGenerator {
-        fn model(&self) -> &str {
-            &self.model
+        fn model(&self) -> String {
+            self.model.clone()
         }
 
         fn prompt_version(&self) -> String {
@@ -466,6 +477,40 @@ mod tests {
         let config = ReviewConfig::from_values(Some("custom-model".to_string()));
 
         assert_eq!(config.model, "custom-model");
+    }
+
+    #[tokio::test]
+    async fn rig_review_generator_prefers_shared_model_override() {
+        let provider = FakeReviewProvider::succeeding("review text");
+        let model_override = crate::journal::review_models::ModelOverride::default();
+        let generator = RigOpenAiReviewGenerator::new(
+            ReviewConfig {
+                model: "custom-model".to_string(),
+            },
+            prompt("v1", "injected instructions"),
+            provider.clone(),
+        )
+        .with_model_override(model_override.clone());
+
+        assert_eq!(generator.model(), "custom-model");
+
+        model_override.set("overridden-model");
+
+        // Shared state: the change applies without rebuilding the generator.
+        assert_eq!(generator.model(), "overridden-model");
+
+        generator
+            .generate_daily_review(
+                &[JournalEntryWithExtraction {
+                    id: "1".to_string(),
+                    entry: entry(28, "wrote a test"),
+                    extraction: None,
+                }],
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(provider.models(), vec!["overridden-model".to_string()]);
     }
 
     #[test]

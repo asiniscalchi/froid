@@ -114,20 +114,20 @@ impl DailyReviewService {
                 let review_text = review_text.trim();
                 if review_text.is_empty() {
                     return self
-                        .store_failed_review(utc_date, model, &prompt_version, EMPTY_REVIEW_ERROR)
+                        .store_failed_review(utc_date, &model, &prompt_version, EMPTY_REVIEW_ERROR)
                         .await;
                 }
 
                 let review = self
                     .daily_reviews
-                    .upsert_completed(utc_date, review_text, model, &prompt_version)
+                    .upsert_completed(utc_date, review_text, &model, &prompt_version)
                     .await?;
                 Ok(DailyReviewResult::Generated(review))
             }
             Err(error) => {
                 let prompt_version = self.generator.prompt_version();
                 let error_message = error.to_string();
-                self.store_failed_review(utc_date, model, &prompt_version, &error_message)
+                self.store_failed_review(utc_date, &model, &prompt_version, &error_message)
                     .await
             }
         }
@@ -656,8 +656,8 @@ mod tests {
 
     #[async_trait]
     impl ReviewGenerator for PoolClosingGenerator {
-        fn model(&self) -> &str {
-            "pool-closing-model"
+        fn model(&self) -> String {
+            "pool-closing-model".to_string()
         }
 
         fn prompt_version(&self) -> String {
