@@ -143,6 +143,8 @@ All workers are disabled by default and require `OPENAI_API_KEY`.
 
 Override the OpenAI model used by each pipeline stage. Accepts any model name recognised by the OpenAI API.
 
+At runtime, the daily and weekly review models can be changed from Telegram with the `/model` command, without restarting the bot: `/model` shows the current models, `/model daily <model>` and `/model weekly <model>` override the env-configured default, and `/model daily default` (or `weekly default`) resets back to it. Overrides are stored in the default database and survive restarts.
+
 | Variable | Default | Description |
 |---|---|---|
 | `FROID_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model for journal entries and daily reviews |

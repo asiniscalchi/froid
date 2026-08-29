@@ -203,7 +203,7 @@ fn dispatch_for(command: Command) -> Dispatch {
 /// Parse the argument of `/model` into an action. Recognized forms:
 /// `/model`, `/model daily|weekly <model>`, `/model daily|weekly default`.
 fn parse_model_action(argument: &str) -> ModelAction {
-    let mut parts = argument.trim().split_whitespace();
+    let mut parts = argument.split_whitespace();
     match parts.next() {
         None => ModelAction::Show,
         Some(kind) => match ReviewKind::parse(kind) {
@@ -231,6 +231,7 @@ fn unknown_command_reply(text: &str) -> String {
     format!("Unknown command: {command}\n\n{}", help_text())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_message<H: MessageHandler>(
     bot: Bot,
     message: Message,
