@@ -7,10 +7,10 @@ use crate::{
         responses::{
             daily_review_not_available_for_date_response, daily_review_unavailable_response,
             deleted_last_entry_response, format_daily_review_for_date,
-            format_weekly_review_for_week, no_entry_to_delete_response,
-            reviews_disabled_response, reviews_enabled_response, reviews_status_response,
-            reviews_usage_response, search_usage_response, start_response,
-            weekly_review_not_available_response, weekly_review_unavailable_response,
+            format_weekly_review_for_week, no_entry_to_delete_response, reviews_disabled_response,
+            reviews_enabled_response, reviews_status_response, reviews_usage_response,
+            search_usage_response, start_response, weekly_review_not_available_response,
+            weekly_review_unavailable_response,
         },
         review::DailyReview,
         search::{
