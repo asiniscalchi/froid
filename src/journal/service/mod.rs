@@ -16,6 +16,7 @@ use crate::{
             search::{DailyReviewSearchService, SemanticDailyReviewSearchService},
             service::DailyReviewRunner,
         },
+        review_preferences::ReviewPreferenceRepository,
         search::{SearchService, SemanticSearchService},
         store::JournalEntryStore,
         week_review::service::WeeklyReviewRunner,
@@ -30,6 +31,7 @@ mod commands;
 #[derive(Clone)]
 pub struct JournalService {
     store: JournalEntryStore,
+    review_preferences: ReviewPreferenceRepository,
     search: Option<Arc<dyn SearchService>>,
     daily_review_search: Option<Arc<dyn DailyReviewSearchService>>,
     capture_embedding: Option<Arc<dyn CaptureEmbeddingService>>,
@@ -41,8 +43,10 @@ pub struct JournalService {
 impl JournalService {
     pub fn new(repository: JournalRepository) -> Self {
         let store = JournalEntryStore::new(repository.clone_pool());
+        let review_preferences = ReviewPreferenceRepository::new(repository.clone_pool());
         Self {
             store,
+            review_preferences,
             search: None,
             daily_review_search: None,
             capture_embedding: None,

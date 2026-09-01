@@ -64,6 +64,29 @@ pub(super) fn weekly_review_not_available_response(week_start: NaiveDate) -> Str
     )
 }
 
+pub(super) fn reviews_status_response(enabled: bool) -> String {
+    if enabled {
+        "Daily and weekly review delivery is ON. Use /reviews off to turn it off.".to_string()
+    } else {
+        "Daily and weekly review delivery is OFF. Use /reviews on to turn it back on.".to_string()
+    }
+}
+
+pub(super) fn reviews_enabled_response() -> String {
+    "Daily and weekly review delivery is now ON.".to_string()
+}
+
+pub(super) fn reviews_disabled_response() -> String {
+    "Daily and weekly review delivery is now OFF. You can still request them on demand \
+     with /day_review and /week_review."
+        .to_string()
+}
+
+pub(super) fn reviews_usage_response() -> String {
+    "Usage: /reviews to show your current setting, /reviews on or /reviews off to change it."
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};

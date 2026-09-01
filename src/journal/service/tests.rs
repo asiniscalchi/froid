@@ -937,6 +937,68 @@ async fn week_review_returns_not_available_when_no_review_exists() {
 }
 
 #[tokio::test]
+async fn reviews_status_defaults_to_on_for_a_new_user() {
+    let service = setup().await;
+
+    let outgoing = service
+        .command(&command(JournalCommand::ReviewsStatus))
+        .await
+        .unwrap();
+
+    assert!(outgoing.text.contains("ON"));
+}
+
+#[tokio::test]
+async fn reviews_set_off_then_status_reports_off() {
+    let service = setup().await;
+
+    let set = service
+        .command(&command(JournalCommand::ReviewsSet(false)))
+        .await
+        .unwrap();
+    let status = service
+        .command(&command(JournalCommand::ReviewsStatus))
+        .await
+        .unwrap();
+
+    assert!(set.text.contains("OFF"));
+    assert!(status.text.contains("OFF"));
+}
+
+#[tokio::test]
+async fn reviews_set_on_after_off_reports_on_again() {
+    let service = setup().await;
+    service
+        .command(&command(JournalCommand::ReviewsSet(false)))
+        .await
+        .unwrap();
+
+    let set = service
+        .command(&command(JournalCommand::ReviewsSet(true)))
+        .await
+        .unwrap();
+    let status = service
+        .command(&command(JournalCommand::ReviewsStatus))
+        .await
+        .unwrap();
+
+    assert!(set.text.contains("ON"));
+    assert!(status.text.contains("ON"));
+}
+
+#[tokio::test]
+async fn reviews_usage_returns_usage_message() {
+    let service = setup().await;
+
+    let outgoing = service
+        .command(&command(JournalCommand::ReviewsUsage))
+        .await
+        .unwrap();
+
+    assert!(outgoing.text.contains("Usage: /reviews"));
+}
+
+#[tokio::test]
 async fn week_review_returns_not_available_on_fetch_error() {
     let runner = FakeWeeklyReviewRunner::with_fetch_result(Err(WeeklyReviewServiceError::Storage(
         "database unavailable".to_string(),

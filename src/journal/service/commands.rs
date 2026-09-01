@@ -7,9 +7,10 @@ use crate::{
         responses::{
             daily_review_not_available_for_date_response, daily_review_unavailable_response,
             deleted_last_entry_response, format_daily_review_for_date,
-            format_weekly_review_for_week, no_entry_to_delete_response, search_usage_response,
-            start_response, weekly_review_not_available_response,
-            weekly_review_unavailable_response,
+            format_weekly_review_for_week, no_entry_to_delete_response,
+            reviews_disabled_response, reviews_enabled_response, reviews_status_response,
+            reviews_usage_response, search_usage_response, start_response,
+            weekly_review_not_available_response, weekly_review_unavailable_response,
         },
         review::DailyReview,
         search::{
@@ -50,7 +51,30 @@ impl JournalService {
             JournalCommand::SearchUsage => Ok(OutgoingMessage {
                 text: search_usage_response(),
             }),
+            JournalCommand::ReviewsStatus => self.reviews_status().await,
+            JournalCommand::ReviewsSet(enabled) => self.reviews_set(*enabled).await,
+            JournalCommand::ReviewsUsage => Ok(OutgoingMessage {
+                text: reviews_usage_response(),
+            }),
         }
+    }
+
+    async fn reviews_status(&self) -> Result<OutgoingMessage, sqlx::Error> {
+        let enabled = self.review_preferences.is_enabled().await?;
+        Ok(OutgoingMessage {
+            text: reviews_status_response(enabled),
+        })
+    }
+
+    async fn reviews_set(&self, enabled: bool) -> Result<OutgoingMessage, sqlx::Error> {
+        self.review_preferences.set_enabled(enabled).await?;
+        Ok(OutgoingMessage {
+            text: if enabled {
+                reviews_enabled_response()
+            } else {
+                reviews_disabled_response()
+            },
+        })
     }
 
     async fn day_review_last(&self, today: chrono::NaiveDate) -> OutgoingMessage {
