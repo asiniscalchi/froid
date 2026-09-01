@@ -16,6 +16,7 @@ use crate::{
     journal::{
         repository::{JournalConversation, JournalRepository},
         responses::format_weekly_review_for_week,
+        review_preferences::ReviewPreferenceRepository,
         week_review::{
             WeeklyReview, WeeklyReviewDeliveryWorkerConfig,
             repository::{WeeklyReviewRepository, WeeklyReviewRepositoryError},
@@ -34,6 +35,7 @@ from_error_string!(ReviewDeliveryError::Storage, WeeklyReviewRepositoryError);
 pub struct WeeklyReviewDelivery<R> {
     journal_entries: JournalRepository,
     weekly_reviews: WeeklyReviewRepository,
+    review_preferences: ReviewPreferenceRepository,
     review_runner: R,
     config: WeeklyReviewDeliveryWorkerConfig,
 }
@@ -48,6 +50,7 @@ where
     pub fn new(
         journal_entries: JournalRepository,
         weekly_reviews: WeeklyReviewRepository,
+        review_preferences: ReviewPreferenceRepository,
         review_runner: R,
         sender: S,
         config: WeeklyReviewDeliveryWorkerConfig,
@@ -56,6 +59,7 @@ where
             WeeklyReviewDelivery {
                 journal_entries,
                 weekly_reviews,
+                review_preferences,
                 review_runner,
                 config,
             },
@@ -108,6 +112,10 @@ where
         &self,
         period: NaiveDate,
     ) -> Result<Vec<JournalConversation>, ReviewDeliveryError> {
+        if !self.review_preferences.is_enabled().await? {
+            return Ok(Vec::new());
+        }
+
         let week_end = period + Duration::days(DAYS_PER_WEEK);
         Ok(self
             .journal_entries
@@ -200,6 +208,7 @@ mod tests {
             review::{
                 repository::DailyReviewRepository, signals::repository::DailyReviewSignalRepository,
             },
+            review_preferences::ReviewPreferenceRepository,
             week_review::{
                 WeeklyReviewDeliveryWorkerConfig, generator::fake::FakeWeeklyReviewGenerator,
                 repository::WeeklyReviewRepository, service::WeeklyReviewService,
@@ -226,6 +235,7 @@ mod tests {
         WeeklyReviewRepository,
         DailyReviewRepository,
         JournalRepository,
+        ReviewPreferenceRepository,
         FakeSender,
     ) {
         let pool = crate::database::test_pool().await;
@@ -233,6 +243,7 @@ mod tests {
         let journal_entries = JournalRepository::new(pool.clone());
         let weekly_reviews = WeeklyReviewRepository::new(pool.clone());
         let daily_reviews = DailyReviewRepository::new(pool.clone());
+        let review_preferences = ReviewPreferenceRepository::new(pool.clone());
         let signals = DailyReviewSignalRepository::new(pool.clone());
 
         let service = WeeklyReviewService::new(
@@ -246,6 +257,7 @@ mod tests {
         let worker = WeeklyReviewDeliveryWorker::new(
             journal_entries.clone(),
             weekly_reviews.clone(),
+            review_preferences.clone(),
             service,
             sender.clone(),
             config(),
@@ -256,6 +268,7 @@ mod tests {
             weekly_reviews,
             daily_reviews,
             journal_entries,
+            review_preferences,
             sender,
         )
     }
@@ -315,7 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_once_no_ops_on_non_kickoff_weekday() {
-        let (worker, _weekly, daily, journal, sender) = setup(
+        let (worker, _weekly, daily, journal, _review_preferences, sender) = setup(
             FakeWeeklyReviewGenerator::succeeding("week review"),
             FakeSender::succeeding(),
         )
@@ -343,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_generates_sends_and_marks_last_weeks_review_delivered() {
         let sender = FakeSender::succeeding();
-        let (worker, weekly_reviews, daily, journal, sender) = setup(
+        let (worker, weekly_reviews, daily, journal, _review_preferences, sender) = setup(
             FakeWeeklyReviewGenerator::succeeding("generated week review"),
             sender,
         )
@@ -381,9 +394,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_once_skips_delivery_when_user_opted_out_of_reviews() {
+        let sender = FakeSender::succeeding();
+        let (worker, weekly_reviews, daily, journal, review_preferences, sender) = setup(
+            FakeWeeklyReviewGenerator::succeeding("generated week review"),
+            sender,
+        )
+        .await;
+        seed_three_daily_reviews(&daily).await;
+        journal.store(&entry("42", "1", 0)).await.unwrap();
+        review_preferences.set_enabled(false).await.unwrap();
+
+        // Monday after the target week.
+        let monday = Utc.with_ymd_and_hms(2026, 5, 4, 6, 0, 0).unwrap();
+
+        let result = worker.run_once(monday).await.unwrap();
+
+        assert_eq!(
+            result,
+            ReviewDeliveryResult {
+                attempted: 0,
+                delivered: 0,
+                skipped: 0,
+                failed: 0,
+            }
+        );
+        assert!(sender.sent().is_empty());
+        assert!(
+            weekly_reviews
+                .find_by_user_and_week(week_start())
+                .await
+                .unwrap()
+                .is_none(),
+            "opted-out user must not trigger review generation either"
+        );
+    }
+
+    #[tokio::test]
     async fn run_once_skips_when_sparse_week() {
         let sender = FakeSender::succeeding();
-        let (worker, _weekly, daily, journal, sender) =
+        let (worker, _weekly, daily, journal, _review_preferences, sender) =
             setup(FakeWeeklyReviewGenerator::succeeding("ignored"), sender).await;
         // Only two daily reviews — below the threshold of three.
         for offset in 0..2 {
@@ -412,7 +462,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_records_delivery_failure_for_retry() {
         let sender = FakeSender::failing("telegram unavailable");
-        let (worker, weekly_reviews, daily, journal, sender) =
+        let (worker, weekly_reviews, daily, journal, _review_preferences, sender) =
             setup(FakeWeeklyReviewGenerator::succeeding("week review"), sender).await;
         seed_three_daily_reviews(&daily).await;
         journal.store(&entry("42", "1", 0)).await.unwrap();
@@ -445,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_does_not_mark_skipped_delivery_as_delivered() {
         let sender = FakeSender::skipped();
-        let (worker, weekly_reviews, daily, journal, sender) =
+        let (worker, weekly_reviews, daily, journal, _review_preferences, sender) =
             setup(FakeWeeklyReviewGenerator::succeeding("week review"), sender).await;
         seed_three_daily_reviews(&daily).await;
         journal.store(&entry("42", "1", 0)).await.unwrap();
@@ -475,7 +525,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_skips_already_delivered_review() {
         let sender = FakeSender::succeeding();
-        let (worker, weekly_reviews, daily, journal, sender) =
+        let (worker, weekly_reviews, daily, journal, _review_preferences, sender) =
             setup(FakeWeeklyReviewGenerator::succeeding("ignored"), sender).await;
         seed_three_daily_reviews(&daily).await;
         journal.store(&entry("42", "1", 0)).await.unwrap();
@@ -501,7 +551,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_once_returns_empty_result_when_no_entries_in_week() {
-        let (worker, _, _, _, _) = setup(
+        let (worker, _, _, _, _, _) = setup(
             FakeWeeklyReviewGenerator::succeeding("irrelevant"),
             FakeSender::succeeding(),
         )
@@ -523,7 +573,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_counts_as_failed_when_generation_fails() {
         let sender = FakeSender::succeeding();
-        let (worker, _weekly, daily, journal, sender) = setup(
+        let (worker, _weekly, daily, journal, _review_preferences, sender) = setup(
             FakeWeeklyReviewGenerator::failing("generator error"),
             sender,
         )

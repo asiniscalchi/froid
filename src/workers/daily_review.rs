@@ -21,6 +21,7 @@ use crate::{
             repository::{DailyReviewRepository, DailyReviewRepositoryError},
             service::DailyReviewRunner,
         },
+        review_preferences::ReviewPreferenceRepository,
     },
     messages::MessageSource,
 };
@@ -31,6 +32,7 @@ from_error_string!(ReviewDeliveryError::Storage, DailyReviewRepositoryError);
 pub struct DailyReviewDelivery<R> {
     journal_entries: JournalRepository,
     daily_reviews: DailyReviewRepository,
+    review_preferences: ReviewPreferenceRepository,
     review_runner: R,
     config: DailyReviewDeliveryWorkerConfig,
 }
@@ -45,6 +47,7 @@ where
     pub fn new(
         journal_entries: JournalRepository,
         daily_reviews: DailyReviewRepository,
+        review_preferences: ReviewPreferenceRepository,
         review_runner: R,
         sender: S,
         config: DailyReviewDeliveryWorkerConfig,
@@ -53,6 +56,7 @@ where
             DailyReviewDelivery {
                 journal_entries,
                 daily_reviews,
+                review_preferences,
                 review_runner,
                 config,
             },
@@ -103,6 +107,10 @@ where
         &self,
         period: NaiveDate,
     ) -> Result<Vec<JournalConversation>, ReviewDeliveryError> {
+        if !self.review_preferences.is_enabled().await? {
+            return Ok(Vec::new());
+        }
+
         Ok(self
             .journal_entries
             .conversations_with_entries_for_date(&MessageSource::Telegram, period)
@@ -195,12 +203,14 @@ mod tests {
         DailyReviewDeliveryWorker<DailyReviewService, FakeSender>,
         DailyReviewRepository,
         JournalRepository,
+        ReviewPreferenceRepository,
         FakeSender,
     ) {
         let pool = crate::database::test_pool().await;
 
         let journal_entries = JournalRepository::new(pool.clone());
         let daily_reviews = DailyReviewRepository::new(pool.clone());
+        let review_preferences = ReviewPreferenceRepository::new(pool.clone());
         let extractions = JournalEntryExtractionRepository::new(pool.clone());
         let service = DailyReviewService::new(
             daily_reviews.clone(),
@@ -214,6 +224,7 @@ mod tests {
         let worker = DailyReviewDeliveryWorker::new(
             journal_entries.clone(),
             daily_reviews.clone(),
+            review_preferences.clone(),
             service,
             sender.clone(),
             DailyReviewDeliveryWorkerConfig {
@@ -222,7 +233,13 @@ mod tests {
             },
         );
 
-        (worker, daily_reviews, journal_entries, sender)
+        (
+            worker,
+            daily_reviews,
+            journal_entries,
+            review_preferences,
+            sender,
+        )
     }
 
     #[derive(Clone)]
@@ -266,10 +283,12 @@ mod tests {
 
         let journal_entries = JournalRepository::new(pool.clone());
         let daily_reviews = DailyReviewRepository::new(pool.clone());
+        let review_preferences = ReviewPreferenceRepository::new(pool.clone());
         let runner = FakeRunner::returning(runner_result);
         let worker = DailyReviewDeliveryWorker::new(
             journal_entries.clone(),
             daily_reviews.clone(),
+            review_preferences,
             runner,
             sender.clone(),
             DailyReviewDeliveryWorkerConfig {
@@ -302,7 +321,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_generates_sends_and_marks_yesterdays_review_delivered() {
         let sender = FakeSender::succeeding();
-        let (worker, daily_reviews, journal_entries, sender) =
+        let (worker, daily_reviews, journal_entries, _review_preferences, sender) =
             setup(FakeReviewGenerator::succeeding("generated review"), sender).await;
         journal_entries
             .store(&at_date("1", "first entry"))
@@ -339,9 +358,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_once_skips_delivery_when_user_opted_out_of_reviews() {
+        let sender = FakeSender::succeeding();
+        let (worker, daily_reviews, journal_entries, review_preferences, sender) =
+            setup(FakeReviewGenerator::succeeding("generated review"), sender).await;
+        journal_entries
+            .store(&at_date("1", "first entry"))
+            .await
+            .unwrap();
+        review_preferences.set_enabled(false).await.unwrap();
+
+        let result = worker
+            .run_once(Utc.with_ymd_and_hms(2026, 4, 29, 0, 5, 0).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            ReviewDeliveryResult {
+                attempted: 0,
+                delivered: 0,
+                skipped: 0,
+                failed: 0,
+            }
+        );
+        assert!(sender.sent().is_empty());
+        assert!(
+            daily_reviews
+                .find_by_user_and_date(date())
+                .await
+                .unwrap()
+                .is_none(),
+            "opted-out user must not trigger review generation either"
+        );
+    }
+
+    #[tokio::test]
     async fn run_once_skips_already_delivered_review() {
         let sender = FakeSender::succeeding();
-        let (worker, daily_reviews, journal_entries, sender) =
+        let (worker, daily_reviews, journal_entries, _review_preferences, sender) =
             setup(FakeReviewGenerator::succeeding("generated review"), sender).await;
         journal_entries
             .store(&at_date("1", "first entry"))
@@ -370,7 +425,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_records_delivery_failure_for_retry() {
         let sender = FakeSender::failing("telegram unavailable");
-        let (worker, daily_reviews, journal_entries, sender) =
+        let (worker, daily_reviews, journal_entries, _review_preferences, sender) =
             setup(FakeReviewGenerator::succeeding("generated review"), sender).await;
         journal_entries
             .store(&at_date("1", "first entry"))
@@ -405,7 +460,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_does_not_mark_skipped_delivery_as_delivered() {
         let sender = FakeSender::skipped();
-        let (worker, daily_reviews, journal_entries, sender) =
+        let (worker, daily_reviews, journal_entries, _review_preferences, sender) =
             setup(FakeReviewGenerator::succeeding("generated review"), sender).await;
         journal_entries
             .store(&at_date("1", "first entry"))
@@ -436,7 +491,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_once_returns_empty_result_when_no_entries() {
-        let (worker, _, _, _) = setup(
+        let (worker, _, _, _, _) = setup(
             FakeReviewGenerator::succeeding("irrelevant"),
             FakeSender::succeeding(),
         )
@@ -482,7 +537,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_counts_as_failed_when_generation_fails() {
         let sender = FakeSender::succeeding();
-        let (worker, _, journal_entries, sender) =
+        let (worker, _, journal_entries, _review_preferences, sender) =
             setup(FakeReviewGenerator::failing("generator error"), sender).await;
         journal_entries
             .store(&at_date("1", "an entry"))
@@ -543,7 +598,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_delivers_single_review_once_for_multiple_conversations() {
         let sender = FakeSender::succeeding();
-        let (worker, daily_reviews, journal_entries, sender) =
+        let (worker, daily_reviews, journal_entries, _review_preferences, sender) =
             setup(FakeReviewGenerator::succeeding("review text"), sender).await;
         journal_entries
             .store(&entry_for("42", "1", "first"))
@@ -587,6 +642,7 @@ mod tests {
         let worker = DailyReviewDeliveryWorker::new(
             JournalRepository::new(pool.clone()),
             DailyReviewRepository::new(pool.clone()),
+            ReviewPreferenceRepository::new(pool.clone()),
             FakeRunner::returning(Ok(DailyReviewResult::EmptyDay)),
             FakeSender::succeeding(),
             DailyReviewDeliveryWorkerConfig {
