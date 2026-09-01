@@ -18,4 +18,7 @@ pub enum JournalCommand {
     WeekReviewLast,
     Search { query: String },
     SearchUsage,
+    ReviewsStatus,
+    ReviewsSet(bool),
+    ReviewsUsage,
 }

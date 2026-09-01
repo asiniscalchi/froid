@@ -453,7 +453,8 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
                 .flatten()?;
                 Some(DailyReviewDeliveryWorker::new(
                     JournalRepository::new(pool.clone()),
-                    crate::journal::review::repository::DailyReviewRepository::new(pool),
+                    crate::journal::review::repository::DailyReviewRepository::new(pool.clone()),
+                    crate::journal::review_preferences::ReviewPreferenceRepository::new(pool),
                     daily_review_service,
                     TelegramReviewSender::new(
                         serve_config.telegram_bot_token.clone(),
@@ -489,7 +490,10 @@ pub fn spawn_global_workers(workers: &mut JoinSet<&'static str>, config: GlobalW
                 .flatten()?;
                 Some(WeeklyReviewDeliveryWorker::new(
                     JournalRepository::new(pool.clone()),
-                    crate::journal::week_review::repository::WeeklyReviewRepository::new(pool),
+                    crate::journal::week_review::repository::WeeklyReviewRepository::new(
+                        pool.clone(),
+                    ),
+                    crate::journal::review_preferences::ReviewPreferenceRepository::new(pool),
                     weekly_review_service,
                     TelegramReviewSender::new(
                         serve_config.telegram_bot_token.clone(),

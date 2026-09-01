@@ -132,6 +132,8 @@ enum Command {
     DayReview,
     #[command(description = "show last week's review")]
     WeekReview,
+    #[command(description = "show or set daily/weekly review delivery (/reviews on|off)")]
+    Reviews(String),
     #[command(description = "search entries by meaning")]
     Search(String),
     #[command(description = "create or rotate your MCP access token (/token revoke to disable)")]
@@ -163,6 +165,14 @@ fn dispatch_for(command: Command) -> Dispatch {
         Command::Undo => Dispatch::Journal(JournalCommand::Undo),
         Command::DayReview => Dispatch::Journal(JournalCommand::DayReviewLast),
         Command::WeekReview => Dispatch::Journal(JournalCommand::WeekReviewLast),
+        Command::Reviews(argument) => {
+            Dispatch::Journal(match argument.trim().to_lowercase().as_str() {
+                "" => JournalCommand::ReviewsStatus,
+                "on" => JournalCommand::ReviewsSet(true),
+                "off" => JournalCommand::ReviewsSet(false),
+                _ => JournalCommand::ReviewsUsage,
+            })
+        }
         Command::Search(query) => {
             let query = query.trim();
             let command = if query.is_empty() {
@@ -678,6 +688,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_reviews_commands() {
+        assert_eq!(journal("/reviews"), Some(JournalCommand::ReviewsStatus));
+        assert_eq!(
+            journal("/reviews on"),
+            Some(JournalCommand::ReviewsSet(true))
+        );
+        assert_eq!(
+            journal("/reviews off"),
+            Some(JournalCommand::ReviewsSet(false))
+        );
+        assert_eq!(
+            journal("/reviews ON"),
+            Some(JournalCommand::ReviewsSet(true))
+        );
+        assert_eq!(
+            journal("/reviews nonsense"),
+            Some(JournalCommand::ReviewsUsage)
+        );
+    }
+
+    #[test]
     fn parse_strips_bot_name_suffix() {
         assert_eq!(journal("/undo@mybot"), Some(JournalCommand::Undo));
         assert_eq!(
@@ -689,6 +720,10 @@ mod tests {
             Some(JournalCommand::Search {
                 query: "something".to_string()
             })
+        );
+        assert_eq!(
+            journal("/reviews@mybot off"),
+            Some(JournalCommand::ReviewsSet(false))
         );
     }
 
@@ -749,6 +784,7 @@ mod tests {
         assert!(help.contains("/search"));
         assert!(help.contains("/token"));
         assert!(help.contains("/export"));
+        assert!(help.contains("/reviews"));
     }
 
     #[test]
