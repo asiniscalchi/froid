@@ -20,5 +20,7 @@ pub enum JournalCommand {
     SearchUsage,
     ReviewsStatus,
     ReviewsSet(bool),
+    ReviewsSetDaily(bool),
+    ReviewsSetWeekly(bool),
     ReviewsUsage,
 }
