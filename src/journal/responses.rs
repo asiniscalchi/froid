@@ -64,12 +64,14 @@ pub(super) fn weekly_review_not_available_response(week_start: NaiveDate) -> Str
     )
 }
 
-pub(super) fn reviews_status_response(enabled: bool) -> String {
-    if enabled {
-        "Daily and weekly review delivery is ON. Use /reviews off to turn it off.".to_string()
-    } else {
-        "Daily and weekly review delivery is OFF. Use /reviews on to turn it back on.".to_string()
-    }
+pub(super) fn reviews_status_response(daily_enabled: bool, weekly_enabled: bool) -> String {
+    format!(
+        "Daily review delivery is {}.\nWeekly review delivery is {}.\n\n\
+         Change them individually with /reviews daily on|off and /reviews weekly on|off, \
+         or both at once with /reviews on|off.",
+        if daily_enabled { "ON" } else { "OFF" },
+        if weekly_enabled { "ON" } else { "OFF" }
+    )
 }
 
 pub(super) fn reviews_enabled_response() -> String {
@@ -82,8 +84,28 @@ pub(super) fn reviews_disabled_response() -> String {
         .to_string()
 }
 
+pub(super) fn reviews_daily_enabled_response() -> String {
+    "Daily review delivery is now ON.".to_string()
+}
+
+pub(super) fn reviews_daily_disabled_response() -> String {
+    "Daily review delivery is now OFF. You can still request it on demand with /day_review."
+        .to_string()
+}
+
+pub(super) fn reviews_weekly_enabled_response() -> String {
+    "Weekly review delivery is now ON.".to_string()
+}
+
+pub(super) fn reviews_weekly_disabled_response() -> String {
+    "Weekly review delivery is now OFF. You can still request it on demand with /week_review."
+        .to_string()
+}
+
 pub(super) fn reviews_usage_response() -> String {
-    "Usage: /reviews to show your current setting, /reviews on or /reviews off to change it."
+    "Usage: /reviews to show your current settings, /reviews on or /reviews off to change \
+     both at once, or /reviews daily on|off and /reviews weekly on|off to change them \
+     individually."
         .to_string()
 }
 

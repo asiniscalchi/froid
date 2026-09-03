@@ -107,7 +107,7 @@ where
         &self,
         period: NaiveDate,
     ) -> Result<Vec<JournalConversation>, ReviewDeliveryError> {
-        if !self.review_preferences.is_enabled().await? {
+        if !self.review_preferences.is_daily_enabled().await? {
             return Ok(Vec::new());
         }
 
@@ -366,7 +366,7 @@ mod tests {
             .store(&at_date("1", "first entry"))
             .await
             .unwrap();
-        review_preferences.set_enabled(false).await.unwrap();
+        review_preferences.set_daily_enabled(false).await.unwrap();
 
         let result = worker
             .run_once(Utc.with_ymd_and_hms(2026, 4, 29, 0, 5, 0).unwrap())
@@ -391,6 +391,34 @@ mod tests {
                 .is_none(),
             "opted-out user must not trigger review generation either"
         );
+    }
+
+    #[tokio::test]
+    async fn run_once_still_delivers_when_only_the_weekly_review_is_off() {
+        let sender = FakeSender::succeeding();
+        let (worker, _daily_reviews, journal_entries, review_preferences, sender) =
+            setup(FakeReviewGenerator::succeeding("generated review"), sender).await;
+        journal_entries
+            .store(&at_date("1", "first entry"))
+            .await
+            .unwrap();
+        review_preferences.set_weekly_enabled(false).await.unwrap();
+
+        let result = worker
+            .run_once(Utc.with_ymd_and_hms(2026, 4, 29, 0, 5, 0).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            ReviewDeliveryResult {
+                attempted: 1,
+                delivered: 1,
+                skipped: 0,
+                failed: 0,
+            }
+        );
+        assert_eq!(sender.sent().len(), 1);
     }
 
     #[tokio::test]

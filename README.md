@@ -13,7 +13,7 @@ At the end of the day, a review worker synthesises all of that day's raw notes a
 
 Once a week (Monday by default), a weekly review worker synthesises the previous ISO week's daily reviews and their structured signals into a single reflection covering Monday through Sunday, and delivers it via Telegram. Run `/week_review` in the chat to request the most recent completed weekly review on demand.
 
-Review delivery is on by default for every user. Run `/reviews` to see your current setting, or `/reviews off` / `/reviews on` to opt out of or back into automatic daily/weekly delivery — on-demand `/day_review` and `/week_review` keep working either way. This per-user setting sits underneath the `FROID_DAILY_REVIEW_DELIVERY_ENABLED` / `FROID_WEEK_REVIEW_WORKER_ENABLED` operator switches, which remain the master on/off for the whole instance.
+Review delivery is on by default for every user, and daily and weekly delivery can be toggled independently. Run `/reviews` to see both settings, `/reviews daily on|off` or `/reviews weekly on|off` to change one, or `/reviews on|off` to change both at once — on-demand `/day_review` and `/week_review` keep working either way. These per-user settings sit underneath the `FROID_DAILY_REVIEW_DELIVERY_ENABLED` / `FROID_WEEK_REVIEW_WORKER_ENABLED` operator switches, which remain the master on/off for the whole instance.
 
 ## Running with Docker
 
