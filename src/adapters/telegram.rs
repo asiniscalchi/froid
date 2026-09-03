@@ -132,7 +132,9 @@ enum Command {
     DayReview,
     #[command(description = "show last week's review")]
     WeekReview,
-    #[command(description = "show or set daily/weekly review delivery (/reviews on|off)")]
+    #[command(
+        description = "show or set daily/weekly review delivery (/reviews [daily|weekly] on|off)"
+    )]
     Reviews(String),
     #[command(description = "search entries by meaning")]
     Search(String),
@@ -166,10 +168,16 @@ fn dispatch_for(command: Command) -> Dispatch {
         Command::DayReview => Dispatch::Journal(JournalCommand::DayReviewLast),
         Command::WeekReview => Dispatch::Journal(JournalCommand::WeekReviewLast),
         Command::Reviews(argument) => {
-            Dispatch::Journal(match argument.trim().to_lowercase().as_str() {
-                "" => JournalCommand::ReviewsStatus,
-                "on" => JournalCommand::ReviewsSet(true),
-                "off" => JournalCommand::ReviewsSet(false),
+            let lowered = argument.to_lowercase();
+            let arguments: Vec<&str> = lowered.split_whitespace().collect();
+            Dispatch::Journal(match arguments.as_slice() {
+                [] => JournalCommand::ReviewsStatus,
+                ["on"] => JournalCommand::ReviewsSet(true),
+                ["off"] => JournalCommand::ReviewsSet(false),
+                ["daily", "on"] => JournalCommand::ReviewsSetDaily(true),
+                ["daily", "off"] => JournalCommand::ReviewsSetDaily(false),
+                ["weekly", "on"] => JournalCommand::ReviewsSetWeekly(true),
+                ["weekly", "off"] => JournalCommand::ReviewsSetWeekly(false),
                 _ => JournalCommand::ReviewsUsage,
             })
         }
@@ -703,7 +711,31 @@ mod tests {
             Some(JournalCommand::ReviewsSet(true))
         );
         assert_eq!(
+            journal("/reviews daily on"),
+            Some(JournalCommand::ReviewsSetDaily(true))
+        );
+        assert_eq!(
+            journal("/reviews daily off"),
+            Some(JournalCommand::ReviewsSetDaily(false))
+        );
+        assert_eq!(
+            journal("/reviews weekly on"),
+            Some(JournalCommand::ReviewsSetWeekly(true))
+        );
+        assert_eq!(
+            journal("/reviews weekly off"),
+            Some(JournalCommand::ReviewsSetWeekly(false))
+        );
+        assert_eq!(
+            journal("/reviews WEEKLY Off"),
+            Some(JournalCommand::ReviewsSetWeekly(false))
+        );
+        assert_eq!(
             journal("/reviews nonsense"),
+            Some(JournalCommand::ReviewsUsage)
+        );
+        assert_eq!(
+            journal("/reviews daily nonsense"),
             Some(JournalCommand::ReviewsUsage)
         );
     }
